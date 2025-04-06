@@ -185,7 +185,7 @@ Those approaches share important prerequisites:
 
 The original script `firmware_upgrade.sh` was developed in `ash` (busybox minimal `bash`) and is available in [Lasse Bjerre GitHub](https://github.com/Ordspilleren/lidl-gateway-freedom)
 
-My own version of this script, taking care of the most recent versions of ssh and risks of timeouts is provided in the firmware directory. Three scripts are available:
+My own version of this script, taking care of the most recent versions of ssh and risks of timeouts is provided in the [NCP firmware directory](../14-NCP-UART-HW/firmware). Three scripts are available:
 - `flash_ezsp7.sh` to update an EZSP V7 based firmware like the original Lidl/Silvercrest gateway
 - `flash_ezsp8.sh` to update an EZSP V8 based firmware like the hacked Lidl/Silvercrest gateway
 - `flash_ezsp13.sh` to upfate an EZSP V13 based firmware like the one you can build from [here](../14-NCP-UART-HW) or that can be directly downloaded [here](../14-NCP-UART-HW/firmware)
