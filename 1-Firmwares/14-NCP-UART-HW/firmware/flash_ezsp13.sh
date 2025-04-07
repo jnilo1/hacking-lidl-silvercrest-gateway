@@ -2,7 +2,7 @@
 # script to update EZSP V13 silabs firmware - J Nilo April 2025
 # Updated version:
 # - one ssh version instead of 3
-# - ssh parameters taking care of recent ssh contraints and adjustable through SSH_OPTS
+# - ssh parameters taking care of recent ssh constraints and adjustable through SSH_OPTS
 # - sleep statements introduced to limit timeouts
 # - only two input parameters: gateway ip address and firmware.gbl filename
 #
@@ -18,7 +18,7 @@ FIRMWARE_FILE="$2"
 # Validate input parameters
 if [ -z "$GATEWAY_HOST" ] || [ -z "$FIRMWARE_FILE" ]; then
     echo "Usage: $0 <gateway_host> <firmware_file>"
-	echo "Make sure Z2M or ZHA are disconnected"
+    echo "Make sure Z2M or ZHA are disconnected"
     exit 1
 fi
 
@@ -36,11 +36,11 @@ fi
 
 
 # Create a temporary tarball containing the required files
-cp $FIRMWARE_FILE firmware.gbl
+cp "$FIRMWARE_FILE" firmware.gbl
 tar -czf ./firmware_package.tar.gz sx firmware.gbl
 
 # Transfer files and execute commands in a single SSH session
-cat ./firmware_package.tar.gz | ssh $SSH_OPTS root@${GATEWAY_HOST} "
+ssh "$SSH_OPTS" root@"${GATEWAY_HOST}" < ./firmware_package.tar.gz
 
 # Transfer the file to /tmp and extract
 cat > /tmp/firmware_package.tar.gz
