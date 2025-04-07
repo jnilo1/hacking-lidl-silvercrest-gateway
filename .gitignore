@@ -1,2 +1,3 @@
 *.docx
 *.bat
+node_modules/
