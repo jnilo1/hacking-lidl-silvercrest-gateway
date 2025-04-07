@@ -39,8 +39,7 @@ cp "$FIRMWARE_FILE" firmware.gbl
 tar -czf ./firmware_package.tar.gz sx firmware.gbl
 
 # Transfer files and execute commands in a single SSH session
-# shellcheck disable=2086
-ssh < ./firmware_package.tar.gz $SSH_OPTS root@${GATEWAY_HOST} "
+cat ./firmware_package.tar.gz | ssh $SSH_OPTS root@${GATEWAY_HOST} "
 
 # Transfer the file to /tmp and extract
 cat > /tmp/firmware_package.tar.gz
@@ -55,18 +54,18 @@ killall -q serialgateway
 # Configure serial port and send commands
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon crtscts raw
 sleep 1
-echo -en \"\x1a\xc0\x38\xbc\x7e\" > /dev/ttyS1
+echo -en "\x1a\xc0\x38\xbc\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x00\x42\x21\xA8\x53\xDD\x4F\x7E\" > /dev/ttyS1
+echo -n "."
+echo -en "\x00\x42\x21\xA8\x53\xDD\x4F\x7E" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x81\x60\x59\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x81\x60\x59\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x7D\x31\x43\x21\x27\x55\x6E\x90\x7E\" > /dev/ttyS1
+echo -n "."
+echo -en "\x7D\x31\x43\x21\x27\x55\x6E\x90\x7E" > /dev/ttyS1
 sleep 1
-echo \".\"
+echo "."
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon -crtscts raw
 echo -e '1' > /dev/ttyS1
 sleep 1

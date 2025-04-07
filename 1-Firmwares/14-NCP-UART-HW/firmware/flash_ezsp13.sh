@@ -36,12 +36,11 @@ fi
 
 
 # Create a temporary tarball containing the required files
-cp "$FIRMWARE_FILE" firmware.gbl
+cp $FIRMWARE_FILE firmware.gbl
 tar -czf ./firmware_package.tar.gz sx firmware.gbl
 
 # Transfer files and execute commands in a single SSH session
-# shellcheck disable=2086
-ssh < ./firmware_package.tar.gz $SSH_OPTS root@${GATEWAY_HOST} "
+cat ./firmware_package.tar.gz | ssh $SSH_OPTS root@${GATEWAY_HOST} "
 
 # Transfer the file to /tmp and extract
 cat > /tmp/firmware_package.tar.gz
