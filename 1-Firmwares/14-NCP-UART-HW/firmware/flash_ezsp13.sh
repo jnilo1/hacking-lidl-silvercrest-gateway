@@ -53,30 +53,30 @@ killall -q serialgateway
 
 # Configure serial port and send commands
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon crtscts raw
-echo -en \"\x1a\xc0\x38\xbc\x7e\" > /dev/ttyS1
+echo -en "\x1a\xc0\x38\xbc\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x00\x42\x21\xa8\x50\xed\x2c\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x00\x42\x21\xa8\x50\xed\x2c\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x81\x60\x59\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x81\x60\x59\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x7d\x31\x42\x21\xa9\x54\x2a\x7d\x38\xdc\x7a\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x7d\x31\x42\x21\xa9\x54\x2a\x7d\x38\xdc\x7a\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x82\x50\x3a\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x82\x50\x3a\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x22\x43\x21\xa9\x7d\x33\x2a\x16\xb2\x59\x94\xe7\x9e\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x22\x43\x21\xa9\x7d\x33\x2a\x16\xb2\x59\x94\xe7\x9e\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x83\x40\x1b\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x83\x40\x1b\x7e" > /dev/ttyS1
 sleep 1
-echo -n \".\"
-echo -en \"\x33\x40\x21\xa9\xdb\x2a\x14\x8f\xc8\x7e\" > /dev/ttyS1
+echo -n "."
+echo -en "\x33\x40\x21\xa9\xdb\x2a\x14\x8f\xc8\x7e" > /dev/ttyS1
 sleep 1
-echo \".\"
+echo "."
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon -crtscts raw
 echo -e '1' > /dev/ttyS1
 sleep 1
