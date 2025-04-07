@@ -25,7 +25,7 @@ ______________________________________________________________________
 
 ## 🔩 Main Components
 
-### 1. Main Processor (U2) — *Red Box*
+### 1. Main Processor (U2) — _Red Box_
 
 - **SoC**:
   [Realtek RTL8196E](https://www.alldatasheet.com/datasheet-pdf/pdf/1315416/REALTEK/RTL8196E-CG.html)
@@ -38,7 +38,7 @@ ______________________________________________________________________
   `0x18002100`
 - SPI controller used to access external NOR flash
 
-### 2. Flash Memory (U3) — *Green Box*
+### 2. Flash Memory (U3) — _Green Box_
 
 - 16MB SPI NOR Flash
   ([GD25Q127](https://www.alldatasheet.com/datasheet-pdf/pdf/1151509/GIGADEVICE/GD25Q127C.html))
@@ -46,13 +46,13 @@ ______________________________________________________________________
 - Stores bootloader, Linux kernel, SquashFS rootfs, and JFFS2 persistent
   data
 
-### 3. RAM (U5) — *Purple Box*
+### 3. RAM (U5) — _Purple Box_
 
 - 32MB SDRAM
   ([ESMT M13S2561616A](https://www.alldatasheet.com/datasheet-pdf/pdf/302727/ESMT/M13S2561616A.html))
   or equivalent
 
-### 4. Zigbee Module (CN1) — *Yellow Box*
+### 4. Zigbee Module (CN1) — _Yellow Box_
 
 - [Tuya TYZS4](https://developer.tuya.com/en/docs/iot/zigbeetyzs4module?id=K989rhycrz23f)
 - Based on Silicon Labs
@@ -61,7 +61,7 @@ ______________________________________________________________________
 - Connected to RTL8196E via UART1
 - Hosts the Zigbee firmware (typically NCP/UART)
 
-### 5. Debug/Programming Interface (J1) — *Cyan Box*
+### 5. Debug/Programming Interface (J1) — _Cyan Box_
 
 - Combined serial + SWD debug port
 - Not populated by default (2.54mm header needed)

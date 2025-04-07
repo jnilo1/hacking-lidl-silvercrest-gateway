@@ -71,8 +71,12 @@ documentation on upgrading a project to a new GSDK version.
    ```sh
    commander device info
    ```
+<<<<<<< HEAD
 
 If the device is detected, Simplicity Studio is correctly installed.
+=======
+   If the device is detected, Simplicity Studio is correctly installed.
+>>>>>>> main
 
 ______________________________________________________________________
 
@@ -90,7 +94,11 @@ These are required for the GUI to function correctly.
 
 ### **3.2 Download Simplicity Studio V5**
 
+<<<<<<< HEAD
 - Visit the Silicon Labs website:\
+=======
+- Visit the Silicon Labs website:
+>>>>>>> main
   [https://www.silabs.com/developers/simplicity-studio](https://www.silabs.com/developers/simplicity-studio)
 - Log in to your account and download the **Linux installer**
   (`SimplicityStudioV5.tgz`).
@@ -127,8 +135,12 @@ Follow the same steps as in the Windows installation to install: the
    ```sh
    commander device info
    ```
+<<<<<<< HEAD
 
 If the device is detected, your installation is complete.
+=======
+   If the device is detected, your installation is complete.
+>>>>>>> main
 
 ______________________________________________________________________
 

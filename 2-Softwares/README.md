@@ -130,7 +130,7 @@ ______________________________________________________________________
 # Zigbee2MQTT configuration.yaml
 serial:
   port: tcp://192.168.1.x:8888
-# Note: adapter is ezsp (no more supported) for EmberZNet for 6.x up to 7.3 versions. and ember starting with Emberznet 7.4
+  # Note: adapter is ezsp (no more supported) for EmberZNet for 6.x up to 7.3 versions. and ember starting with Emberznet 7.4
   adapter: ember
 ```
 
