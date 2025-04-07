@@ -1,6 +1,9 @@
 # Building and Running CPC Daemon (cpcd) Locally with TCP Support
 
-This document explains how to set up and run the CPC Daemon (`cpcd`) locally for environments requiring TCP communication instead of direct UART. It covers using `socat` to bridge TCP connections to a virtual serial device and explains how to configure and run `cpcd`.
+This document explains how to set up and run the CPC Daemon (`cpcd`)
+locally for environments requiring TCP communication instead of direct
+UART. It covers using `socat` to bridge TCP connections to a virtual serial
+device and explains how to configure and run `cpcd`.
 
 ## Prerequisites
 
@@ -10,9 +13,13 @@ This document explains how to set up and run the CPC Daemon (`cpcd`) locally for
 
 ## Setup Overview
 
-The installation process will place `cpcd` binaries and default configuration files in system directories (`/usr/local/bin` and `/usr/local/etc`).
+The installation process will place `cpcd` binaries and default
+configuration files in system directories (`/usr/local/bin` and
+`/usr/local/etc`).
 
-The standard `cpcd.conf` file doesn't support direct TCP socket definitions. To circumvent this, we use `socat` to create a virtual UART device that forwards communications to a TCP socket.
+The standard `cpcd.conf` file doesn't support direct TCP socket
+definitions. To circumvent this, we use `socat` to create a virtual UART
+device that forwards communications to a TCP socket.
 
 ## Step-by-Step Instructions
 
@@ -29,6 +36,7 @@ cmake ..
 make
 sudo make install
 ```
+
 Optionally, after installation, you may remove the `cpc-daemon` directory:
 
 ```bash
@@ -38,13 +46,17 @@ rm -rf cpc-daemon
 
 ### 2. Configure Virtual Serial Device with `socat`
 
-Run `socat` to create a virtual serial port (`ttycpcd`) pointing to your remote CPC secondary via TCP (replace `<gateway_ip>` with the actual gateway IP address):
+Run `socat` to create a virtual serial port (`ttycpcd`) pointing to your
+remote CPC secondary via TCP (replace `<gateway_ip>` with the actual
+gateway IP address):
 
 ```bash
-sudo socat PTY,link=/dev/ttycpcd,raw TCP:<gateway_ip>:8888 
+sudo socat PTY,link=/dev/ttycpcd,raw TCP:<gateway_ip>:8888
 ```
-Note: The virtual serial device (`ttycpcd`) created by `socat` disappears whenever `socat` stops or encounters an error. Always ensure `socat` is running before starting `cpcd`, and verify that `/dev/ttycpcd` exists.
 
+Note: The virtual serial device (`ttycpcd`) created by `socat` disappears
+whenever `socat` stops or encounters an error. Always ensure `socat` is
+running before starting `cpcd`, and verify that `/dev/ttycpcd` exists.
 
 ### 3. Configure `cpcd.conf`
 
@@ -70,11 +82,13 @@ rlimit_nofile: 2000
 disable_encryption: true  # Must match the 'CPC Security' setting of the RCP-UART firmware
 ```
 
-### 4. Running `cpcd` 
+### 4. Running `cpcd`
 
 #### Auto-starting socat and cpcd with systemd
 
-To automatically restart `socat` and `cpcd` after system reboot (e.g., after a power failure), configure systemd user units as follows (replace `<gateway_ip>` with the actual gateway IP address):
+To automatically restart `socat` and `cpcd` after system reboot (e.g.,
+after a power failure), configure systemd user units as follows (replace
+`<gateway_ip>` with the actual gateway IP address):
 
 Create the file `/etc/systemd/system/socat-cpcd.service`:
 
@@ -123,20 +137,21 @@ To check if `cpcd` has started correctly, use the following methods:
 
 #### Check the systemd service status
 
-If you started `cpcd` with `systemd`, check its status. If `cpcd` is running correctly, you should see `Active: active (running)` in the output.
+If you started `cpcd` with `systemd`, check its status. If `cpcd` is
+running correctly, you should see `Active: active (running)` in the output.
 
 ```bash
 jnilo@raspberrypi:/usr/local/etc$ systemctl status cpcd
 ● cpcd.service - CPC Daemon
-     Loaded: loaded (/etc/systemd/system/cpcd.service; enabled; preset: enabled)
-     Active: active (running) since Sun 2025-03-16 13:43:49 CET; 1min 13s ago
- Invocation: 8a80a80df7fb459380e830d41b04dbc4
-   Main PID: 150411 (cpcd)
-      Tasks: 5 (limit: 697)
-     Memory: 604K (peak: 1.5M)
-        CPU: 75ms
-     CGroup: /system.slice/cpcd.service
-             └─150411 /usr/local/bin/cpcd
+Loaded: loaded (/etc/systemd/system/cpcd.service; enabled; preset: enabled)
+Active: active (running) since Sun 2025-03-16 13:43:49 CET; 1min 13s ago
+Invocation: 8a80a80df7fb459380e830d41b04dbc4
+Main PID: 150411 (cpcd)
+Tasks: 5 (limit: 697)
+Memory: 604K (peak: 1.5M)
+CPU: 75ms
+CGroup: /system.slice/cpcd.service
+└─150411 /usr/local/bin/cpcd
 
 Mar 16 13:43:50 raspberrypi cpcd[150411]: [2025-03-16T12:43:49.569960Z] Info : ENCRYPTION IS DISABLED
 Mar 16 13:43:50 raspberrypi cpcd[150411]: [2025-03-16T12:43:49.581447Z] Info : Starting daemon in normal mode
@@ -165,10 +180,11 @@ This will display live logs of `cpcd` in real-time.
 
 ## Troubleshooting
 
-- **Ensure Firewall Settings:** Confirm that port `8888` on the remote CPC secondary device (`<gateway_ip>`) is open.
-- **Check Virtual UART Link:** Confirm `/dev/ttycpcd` exists and is accessible by `cpcd`.
+- **Ensure Firewall Settings:** Confirm that port `8888` on the remote CPC
+  secondary device (`<gateway_ip>`) is open.
+- **Check Virtual UART Link:** Confirm `/dev/ttycpcd` exists and is
+  accessible by `cpcd`.
 
 ## Additional Resources
 
 - [Official Silicon Labs CPC Documentation](https://docs.silabs.com/bluetooth/latest/multiprotocol-solution-linux/building-cpcd-locally#building-cpcd-locally)
-
