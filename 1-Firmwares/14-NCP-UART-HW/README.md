@@ -87,7 +87,7 @@ We want to get rid of the following pre-compilation warnings:
    </p>
 
 6. Open the component editor for `RAIL Utility, PTI` and assign `PB12` to
-   `DOUBT`.
+   `DOUT`.
 
    <p align="center">
      <img src="./media/image9.png" alt="RAIL Utility PTI" width="70%">

@@ -9,12 +9,13 @@ ensures you can recover in case of a failed update or configuration error.
 This guide describes two main methods to back up, flash and restore the
 **EFR32MG1B firmware**:
 
-1. **Method 1 – Hardware-based (RECOMMENDED)**: Using a hardware debugger
-   via the SWD interface with Simplicity Commander.
+1. **Method 1 – Hardware-based (RECOMMENDED)**:\
+   Using a hardware debugger via the SWD interface with Simplicity
+   Commander.
 
-2. **Method 2 – Software-based**: Using tools like ad-hoc script over SSH
-   or software tools (like `universal-silabs-flasher`) requiring no extra
-   hardware.
+2. **Method 2 – Software-based**:\
+   Using tools like ad-hoc script over SSH or software tools (like
+   `universal-silabs-flasher`) requiring no extra hardware.
 
 > ⚠️ **Important:** Method 1 is the **most reliable and complete**
 > solution, offering full access to the flash memory and robust
@@ -62,7 +63,14 @@ ______________________________________________________________________
 - A J-Link or compatible SWD debugger. I personally use a cheap (less than
   5 USD incl shipping) OB-ARM Emulator Debugger Programmer:
   <p align="center"> <img src="./media/image1.png" alt="OB-ARM debugger" width="70%"> </p>
+<<<<<<< HEAD
+
+A useful investment! You can also build your own debugger with a Raspberry
+Pico and [`OpenOCD`](https://openocd.org/). Search the web!
+
+=======
   A useful investment! You can also build your own debugger with a Raspberry Pico and [`OpenOCD`](https://openocd.org/). Search the web!
+>>>>>>> main
 - [Simplicity Studio V5](https://www.silabs.com/developers/simplicity-studio)
   with `commander` tool
 - Dupont jumper wires (x4)
@@ -82,7 +90,12 @@ ______________________________________________________________________
 
 ### Backup Procedure
 
+<<<<<<< HEAD
+1. **Launch Commander**:\
+   On Windows (default path):
+=======
 1. **Launch Commander**: On Windows (default path):
+>>>>>>> main
 
    ```bash
    cd "C:\SiliconLabs\SimplicityStudio\v5\developer\adapter_packs\commander"

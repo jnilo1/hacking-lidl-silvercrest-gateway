@@ -87,14 +87,15 @@ ______________________________________________________________________
 
 ## 📦 Available Firmware Versions
 
-- 🔸 **EZSP V8**: Used to update
-  [Paul Banks](https://paulbanks.org/projects/lidl-zigbee/) hack with a
-  firmware provided by Gary Robas:
+- 🔸 **EZSP V8**:\
+  Used to update [Paul Banks](https://paulbanks.org/projects/lidl-zigbee/)
+  hack with a firmware provided by Gary Robas:
   [Download .gbl](https://github.com/grobasoz/zigbee-firmware/raw/master/EFR32%20Series%201/EFR32MG1B-256k/NCP/NCP_UHW_MG1B232_678_PA0-PA1-PB11_PA5-PA4.gbl)
 
-- 🔸 **EZSP V13**: Built from Simplicity Studio Gecko SDK 4.4.x, they
-  provide the most recent EMberZNet 7.4.x versions available at the time of
-  this writing. See [NCP-UART-HW section](../14-NCP-UART-HW/firmware)
+- 🔸 **EZSP V13**:\
+  Built from Simplicity Studio Gecko SDK 4.4.x, they provide the most
+  recent EMberZNet 7.4.x versions available at the time of this writing.
+  See [NCP-UART-HW section](../14-NCP-UART-HW/firmware)
 
 ______________________________________________________________________
 

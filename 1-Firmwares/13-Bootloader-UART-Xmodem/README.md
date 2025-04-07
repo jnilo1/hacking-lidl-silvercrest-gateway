@@ -171,8 +171,8 @@ EFR32MG1B (Gecko Series 1) devices use a **two-stage bootloader system**:
 - **Stage 2 – Main bootloader**:
 
   - Resides in main flash memory starting at address 0x800
-  - Can be updated in the field (UART or OTA) using `.gbl` packages (_Not
-    recommanded_)
+  - Can be updated in the field (UART or OTA) using `.gbl` packages (*Not
+    recommended*)
 
 - **Applications (NCP-UART, RCP-UART,...)**:
 
