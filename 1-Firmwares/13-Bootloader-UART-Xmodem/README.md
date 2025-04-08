@@ -1,8 +1,8 @@
 # Creating the Bootloader-UART-Xmodem firmware
 
-## Step 1: Load the bootloader-uart-xmodem demo file for EFR32MG1B232F256GM48
+## Step 1: Load the Gecko bootloader-uart-xmodem demo file for EFR32MG1B232F256GM48
 
-The `bootloader-uart-xmodem` firmware is available by default as an example
+The Gecko `bootloader-uart-xmodem` firmware is available by default as an example
 application for the `EFR32MG1B232F256GM48` chip.
 
 1. In the **Launcher** tab, add the `EFR32MG1B232F256GM48` part to the **My

@@ -32,7 +32,7 @@ ______________________________________________________________________
 │   ├── 10-EZSP-Reference/            # Introduction to EZSP & EmberZnet
 │   ├── 11-Simplicity-Studio/         # Building Zigbee firmwares with Simplicity Studio
 │   ├── 12-Backup-Restore-Flash/      # Flash dump and restore methods (SWD, ESP, etc.)
-│   ├── 13-Bootloader-UART-Xmodem/    # Using the Realtek bootloader over UART
+│   ├── 13-Bootloader-UART-Xmodem/    # Using the Silabs/Gecko bootloader over UART
 │   ├── 14-NCP-UART-HW/               # Firmware: EZSP NCP (for Zigbee2MQTT, ZHA)
 │   └── 15-RCP-UART-HW/               # Firmware: multiprotocol RCP
 │
@@ -66,21 +66,12 @@ ______________________________________________________________________
 
 ## Community & Discussions
 
-<<<<<<< HEAD
 Got questions, stuck on something, or want to share your progress?\
 👉 Head over to the [**Discussions**](../../discussions) tab!
 
 Whether you're reverse engineering hardware, building Zigbee firmwares, or
 tweaking the Realtek SDK, you're welcome to:
 
-=======
-Got questions, stuck on something, or want to share your progress? 👉 Head
-over to the [**Discussions**](../../discussions) tab!
-
-Whether you're reverse engineering hardware, building Zigbee firmwares, or
-tweaking the Realtek SDK, you're welcome to:
-
->>>>>>> main
 - Ask for help or get unblocked,
 - Share your work-in-progress or discoveries,
 - Suggest improvements or ideas for the project,
