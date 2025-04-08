@@ -31,14 +31,15 @@ ______________________________________________________________________
 
 1. In the **Configuration Tools** panel, open the **Pin Tool**.
 
-2. Assign `PA0`, `PA1`, `PB11` respectively to USART0_TX, USART0_RX and
+2. Assign `PA0`, `PA1`, `PB11` respectively to USART0_TX, USART0_RX, 
+3. assign also 'PA4' , 'PA5' respectively to RTS and CTS  and
    GPIO as shown below:
 
    <p align="center">
      <img src="./media/image3.png" alt="Pin Assignment" width="80%">
    </p>
 
-3. Exit the **Pin Tab** and save.
+4. Exit the **Pin Tab** and save.
 
 ______________________________________________________________________
 
