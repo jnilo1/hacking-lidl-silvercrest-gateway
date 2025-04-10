@@ -1,89 +1,101 @@
 #!/bin/bash
-# script to update EZSP V13 silabs firmware - J Nilo April 2025
-# Updated version:
-# - one ssh version instead of 3
-# - ssh parameters taking care of recent ssh constraints and adjustable through SSH_OPTS
-# - sleep statements introduced to limit timeouts
-# - only two input parameters: gateway ip address and firmware.gbl filename
+# flash_ezsp13.sh – Flash EZSP V13 firmware to Lidl/Silvercrest gateway
 #
-# - download this script, sx xmodem send utility and firmware.gbl file in a working dir and execute flash_ezsp13.sh
+# Compatible with EZSP V13 (used with EmberZNet 7.x)
+# Tested on EFR32MG1B232F256-based Lidl Silvercrest gateway
+#
+# Usage:
+#   ./flash_ezsp13.sh <gateway_ip> <firmware.gbl>
+#
+# Requirements:
+#   - sx (xmodem send utility) in current directory
+#   - gateway reachable via SSH (default: root@<ip>, port 22)
+#   - Zigbee2MQTT or ZHA must be stopped beforehand
+#   - Make sure your firmware is a valid .gbl file for EZSP V13
 
-# Adjust ssh port and ssh options if needed
 SSH_PORT=22
-SSH_OPTS="-p${SSH_PORT} -oHostKeyAlgorithms=+ssh-rsa"
+SSH_OPTS=(-p "${SSH_PORT}" -oHostKeyAlgorithms=+ssh-rsa)
 
 GATEWAY_HOST="$1"
 FIRMWARE_FILE="$2"
 
-# Validate input parameters
+# --- Input validation ---
 if [ -z "$GATEWAY_HOST" ] || [ -z "$FIRMWARE_FILE" ]; then
     echo "Usage: $0 <gateway_host> <firmware_file>"
-    echo "Make sure Z2M or ZHA are disconnected"
+    echo "Example: $0 192.168.1.88 NCP_UHW_MG1B232_713.gbl"
     exit 1
 fi
 
-# Check if firmware file exists
 if [ ! -f "$FIRMWARE_FILE" ]; then
     echo "Error: Firmware file '$FIRMWARE_FILE' not found"
     exit 1
 fi
 
-# Check if sx file exists
 if [ ! -f sx ]; then
-    echo "Error: sx file not found"
+    echo "Error: sx file (xmodem sender) not found in current directory"
     exit 1
 fi
 
+# --- Prepare archive ---
+cp "$FIRMWARE_FILE" firmware.gbl
+tar -czf firmware_package.tar.gz sx firmware.gbl
 
-# Create a temporary tarball containing the required files
-cp $FIRMWARE_FILE firmware.gbl
-tar -czf ./firmware_package.tar.gz sx firmware.gbl
-
-# Transfer files and execute commands in a single SSH session
-cat ./firmware_package.tar.gz | ssh $SSH_OPTS root@${GATEWAY_HOST} "
-
-# Transfer the file to /tmp and extract
+# --- Transfer and flash in one SSH session ---
+cat firmware_package.tar.gz | ssh "${SSH_OPTS[@]}" root@"${GATEWAY_HOST}" '
 cat > /tmp/firmware_package.tar.gz
 cd /tmp
 tar -xf firmware_package.tar.gz
 
-# Make the sx file executable & kill serialgateway if running
 chmod +x sx
 killall -q serialgateway
 
-# Configure serial port and send commands
+# Serial initialization
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon crtscts raw
-echo -en "\x1a\xc0\x38\xbc\x7e" > /dev/ttyS1
+
+# EZSP V13 bootloader unlock sequence with pauses
+echo -en "\x1A\xC0\x38\xBC\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x00\x42\x21\xa8\x50\xed\x2c\x7e" > /dev/ttyS1
+echo -en "\x00\x42\x21\xA8\x50\xED\x2C\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x81\x60\x59\x7e" > /dev/ttyS1
+echo -en "\x81\x60\x59\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x7d\x31\x42\x21\xa9\x54\x2a\x7d\x38\xdc\x7a\x7e" > /dev/ttyS1
+echo -en "\x7D\x31\x42\x21\xA9\x54\x2A\x7D\x38\xDC\x7A\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x82\x50\x3a\x7e" > /dev/ttyS1
+echo -en "\x82\x50\x3A\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x22\x43\x21\xa9\x7d\x33\x2a\x16\xb2\x59\x94\xe7\x9e\x7e" > /dev/ttyS1
+echo -en "\x22\x43\x21\xA9\x7D\x33\x2A\x16\xB2\x59\x94\xE7\x9E\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x83\x40\x1b\x7e" > /dev/ttyS1
+echo -en "\x83\x40\x1B\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
-echo -en "\x33\x40\x21\xa9\xdb\x2a\x14\x8f\xc8\x7e" > /dev/ttyS1
+echo -en "\x33\x40\x21\xA9\xDB\x2A\x14\x8F\xC8\x7E" > /dev/ttyS1
 sleep 1
 echo -n "."
+
+# Switch to XMODEM-compatible serial mode
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon -crtscts raw
-echo -e '1' > /dev/ttyS1
+echo -e "1" > /dev/ttyS1
 sleep 1
-echo 'Starting firmware transfer'
+
+# Firmware transfer
+echo "Starting firmware transfer"
 /tmp/sx /tmp/firmware.gbl < /dev/ttyS1 > /dev/ttyS1
-# Clean up and reboot
-rm -rf /tmp/*
-echo 'Rebooting...'
+
+# Cleanup and reboot
+rm -f /tmp/sx /tmp/firmware.gbl /tmp/firmware_package.tar.gz
+echo "Rebooting..."
 reboot
-"
+'
+
+# --- Local cleanup ---
+rm -f firmware_package.tar.gz firmware.gbl
+
+echo "Firmware update initiated. The gateway will reboot when complete."
+exit 0
+
