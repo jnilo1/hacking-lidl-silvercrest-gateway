@@ -63,14 +63,10 @@ ______________________________________________________________________
 - A J-Link or compatible SWD debugger. I personally use a cheap (less than
   5 USD incl shipping) OB-ARM Emulator Debugger Programmer:
   <p align="center"> <img src="./media/image1.png" alt="OB-ARM debugger" width="70%"> </p>
-<<<<<<< HEAD
 
 A useful investment! You can also build your own debugger with a Raspberry
 Pico and [`OpenOCD`](https://openocd.org/). Search the web!
 
-=======
-  A useful investment! You can also build your own debugger with a Raspberry Pico and [`OpenOCD`](https://openocd.org/). Search the web!
->>>>>>> main
 - [Simplicity Studio V5](https://www.silabs.com/developers/simplicity-studio)
   with `commander` tool
 - Dupont jumper wires (x4)
@@ -90,12 +86,8 @@ ______________________________________________________________________
 
 ### Backup Procedure
 
-<<<<<<< HEAD
 1. **Launch Commander**:\
    On Windows (default path):
-=======
-1. **Launch Commander**: On Windows (default path):
->>>>>>> main
 
    ```bash
    cd "C:\SiliconLabs\SimplicityStudio\v5\developer\adapter_packs\commander"
