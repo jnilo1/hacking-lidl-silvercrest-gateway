@@ -156,7 +156,21 @@ associated file system.
    <p align="center"> <img src="./media/image12.png" alt="Main.c Modification" width="70%"> </p>
 
    Save the file.
+5. Parameter optimization. Change some parameters in the following .h files inside the config directory of the project:
 
+in :  sl_zigbee_source_route_config.h
+
+#define EMBER_SOURCE_ROUTE_TABLE_SIZE   200
+
+in: sl_zigbee_pro_stack_config.h
+
+#define EMBER_BROADCAST_TABLE_SIZE   30
+
+#define EMBER_APS_UNICAST_MESSAGE_COUNT   64
+
+#define EMBER_NEIGHBOR_TABLE_SIZE   26
+
+save and build
 ______________________________________________________________________
 
 ## Step 6: define post-build command to create gbl file
