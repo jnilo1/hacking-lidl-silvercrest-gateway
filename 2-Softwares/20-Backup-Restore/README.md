@@ -2,7 +2,7 @@
 
 ## Overview
 
-The Lidl Silvercrest gateway includes a GD25Q127C  flash chip (recognized as GD25Q128C by the linux kernel) storing the bootloader, Linux kernel, root filesystem, and Zigbee configurations.
+The Lidl Silvercrest gateway includes a GD25Q127C  flash chip (recognized as GD25Q128C by the Linux kernel) storing the bootloader, Linux kernel, root filesystem, and Zigbee configurations.
 
 > ⚠️ **Disclaimer**  
 > Flashing or altering your gateway can permanently damage the device if done incorrectly.  
@@ -34,7 +34,7 @@ On the host, retrieve the file using `ssh` (adjust port and IP as needed):
 ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<gateway_ip> "cat /tmp/mtdx.bin" > mtdx.bin
 ```
 
-Once all partitions are collected, concatenate them into a full image:
+Once you have collected all partitions, concatenate them into a full image:
 
 ```sh
 cat mtd0.bin mtd1.bin mtd2.bin mtd3.bin mtd4.bin > fullmtd.bin
@@ -76,7 +76,7 @@ ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<gateway_ip> "dd if=/tmp/rootfs-n
 
 ### 🛠 Setup
 
-This second method will use Realtek bootloader `FLR` or `FLW` commands to retrieve or send files using a `tftp` client. Therefore, a `tftp` must be running on your host.**
+This second method will use Realtek bootloader's `FLR` and `FLW` commands to transfer files via TFTP. Therefore, a TFTP server must be running on your host.**
 
 #### Install a tftp client & server on your linux host
 ```sh
@@ -91,7 +91,7 @@ TFTP_DIRECTORY="/srv/tftp"
 TFTP_ADDRESS=":69"
 TFTP_OPTIONS="--secure"
 ```
-It shows that the directory used by `tftpd` to store received files or files to be sent is `/srv/tftp`. We need to set up directory access to be able to use it locally:
+This indicates that the directory used by `tftpd` to store received files or files to be sent is `/srv/tftp`. We need to set up directory access to be able to use it locally:
 ```
 sudo mkdir -p /srv/tftp
 sudo chown tftp:tftp /srv/tftp
@@ -204,7 +204,7 @@ This method involves **physically desoldering the SPI flash chip (GD25Q127C)** f
 
 - A **CH341A** USB SPI programmer (inexpensive and widely available)
 - A SOP8 to **200 mil** DIP adapter to insert the chip into the programmer
-- **Flux** and either **Desoldering braid** or a **small desoldering pump**
+- **Flux** and either **desoldering braid** or a **small desoldering pump**
 
 ⚠️ The use of a programming clip **does not work** on the gateway board and is not recommended. 
 
@@ -230,7 +230,7 @@ After the backup, you can inspect or split the image if needed using tools like 
 
 ### ♻️ Restore using `flashrom`
 
-To write a previously saved image back to the flash chip:
+To write a previously saved image (like **fullmtd.bin** previously created using Method 1) back to the flash chip:
 
 ```sh
 flashrom -p ch341a_spi -c GD25Q127C -w fullmtd.bin
@@ -241,8 +241,6 @@ flashrom -p ch341a_spi -c GD25Q127C -w fullmtd.bin
 ⚠️ **Be careful:** This operation will completely overwrite the chip content.  
 Ensure that `fullmtd.bin` is exactly **16 MiB (16,777,216 bytes)** and contains valid data.
 
-⚠️ You can use this method to restore a **full** system image previously created using Method 1 (**fullmtd.bin**) or a known working backup.
-
 ## 📁 Included Scripts
 
 | Script                        | Method    | Description                                 |
@@ -251,4 +249,3 @@ Ensure that `fullmtd.bin` is exactly **16 MiB (16,777,216 bytes)** and contains 
 | `restore_mtd_via_ssh.sh`     | Method 1  | Restore partitions via SSH + dd             |
 | `backup_partition_tftp.sh`   | Method 2  | Backup mtdX partition via FLR + TFTP        |
 | `flash_partition_tftp.sh`    | Method 2  | Restore mtdX via LOADADDR, TFTP, and FLW    |
-
