@@ -3,68 +3,73 @@
 # restore_mtd_via_ssh.sh
 #
 # Description:
-#   This script restores MTD partitions (mtd0 to mtd4) on the Lidl Silvercrest gateway via SSH.
-#   It scans for matching .bin files (e.g., mtd2.bin) in the current directory.
-#   For each match, it streams the binary to the gateway and flashes it using `dd`.
-#
-#   The script automatically handles mtd4 by checking if it's mounted, unmounting it before
-#   flashing, and remounting it afterward to ensure filesystem integrity.
-#
-# Requirements:
-#   - SSH access enabled on the gateway
-#   - Corresponding mtdX.bin files must be present locally
+#   This script restores one or all MTD partitions (mtd0 to mtd4) on the Lidl Silvercrest gateway via SSH.
+#   It uploads local mtdX.bin files to the device and writes them using dd.
 #
 # Usage:
-#   chmod +x restore_mtd_via_ssh.sh
-#   ./restore_mtd_via_ssh.sh
-#
+#   ./restore_mtd_via_ssh.sh all <gateway_ip>     # restore all mtdX.bin files + fullmtd.bin optional
+#   ./restore_mtd_via_ssh.sh mtd2 <gateway_ip>    # restore only mtd2.bin
 #
 
-GATEWAY_IP="a.b.c.d"
+set -e
+
+PART="$1"
+GATEWAY_IP="$2"
 SSH_PORT=22
 SSH_USER="root"
 
-SSH_OPTS=(-p "${SSH_PORT}" -oHostKeyAlgorithms=+ssh-rsa)
+if [ -z "$PART" ] || [ -z "$GATEWAY_IP" ]; then
+    echo "Usage: $0 <all|mtdX> <gateway_ip>"
+    exit 1
+fi
 
-# List of MTD devices and matching local .bin files to send
-MTDS=(mtd0 mtd1 mtd2 mtd3 mtd4)
+if [ "$PART" == "all" ]; then
+    MTDS=(mtd0 mtd1 mtd2 mtd3 mtd4)
+else
+    MTDS=("$PART")
+fi
 
 echo "[*] Starting MTD restore over SSH..."
 
 for mtd in "${MTDS[@]}"; do
-    if [ -f "$mtd.bin" ]; then
-        echo "  - Restoring $mtd from $mtd.bin..."
-        
-        if [ "$mtd" == "mtd4" ]; then
-            # Special handling for mtd4 - unmount, flash, remount
-            echo "    [*] Handling mounted partition mtd4..."
-            ssh "${SSH_OPTS[@]}" "$SSH_USER@$GATEWAY_IP" "
-                # Check if mtd4 is mounted and get mount point
-                MOUNT_POINT=\$(grep $mtd /proc/mounts | awk '{print \$2}')
-                if [ -n \"\$MOUNT_POINT\" ]; then
-                    echo \"Unmounting $mtd from \$MOUNT_POINT\"
-                    umount \$MOUNT_POINT || { echo \"Error unmounting $mtd\"; exit 1; }
-                    # Receiving restore data from stdin
-                    echo \"Flashing $mtd...\"
-                    dd of=/dev/$mtd bs=1024k
-                    RET=\$?
-                    echo \"Remounting $mtd to \$MOUNT_POINT\"
-                    mount -t jffs2 /dev/$mtd \$MOUNT_POINT
-                    exit \$RET
-                else
-                    # Not mounted, proceed with normal restore
-                    dd of=/dev/$mtd bs=1024k
-                fi" < "$mtd.bin"
-        else
-            # Normal restore for other partitions
-            cat "$mtd.bin" | ssh "${SSH_OPTS[@]}" "$SSH_USER@$GATEWAY_IP" "dd of=/dev/$mtd bs=1024k"
-        fi
+    binfile="${mtd}.bin"
+    if [ ! -f "$binfile" ]; then
+        echo "[!] Skipping $mtd — file $binfile not found."
+        continue
+    fi
+
+    echo "  - Uploading and restoring $mtd..."
+
+    if [ "$mtd" == "mtd4" ]; then
+        ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
+            mtd='$mtd'
+            MOUNT_POINT=\$(grep mtdblock\${mtd:3} /proc/mounts | awk '{print \$2}')
+            if [ -n "\$MOUNT_POINT" ]; then
+                echo "Detected mount point: \$MOUNT_POINT" >&2
+                echo "Killing serialgateway..." >&2
+                killall -q serialgateway
+                echo "Unmounting \$mtd from \$MOUNT_POINT" >&2
+                umount \$MOUNT_POINT
+            fi
+            cat > /tmp/\$mtd.bin
+            echo "Flashing \$mtd..." >&2
+            dd if=/tmp/\$mtd.bin of=/dev/\$mtd bs=1024k
+            rm /tmp/\$mtd.bin
+            if [ -n "\$MOUNT_POINT" ]; then
+                echo "Remounting \$mtd to \$MOUNT_POINT" >&2
+                mount -t jffs2 /dev/mtdblock\${mtd:3} \$MOUNT_POINT
+                echo "Restarting serialgateway..." >&2
+                /tuya/serialgateway &
+            fi
+        " < "$binfile" 2> "$binfile.log"
     else
-        echo "  [!] Skipping $mtd: file $mtd.bin not found"
+        ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
+            cat > /tmp/$mtd.bin
+            echo "Flashing $mtd..." >&2
+            dd if=/tmp/$mtd.bin of=/dev/$mtd bs=1024k
+            rm /tmp/$mtd.bin
+        " < "$binfile" 2> "$binfile.log"
     fi
 done
 
-echo "[✔] Restore process completed!"
-echo ""
-echo "Note: If you flashed the boot or kernel partitions (mtd0/mtd1),"
-echo "      you may need to reboot the device for changes to take effect."
+echo "[✔] Restore completed."

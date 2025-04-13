@@ -122,22 +122,19 @@ Then, the bootloader automatically exposes the RAM content via `tftp`, allowing 
 
 On the bootloader:
 ```plaintext
-FLR 80000000 00200000 00200000
+RealTek>FLR 80000000 00200000 00200000
 ```
-
 - `80000000` → RAM address where data will be loaded
 - `00200000` → flash offset of mtd2
 - `00200000` → size of the partition in bytes (here: 2 MiB)
 
-From the host:
+From the host upload the file:
 ```sh
-tftp -g -r mtd2.bin 192.168.1.6
+tftp -m binary 192.168.1.6 -c get mtd2.bin
 ```
-
 This command downloads the content from RAM to your local machine, storing it as `mtd2.bin`.
 
 💡 You can repeat this process for each MTD partition (see reference table below).
-
 
 ---
 
@@ -164,9 +161,9 @@ FLW <flash_offset> <ram_address> <length> 0
 LOADADDR 80500000
 ```
 
-2. From the host, upload the file:
+2. From the host, download the file to the gateway:
 ```sh
-tftp -i 192.168.1.6 put mtd2.bin
+tftp -m binary 192.168.1.6 -c put mtd2.bin
 ```
 
 3. Back on the bootloader, write to flash:
@@ -202,50 +199,63 @@ This method involves **physically desoldering the SPI flash chip (GD25Q127C)** f
 
 ### 🛠 Required Hardware
 
-- A **CH341A** USB SPI programmer (inexpensive and widely available)
+- A **CH341A** USB SPI programmer (inexpensive and widely available). Use the 25xx entry.
+- Make sure the chip is properly seated in the adapter.
 - A SOP8 to **200 mil** DIP adapter to insert the chip into the programmer
 - **Flux** and either **desoldering braid** or a **small desoldering pump**
 
-⚠️ The use of a programming clip **does not work** on the gateway board and is not recommended. 
 
-### 🔄 Backup using `flashrom`
+   <p align="center">
+     <img src="./media/image1.jpeg" alt="Launcher Tab" width="50%">
+   </p>
 
-Once the chip is removed and inserted into the SOP8-to-DIP adapter on your CH341A programmer, you can safely back it up.
 
-To read the full 16 MB content:
+⚠️ The use of a programming clip **does not work** on the gateway board and is not recommended.
+
+### ✅ Make sure the chip is recognized by `flashrom`
 
 ```sh
-flashrom -p ch341a_spi -c GD25Q127C -r fullmtd_backup.bin
+jnilo@HP-ZBook:./flashrom -p ch341a_spi -c GD25Q128C
+flashrom v1.6.0-devel (git:v1.5.0-44-g4d4688cc) on Linux 6.8.0-57-generic (x86_64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Found GigaDevice flash chip "GD25Q128C" (16384 kB, SPI) on ch341a_spi.
+No operations were specified.
 ```
-
-- `-p ch341a_spi`: use the CH341A in SPI mode
-- `-c GD25Q127C`: specify the chip model
-- `-r`: read mode (dump flash to file)
-
-✅ Make sure the chip is powered at 3.3V and properly seated in the adapter.
-
-After the backup, you can inspect or split the image if needed using tools like `dd` or `binwalk`.
-
----
+If the package version provided by your linux distro does not detect the chip, check your connection and make sure to install the latest version of [flashrom](https://github.com/flashrom/flashrom). Information about installation can be found on the [flashrom web site](https://www.flashrom.org/).
 
 ### ♻️ Restore using `flashrom`
 
-To write a previously saved image (like **fullmtd.bin** previously created using Method 1) back to the flash chip:
+To restore a previously saved image to the flash chip (like **fullmtd.bin** previously created using **Method 1**) use `flashrom` write mode `-w`(flash binary to chip)
 
 ```sh
-flashrom -p ch341a_spi -c GD25Q127C -w fullmtd.bin
+flashrom -p ch341a_spi -c GD25Q128C -w fullmtd.bin
 ```
 
-- `-w`: write mode (flash binary to chip)
+The output will look like:
 
-⚠️ **Be careful:** This operation will completely overwrite the chip content.  
-Ensure that `fullmtd.bin` is exactly **16 MiB (16,777,216 bytes)** and contains valid data.
+```sh
+jnilo@HP-ZBook:./flashrom -p ch341a_spi -c GD25Q128C -w fullmtd.bin 
+flashrom v1.6.0-devel (git:v1.5.0-44-g4d4688cc) on Linux 6.8.0-57-generic (x86_64)
+flashrom is free software, get the source code at https://flashrom.org
+
+Found GigaDevice flash chip "GD25Q128C" (16384 kB, SPI) on ch341a_spi.
+Reading old flash chip contents... done.
+Updating flash chip contents... Erase/write done from 0 to ffffff
+Verifying flash... VERIFIED.
+jnilo@HP-ZBook:
+```
+
+
+⚠️ **Be careful:** This operation will completely overwrite the chip content.   
+⚠️ **Be patient:** This operation takes a while.   
+⚠️ Ensure that `fullmtd.bin` is exactly **16 MiB (16,777,216 bytes)** and contains valid data.
 
 ## 📁 Included Scripts
 
 | Script                        | Method    | Description                                 |
 |------------------------------|-----------|---------------------------------------------|
-| `backup_mtd_via_ssh.sh`      | Method 1  | Full MTD backup over SSH                    |
-| `restore_mtd_via_ssh.sh`     | Method 1  | Restore partitions via SSH + dd             |
-| `backup_partition_tftp.sh`   | Method 2  | Backup mtdX partition via FLR + TFTP        |
-| `flash_partition_tftp.sh`    | Method 2  | Restore mtdX via LOADADDR, TFTP, and FLW    |
+| `backup_mtd_via_ssh.sh`      | Method 1  | Bakup one or all partitions via SSH + dd |
+| `restore_mtd_via_ssh.sh`     | Method 1  | Restore one or all partitions via SSH + dd             |
+| `backup_mtd_via_tftp.sh`   | Method 2  | Backup one or all partitions via FLR + TFTP        |
+

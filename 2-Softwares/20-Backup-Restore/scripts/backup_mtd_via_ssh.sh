@@ -1,65 +1,113 @@
 #!/bin/bash
 #
-# backup_mtd_via_ssh.sh
-#
-# Description:
-#   This script performs a full backup of the Lidl Silvercrest gateway's flash memory (GD25Q127C)
-#   using SSH access to the embedded Linux system.
-#
-#   For each MTD partition (/dev/mtd0 to /dev/mtd4), it:
-#     - creates a temporary dump on the device with dd
-#     - transfers it back to the host over SSH
-#     - deletes the temporary file
-#   Finally, it concatenates all partitions into a single 'fullmtd.bin' image.
-#
-#   Note: mtd0-mtd3 are typically unmounted after being loaded into RAM, but mtd4 (JFFS2)
-#   may need to be unmounted before backup to ensure data consistency.
-#
-# SSH access to the gateway: port 22 by default, change if needed
-# Adjust GATEWAY_IP to your needs
+# backup_mtd_via_ssh.sh (Production version with selective backup)
 #
 # Usage:
-#   chmod +x backup_mtd_via_ssh.sh
-#   ./backup_mtd_via_ssh.sh
+#   ./backup_mtd_via_ssh.sh all <gateway_ip>
+#   ./backup_mtd_via_ssh.sh mtd2 <gateway_ip>
 #
 
-GATEWAY_IP="a.b.c.d"
+set -e
+
+PART="$1"
+GATEWAY_IP="$2"
 SSH_PORT=22
 SSH_USER="root"
 
-MTDS=(mtd0 mtd1 mtd2 mtd3 mtd4)
+if [ -z "$PART" ] || [ -z "$GATEWAY_IP" ]; then
+    echo "Usage: $0 <all|mtdX> <gateway_ip>"
+    exit 1
+fi
 
-echo "[*] Starting MTD backup over SSH (one-shot per partition)..."
+if [ "$PART" == "all" ]; then
+    MTDS=(mtd0 mtd1 mtd2 mtd3 mtd4)
+else
+    MTDS=("$PART")
+fi
+
+echo "[*] Starting MTD backup over SSH..."
 
 for mtd in "${MTDS[@]}"; do
     echo "  - Dumping and retrieving $mtd..."
     if [ "$mtd" == "mtd4" ]; then
-        # For mtd4 (JFFS2), unmount first if mounted, backup, then remount
         ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
-            # Check if mtd4 is mounted and get mount point
-            MOUNT_POINT=\$(grep $mtd /proc/mounts | awk '{print \$2}')
-            if [ -n \"\$MOUNT_POINT\" ]; then
-                echo \"Unmounting $mtd from \$MOUNT_POINT\"
+            mtd='$mtd'
+            MOUNT_POINT=\$(grep mtdblock\${mtd:3} /proc/mounts | awk '{print \$2}')
+            if [ -n "\$MOUNT_POINT" ]; then
+                echo "Detected mount point: \$MOUNT_POINT" >&2
+                echo "Killing serialgateway..." >&2
+                killall -q serialgateway
+                echo "Unmounting \$mtd from \$MOUNT_POINT" >&2
                 umount \$MOUNT_POINT
-                dd if=/dev/$mtd of=/tmp/$mtd.bin bs=1024k
-                echo \"Remounting $mtd to \$MOUNT_POINT\"
-                mount -t jffs2 /dev/$mtd \$MOUNT_POINT
+                echo "Backing up partition \$mtd to /tmp/\$mtd.bin..." >&2
+                dd if=/dev/\$mtd of=/tmp/\$mtd.bin bs=1024k
+                echo "Remounting \$mtd to \$MOUNT_POINT" >&2
+                mount -t jffs2 /dev/mtdblock\${mtd:3} \$MOUNT_POINT
+                echo "Restarting serialgateway..." >&2
+                /tuya/serialgateway &
             else
-                # Not mounted, proceed with normal backup
-                dd if=/dev/$mtd of=/tmp/$mtd.bin bs=1024k
+                echo "\$mtd is not mounted. Proceeding with backup..." >&2
+                dd if=/dev/\$mtd of=/tmp/\$mtd.bin bs=1024k
             fi
-            cat /tmp/$mtd.bin
-            rm /tmp/$mtd.bin" > "$mtd.bin"
+            echo "Reading dump for \$mtd..." >&2
+            cat /tmp/\$mtd.bin
+            echo "Cleaning up temporary file /tmp/\$mtd.bin" >&2
+            rm /tmp/\$mtd.bin" > "$mtd.bin" 2> "$mtd.bin.log"
     else
-        # For other partitions (normally already unmounted)
         ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
-            dd if=/dev/$mtd of=/tmp/$mtd.bin bs=1024k &&
-            cat /tmp/$mtd.bin &&
-            rm /tmp/$mtd.bin" > "$mtd.bin"
+            echo "Backing up partition $mtd to /tmp/$mtd.bin..." >&2
+            dd if=/dev/$mtd of=/tmp/$mtd.bin bs=1024k
+            echo "Reading dump for $mtd..." >&2
+            cat /tmp/$mtd.bin
+            echo "Cleaning up /tmp/$mtd.bin" >&2
+            rm /tmp/$mtd.bin" > "$mtd.bin" 2> "$mtd.bin.log"
     fi
 done
 
-echo "[*] Creating fullmtd.bin..."
-cat mtd0.bin mtd1.bin mtd2.bin mtd3.bin mtd4.bin > fullmtd.bin
+if [ "$PART" == "all" ]; then
+    echo "[*] Creating fullmtd.bin..."
+    cat mtd0.bin mtd1.bin mtd2.bin mtd3.bin mtd4.bin > fullmtd.bin
+fi
 
+for mtd in "${MTDS[@]}"; do
+    if [ -f "$mtd.bin" ]; then
+        size=$(stat -c %s "$mtd.bin")
+    fi
+done
+
+if [ "$PART" == "all" ] && [ -f fullmtd.bin ]; then
+    size=$(stat -c %s fullmtd.bin)
+fi
+
+echo
+
+declare -A EXPECTED_SIZES
+EXPECTED_SIZES["mtd0"]=131072
+EXPECTED_SIZES["mtd1"]=1966080
+EXPECTED_SIZES["mtd2"]=2097152
+EXPECTED_SIZES["mtd3"]=131072
+EXPECTED_SIZES["mtd4"]=12451840
+
+for mtd in "${MTDS[@]}"; do
+    if [ -f "$mtd.bin" ]; then
+        size=$(stat -c %s "$mtd.bin")
+        expected=${EXPECTED_SIZES[$mtd]}
+        if [ "$size" -eq "$expected" ]; then
+            echo "  - $mtd.bin: $size bytes [OK]"
+        else
+            echo "  - $mtd.bin: $size bytes [EXPECTED: $expected] [MISMATCH]"
+        fi
+    fi
+done
+
+if [ "$PART" == "all" ] && [ -f fullmtd.bin ]; then
+    size=$(stat -c %s fullmtd.bin)
+    if [ "$size" -eq 16777216 ]; then
+        echo "  - fullmtd.bin: $size bytes [OK]"
+    else
+        echo "  - fullmtd.bin: $size bytes [EXPECTED: 16777216] [MISMATCH]"
+    fi
+fi
+
+echo
 echo "[✔] Backup completed successfully!"
