@@ -189,7 +189,81 @@ post-build instructions. Right-click on the project name and go to
 
 ______________________________________________________________________
 
-## Step 7: build the firmware
+## Step 7 (optional) Customizing EZSP Configuration Parameters
+
+If you're using this firmware with [Zigbee2mqtt](https://www.zigbee2mqtt.io/) or [ZHA](https://www.home-assistant.io/integrations/zha/), you may want to optimize how the Zigbee stack allocates memory and handles routing.
+
+The values shown in the output of `universal-silabs-flasher probe` (such as `PACKET_BUFFER_COUNT`, `NEIGHBOR_TABLE_SIZE`, etc.) are defined at compile time inside the Silicon Labs Zigbee stack.
+
+You can **modify these parameters** by editing the following two files:
+
+```c
+<project_root>/autogen/sl_zigbee_source_route_config.h
+<project_root>/autogen/sl_zigbee_pro_stack_config.h
+```
+
+These files are automatically generated but can be customized by setting configuration options in **Simplicity Studio** or directly in the `.slcp` project file.
+
+---
+
+### 🔧 Key Parameters to Tune
+
+| Parameter                          | Description                                                                                                  |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| `CONFIG_PACKET_BUFFER_COUNT`       | Number of buffers used to store messages. Higher values allow better performance in busy networks.           |
+| `CONFIG_NEIGHBOR_TABLE_SIZE`       | Max number of Zigbee routers that can be stored. Affects routing stability.                                  |
+| `CONFIG_SOURCE_ROUTE_TABLE_SIZE`   | Controls the number of source routes cached. Essential for large end-device networks.                        |
+| `CONFIG_APS_UNICAST_MESSAGE_COUNT` | Max number of unicast messages in flight. Important for group commands or simultaneous actions.              |
+| `CONFIG_BROADCAST_TABLE_SIZE`      | Limits how many broadcast messages are tracked to avoid duplicates.                                          |
+| `CONFIG_BINDING_TABLE_SIZE`        | Number of Zigbee bindings supported. Needed for certain device pairing.                                      |
+| `CONFIG_KEY_TABLE_SIZE`            | Number of security keys that can be stored.                                                                  |
+| `CONFIG_ADDRESS_TABLE_SIZE`        | Number of IEEE<->network address mappings cached. Important for direct communication, ZCL bindings, and OTA. |
+
+---
+
+### 🧪 Recommended Defaults in EZSP 7.5.0.0
+
+For reference, here are the current default values on the Lidl/Silvercrest gateway running EZSP 7.5.0.0:
+
+```c
+CONFIG_PACKET_BUFFER_COUNT=255
+CONFIG_SOURCE_ROUTE_TABLE_SIZE=7
+CONFIG_ADDRESS_TABLE_SIZE=12
+CONFIG_NEIGHBOR_TABLE_SIZE=16
+CONFIG_APS_UNICAST_MESSAGE_COUNT=10
+```
+
+These values are already well-balanced for many networks.
+
+---
+
+### 🧩 Optional Adjustments Based on Community Feedback
+
+Community member [@gpaesano](https://github.com/gpaesano) suggested the following adjustments across two configuration headers:
+
+In `sl_zigbee_source_route_config.h`:
+```c
+#define EMBER_SOURCE_ROUTE_TABLE_SIZE   200
+```
+
+In `sl_zigbee_pro_stack_config.h`:
+```c
+#define EMBER_BROADCAST_TABLE_SIZE   30
+#define EMBER_APS_UNICAST_MESSAGE_COUNT   64
+#define EMBER_NEIGHBOR_TABLE_SIZE   26
+```
+
+These changes increase capacity for routing and message handling, which is helpful for larger or more active Zigbee networks.
+
+---
+
+### 📚 Documentation & References
+
+- [AN1233: Zigbee Stack Configuration Guide (Silicon Labs)](https://www.silabs.com/documents/public/application-notes/an1233-zigbee-stack-config.pdf)
+- [Zigbee Stack API Reference (Silicon Labs)](https://siliconlabs.github.io/zigbee_sdk_doc/)
+
+
+## Step 8: build the firmware
 
 Right-click on the project name (`ncp-uart-hw`) in the left-panel and click
 on `Build Project`. The compilation should run without any errors. The
