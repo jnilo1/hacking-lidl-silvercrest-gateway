@@ -122,9 +122,9 @@ Then, the bootloader automatically exposes the RAM content via `tftp`, allowing 
 
 On the bootloader:
 ```plaintext
-RealTek>FLR 80000000 00200000 00200000
+RealTek>FLR 80500000 00200000 00200000
 ```
-- `80000000` → RAM address where data will be loaded
+- `80500000` → RAM address where data will be loaded
 - `00200000` → flash offset of mtd2
 - `00200000` → size of the partition in bytes (here: 2 MiB)
 
@@ -135,6 +135,8 @@ tftp -m binary 192.168.1.6 -c get mtd2.bin
 This command downloads the content from RAM to your local machine, storing it as `mtd2.bin`.
 
 💡 You can repeat this process for each MTD partition (see reference table below).
+⚠️ tftp is not a secure protocol. Repeat the process 2 or 3 times and make sure md5sum are equals
+⚠️ A direct ethernet cable connection is recommended
 
 ---
 
@@ -183,11 +185,11 @@ This writes the file `mtd2.bin` (2 MiB) to SPI flash at offset `0x00200000`.
 
 | MTD     | Description        | Offset     | Size       | FLR Command                                       | FLW Command                                       |
 |---------|--------------------|------------|------------|--------------------------------------------------|--------------------------------------------------|
-| mtd0    | Bootloader + Config| 0x00000000 | 0x00020000 | `FLR 80000000 00000000 00020000`                | `FLW 00000000 80500000 00020000 0`               |
-| mtd1    | Kernel             | 0x00020000 | 0x001E0000 | `FLR 80000000 00020000 001E0000`                | `FLW 00020000 80500000 001E0000 0`               |
-| mtd2    | Rootfs             | 0x00200000 | 0x00200000 | `FLR 80000000 00200000 00200000`                | `FLW 00200000 80500000 00200000 0`               |
-| mtd3    | Tuya Label         | 0x00400000 | 0x00020000 | `FLR 80000000 00400000 00020000`                | `FLW 00400000 80500000 00020000 0`               |
-| mtd4    | JFFS2 Overlay      | 0x00420000 | 0x00BE0000 | `FLR 80000000 00420000 00BE0000`                | `FLW 00420000 80500000 00BE0000 0`               |
+| mtd0    | Bootloader + Config| 0x00000000 | 0x00020000 | `FLR 80500000 00000000 00020000`                | `FLW 00000000 80500000 00020000 0`               |
+| mtd1    | Kernel             | 0x00020000 | 0x001E0000 | `FLR 80500000 00020000 001E0000`                | `FLW 00020000 80500000 001E0000 0`               |
+| mtd2    | Rootfs             | 0x00200000 | 0x00200000 | `FLR 80500000 00200000 00200000`                | `FLW 00200000 80500000 00200000 0`               |
+| mtd3    | Tuya Label         | 0x00400000 | 0x00020000 | `FLR 80500000 00400000 00020000`                | `FLW 00400000 80500000 00020000 0`               |
+| mtd4    | JFFS2 Overlay      | 0x00420000 | 0x00BE0000 | `FLR 80500000 00420000 00BE0000`                | `FLW 00420000 80500000 00BE0000 0`               |
 
 ---
 
@@ -257,5 +259,5 @@ jnilo@HP-ZBook:
 |------------------------------|-----------|---------------------------------------------|
 | `backup_mtd_via_ssh.sh`      | Method 1  | Bakup one or all partitions via SSH + dd |
 | `restore_mtd_via_ssh.sh`     | Method 1  | Restore one or all partitions via SSH + dd             |
-| `backup_mtd_via_tftp.sh`   | Method 2  | Backup one or all partitions via FLR + TFTP        |
+
 
