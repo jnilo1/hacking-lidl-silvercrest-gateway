@@ -73,13 +73,11 @@ echo "Starting firmware transfer"
 
 # Cleanup and reboot
 rm -f /tmp/sx /tmp/firmware.gbl /tmp/firmware_package.tar.gz
+echo "Firmware update completed. The gateway will now reboot."
 echo "Rebooting..."
 reboot
 '
 
 # --- Local cleanup ---
 rm -f firmware_package.tar.gz firmware.gbl
-
-echo "Firmware update initiated. The gateway will reboot when complete."
 exit 0
-

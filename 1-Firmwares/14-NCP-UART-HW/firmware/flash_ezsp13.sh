@@ -1,8 +1,8 @@
 #!/bin/bash
 # flash_ezsp13.sh – Flash EZSP V13 firmware to Lidl/Silvercrest gateway
 #
-# Compatible with EZSP V13 (used with EmberZNet 7.x)
-# Tested on EFR32MG1B232F256-based Lidl Silvercrest gateway
+# Compatible with EZSP V13 (EmberZNet >= 7.x)
+# Tested on EFR32MG1B-based Lidl Silvercrest gateway
 #
 # Usage:
 #   ./flash_ezsp13.sh <gateway_ip> <firmware.gbl>
@@ -48,6 +48,7 @@ tar -xf firmware_package.tar.gz
 
 chmod +x sx
 killall -q serialgateway
+killall -q ser2net
 
 # Serial initialization
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon crtscts raw
@@ -76,7 +77,7 @@ sleep 1
 echo -n "."
 echo -en "\x33\x40\x21\xA9\xDB\x2A\x14\x8F\xC8\x7E" > /dev/ttyS1
 sleep 1
-echo -n "."
+echo "."
 
 # Switch to XMODEM-compatible serial mode
 stty -F /dev/ttyS1 115200 cs8 -cstopb -parenb -ixon -crtscts raw
@@ -89,13 +90,12 @@ echo "Starting firmware transfer"
 
 # Cleanup and reboot
 rm -f /tmp/sx /tmp/firmware.gbl /tmp/firmware_package.tar.gz
+echo "Firmware update completed. The gateway will now reboot."
 echo "Rebooting..."
 reboot
 '
 
 # --- Local cleanup ---
 rm -f firmware_package.tar.gz firmware.gbl
-
-echo "Firmware update initiated. The gateway will reboot when complete."
 exit 0
 

@@ -1,8 +1,8 @@
 #!/bin/bash
-# flash_ezsp8.sh – Flash EZSP V8 firmware to Lidl/Silvercrest gateway
+# flash_ezsp7.sh – Flash EZSP V8 firmware to Lidl/Silvercrest gateway
 #
-# Compatible with EZSP V8 (used in EmberZNet 6.7.8 firmware)
-# Tested on EFR32MG1B232F256-based Lidl Silvercrest gateway
+# Compatible with EZSP V8 (EmberZNet 6..x)
+# Tested on EFR32MG1B-based Lidl Silvercrest gateway
 #
 # Usage:
 #   ./flash_ezsp8.sh <gateway_ip> <firmware.gbl>
@@ -73,13 +73,12 @@ echo "Starting firmware transfer"
 
 # Cleanup and reboot
 rm -f /tmp/sx /tmp/firmware.gbl /tmp/firmware_package.tar.gz
+echo "Firmware update completed. The gateway will now reboot."
 echo "Rebooting..."
 reboot
 '
 
 # --- Local cleanup ---
 rm -f firmware_package.tar.gz firmware.gbl
-
-echo "Firmware update initiated. The gateway will reboot when complete."
 exit 0
 
