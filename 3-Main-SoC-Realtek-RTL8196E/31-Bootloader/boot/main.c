@@ -22,6 +22,21 @@ unsigned long glexra_clock = 200 * 1000 * 1000;
 unsigned int gCHKKEY_HIT = 0;
 unsigned int gCHKKEY_CNT = 0;
 
+/*
+ * Boot-hold: Linux can request the bootloader to stop at the <RealTek>
+ * prompt by writing a two-word magic to a fixed RAM address before
+ * triggering a watchdog reset.  DRAM contents survive the reset on the
+ * RTL8196E (verified experimentally -- even brief power cycles).
+ * Two words are checked to avoid false positives from stale DRAM data.
+ * The flag is one-shot: the bootloader clears both words before
+ * entering download mode.
+ */
+#define BOOTHOLD_MAGIC0 0x484F4C44  /* "HOLD" */
+#define BOOTHOLD_MAGIC1 0xB007C0DE  /* second guard word */
+#define BOOTHOLD_RAM    ((volatile unsigned long *)0x80050000)
+
+void goToDownMode(void);
+
 /**
  * start_kernel - Main bootloader entry point (called from init_arch)
  *
@@ -45,6 +60,15 @@ void start_kernel(void)
 	initFlash();
 
 	showBoardInfo();
+
+	if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC0 &&
+	    BOOTHOLD_RAM[1] == BOOTHOLD_MAGIC1) {
+		BOOTHOLD_RAM[0] = 0;
+		BOOTHOLD_RAM[1] = 0;
+		prom_printf("---Boot hold requested\n");
+		goToDownMode();
+		return;
+	}
 
 	return_addr = 0;
 	ret = check_image(&header, &setting_header);

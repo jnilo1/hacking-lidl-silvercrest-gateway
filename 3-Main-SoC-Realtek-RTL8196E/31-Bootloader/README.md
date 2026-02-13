@@ -21,6 +21,8 @@ Bootloader: V2.2 - 2026.02.10-18:30+0100 - J. Nilo
 Flashing: 76%
 ```
 
+**Reboot to bootloader from Linux** — No need to press ESC on the serial console. A single command from Linux SSH writes a magic flag to RAM and reboots; the bootloader detects it and stops at the `<RealTek>` prompt, ready for TFTP. See [Reboot to Bootloader](doc/REBOOT_TO_BOOTLOADER.md) for details.
+
 **Risk-free testing** — The build generates a `test.bin` image that runs entirely from RAM without touching flash. Load it via TFTP, jump to it, and test your bootloader changes live — no risk of bricking. See the [Testing Guide](doc/TESTING.md) for the full workflow.
 
 ## Building
@@ -44,6 +46,16 @@ Outputs:
 - PC on `192.168.1.x` (e.g. `192.168.1.1`)
 
 ### Step 1 — Enter download mode
+
+**From Linux (recommended):**
+
+```bash
+devmem 0x00050000 32 0x484F4C44 && devmem 0x00050004 32 0xB007C0DE && reboot
+```
+
+The gateway reboots and stops at the `<RealTek>` prompt automatically. The flag is one-shot — the next reboot will boot Linux normally.
+
+**From serial console:**
 
 Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt appears.
 
@@ -87,4 +99,5 @@ The bootloader identifies each image by its header signature and writes it to th
 | [Technical Memo](doc/MEMO_BOOTLOADER.md) | Architecture, boot process, image format, flash layout, build system |
 | [Toolchain Notes](doc/BOOTLOADER_TOOLCHAIN_NOTES.md) | Porting post-mortem: RSDK to GCC 8.5 / musl |
 | [Testing Guide](doc/TESTING.md) | RAM-test workflow, command validation checklist |
+| [Reboot to Bootloader](doc/REBOOT_TO_BOOTLOADER.md) | Enter `<RealTek>` prompt from Linux without pressing ESC |
 | [Reset Vector Audit](doc/RESET_VECTOR_AUDIT.md) | Stage-1 DDR init analysis |
