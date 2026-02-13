@@ -25,6 +25,7 @@ Output/
 # Toolchains and external tools
 x-tools/
 silabs-tools/
+silabs-flasher/
 SimplicityStudio/
 1-Build-Environment/11-realtek-tools/bin/
 1-Build-Environment/11-realtek-tools/mtd-utils/
