@@ -49,6 +49,7 @@ DROPBEAR_*/
 ncursesw-install/
 
 # Temporary files
+*.log
 *.tmp
 
 # Generated config files

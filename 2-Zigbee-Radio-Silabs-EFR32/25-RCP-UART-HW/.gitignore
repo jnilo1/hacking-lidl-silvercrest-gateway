@@ -1,6 +1,3 @@
-# Build directories
-build/
-
 # Cloned source repositories
 cpcd/cpc-daemon/
 zigbeed-7.5.1/gecko_sdk/
@@ -16,10 +13,6 @@ cpcd/test_tcp.c
 # Runtime data (user-specific)
 zigbeed-8.2.2/host_token.nvm
 zigbeed-8.2.2/tmp/
-
-# Temporary files
-*.log
-*.tmp
 
 # Keep RCP firmware for users who just want to flash
 !firmware/

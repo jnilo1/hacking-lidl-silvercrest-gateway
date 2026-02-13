@@ -1,5 +1,2 @@
 # Cloned source repository (created by build script)
 ot-br-posix/
-
-# CMake build directory (created by build script)
-build/

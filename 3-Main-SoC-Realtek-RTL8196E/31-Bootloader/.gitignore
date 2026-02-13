@@ -5,28 +5,13 @@
 # Personal notes
 RESUME_BOOTLOADER.md
 
-# Build artifacts
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/out/
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/mtd0.bin
-
-# Bootloader build outputs
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/boot/Output/
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/boot/**/.timer.o.flags
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/boot/**/**/*.tmp
-
-# btcode artifacts
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.o
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.elf
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.bin
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.img
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.gz
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/*.map
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/boot
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/cvimg
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/lzma
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/lzma-24
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/btcode/lzma-26
+# btcode artifacts (not covered by root .gitignore)
+src/btcode/*.gz
+src/btcode/*.map
+src/btcode/cvimg
+src/btcode/lzma
+src/btcode/lzma-24
+src/btcode/lzma-26
 
 # Config script artifacts
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/config/scripts/lxdialog/*.o
-3-Main-SoC-Realtek-RTL8196E/31-Bootloader/src/config/scripts/lxdialog/lxdialog
+src/config/scripts/lxdialog/lxdialog
