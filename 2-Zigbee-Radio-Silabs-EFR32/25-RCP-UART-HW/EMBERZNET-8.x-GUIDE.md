@@ -52,7 +52,7 @@ In RCP mode, the EFR32 chip only handles the 802.15.4 radio PHY/MAC layer. The E
 ### Step 1: Install Build Dependencies
 
 ```bash
-sudo apt install cmake gcc g++ libmbedtls-dev socat git
+sudo apt install cmake build-essential socat git
 ```
 
 ### Step 2: Install Silicon Labs Tools

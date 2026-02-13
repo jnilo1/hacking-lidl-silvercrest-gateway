@@ -96,15 +96,15 @@ EOF
     echo "The configuration file '$ENV_FILE' was created."
     read -p "Would you like to edit it now? (y/n): " choice
     case "$choice" in
-            [yY][eE][sS]|[yY])
-                if ! open_editor "$ENV_FILE"; then
-                    die "Failed to open editor. Please edit $ENV_FILE manually, then rerun."
-                fi
-                ;;
-            *)
-                die "Created $ENV_FILE. Edit it with your paths, then rerun."
-                ;;
-        esac
+      [yY][eE][sS]|[yY])
+        if ! open_editor "$ENV_FILE"; then
+          die "Failed to open editor. Please edit $ENV_FILE manually, then rerun."
+        fi
+        ;;
+      *)
+        die "Created $ENV_FILE. Edit it with your paths, then rerun."
+        ;;
+    esac
   fi
 }
 

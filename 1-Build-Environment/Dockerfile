@@ -85,10 +85,7 @@ RUN dpkg --add-architecture i386 && \
         # Commander dependencies
         libgl1 \
         # cpcd build
-        cmake \
-        gcc \
-        g++ \
-        libmbedtls-dev
+        cmake
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

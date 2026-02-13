@@ -82,7 +82,8 @@ apt-get install -y \
     rsync \
     pkg-config \
     openjdk-21-jre-headless \
-    libgl1
+    libgl1 \
+    cmake
 
 echo ""
 echo "========================================="
@@ -127,6 +128,7 @@ echo "  - Filesystem: squashfs-tools, mtd-utils, fakeroot, cpio"
 echo "  - 32-bit support: libc6-i386, zlib1g:i386"
 echo "  - Flashing: tftp-hpa"
 echo "  - Silabs tools: openjdk-21-jre-headless, libgl1"
+echo "  - cpcd build: cmake"
 echo "  - Other: git, git-lfs, wget, curl, unzip, python3, rsync"
 echo ""
 

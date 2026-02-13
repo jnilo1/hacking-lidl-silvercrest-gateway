@@ -9,8 +9,10 @@
 #   - libcpc installed (build cpcd first)
 #
 # Usage:
-#   ./build_zigbeed.sh         # Build and install
-#   ./build_zigbeed.sh clean   # Clean build directory
+#   ./build_zigbeed.sh              # Build + prompt (TTY) or local (non-TTY)
+#   ./build_zigbeed.sh --local      # Build + install to /usr/local
+#   ./build_zigbeed.sh --deb        # Build + generate .deb (/usr)
+#   ./build_zigbeed.sh clean        # Clean build directory
 #
 # J. Nilo - January 2026
 
@@ -46,11 +48,47 @@ SILABS_TOOLS="${PROJECT_ROOT}/silabs-tools"
 SIMPLICITY_SDK="${SILABS_TOOLS}/simplicity_sdk_2025.6.2"
 ZIGBEED_SAMPLE="${SIMPLICITY_SDK}/protocol/zigbee/app/projects/zigbeed"
 
-# Handle clean
-if [ "${1:-}" = "clean" ]; then
-    echo "Cleaning..."
-    rm -rf "${BUILD_DIR}"
-    exit 0
+REPO_OWNER=$(git remote get-url origin 2>/dev/null | sed -E 's/.*[:\/](.*)\/.*\..*/\1/') || true
+REPO_OWNER="${REPO_OWNER:-unknown}"
+
+# Parse arguments
+INSTALL_MODE=""
+case "${1:-}" in
+    clean)
+        echo "Cleaning..."
+        rm -rf "${BUILD_DIR}"
+        exit 0
+        ;;
+    --local)
+        INSTALL_MODE=local
+        ;;
+    --deb)
+        INSTALL_MODE=deb
+        ;;
+    "")
+        ;;
+    *)
+        echo "Usage: $0 [--local | --deb | clean]"
+        exit 1
+        ;;
+esac
+
+# If no mode specified, prompt (TTY) or default (non-TTY)
+if [ -z "$INSTALL_MODE" ]; then
+    if [ -t 0 ]; then
+        read -p "Install zigbeed local or build DEB-File? ((l)ocal/(d)eb): " answer
+        case ${answer:0:1} in
+            l|L) INSTALL_MODE=local ;;
+            d|D) INSTALL_MODE=deb ;;
+            *)
+                echo "Installation canceled."
+                exit 0
+                ;;
+        esac
+    else
+        echo "Non-interactive mode: defaulting to local install (/usr/local)"
+        INSTALL_MODE=local
+    fi
 fi
 
 echo "========================================="
@@ -92,8 +130,8 @@ fi
 
 # Check libcpc
 if [ ! -s "${CPC_DIR}/build/libcpc.a" ]; then
-    echo "WARNING: libcpc not found. Build cpcd first:"
-    ../cpcd/build_cpcd.sh
+    echo "ERROR: libcpc not found. Build cpcd first: ../cpcd/build_cpcd.sh"
+    exit 1
 fi
 
 # =========================================
@@ -165,27 +203,24 @@ echo "Patching zigbeed.project.mak..."
 sed -i "/platform\/service\/cpc\/daemon\/lib/a \  -I${CPC_DIR}/lib \\\\" zigbeed.project.mak
 sed -i "/-lcpc/i \  -L${CPC_DIR}/build \\\\" zigbeed.project.mak
 
-make -sf zigbeed.Makefile -j$(nproc)
+make -f zigbeed.Makefile -j$(nproc)
 
 # =========================================
 # Strip and install
 # =========================================
 echo ""
-echo "Stripping and installing to /usr/bin..."
+echo "Stripping binary..."
 
 strip build/debug/zigbeed
 
 # Install
-read -p "Install zigbeed local or build DEB-File? ((l)ocal/(d)eb): " answer
-
-case ${answer:0:1} in
-    l|L )
-        echo "Installing locally..."
-        sudo cp build/debug/zigbeed /usr/bin/
-        sudo chmod +x /usr/bin/zigbeed
+case "$INSTALL_MODE" in
+    local)
+        echo "Installing to /usr/local/bin..."
+        sudo install -m 0755 build/debug/zigbeed /usr/local/bin/
         echo "Done."
         ;;
-    d|D )
+    deb)
         echo "Generating DEB-Package..."
         APP_NAME="zigbeed"
         VERSION="1.0.0"
@@ -201,7 +236,7 @@ case ${answer:0:1} in
           -D CPACK_PACKAGE_VERSION="$VERSION" \
           -D CPACK_PACKAGE_FILE_NAME="${APP_NAME}-${VERSION}-${ARCH}" \
           -D CPACK_PACKAGE_DESCRIPTION="zigbeed" \
-          -D CPACK_DEBIAN_PACKAGE_MAINTAINER=$(git remote get-url origin | sed -E 's/.*[:\/](.*)\/.*\..*/\1/') \
+          -D CPACK_DEBIAN_PACKAGE_MAINTAINER=$REPO_OWNER \
           -D CPACK_DEBIAN_PACKAGE_CONTROL_EXTRA="preinst;prerm" \
           -D CPACK_OUTPUT_FILE_PREFIX="${SCRIPT_DIR}/packages" \
           -D CPACK_INSTALLED_DIRECTORIES="${DEPLOY_DIR};/" \
@@ -209,9 +244,6 @@ case ${answer:0:1} in
         rm -r ${DEPLOY_DIR}
         echo "Done."
         echo "use dpkg -i zigbeed.deb to install"
-       ;;
-    * )
-        echo "Installation canceled."
         ;;
 esac
 

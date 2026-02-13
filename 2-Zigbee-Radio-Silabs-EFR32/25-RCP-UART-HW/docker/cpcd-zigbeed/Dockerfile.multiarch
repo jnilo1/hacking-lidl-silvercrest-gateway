@@ -97,7 +97,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
     unzip \
-    libmbedtls-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -109,6 +108,7 @@ RUN git clone --depth 1 --branch ${CPCD_VERSION} https://github.com/SiliconLabs/
     && cmake .. \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
         -DCMAKE_BUILD_TYPE=Release \
+        -DENABLE_ENCRYPTION=OFF \
     && make -j$(nproc) \
     && make install \
     && make install DESTDIR=/install \
@@ -152,10 +152,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy binaries from builder
 COPY --from=builder /install/usr/local /usr/local
-
-# Copy mbedcrypto library from builder (needed by cpcd)
-RUN mkdir -p /usr/local/lib
-COPY --from=builder /usr/lib/*/libmbedcrypto.so* /usr/local/lib/
 
 # Update library cache
 RUN ldconfig

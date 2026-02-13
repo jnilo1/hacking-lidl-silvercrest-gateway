@@ -6,14 +6,16 @@ Portable: works on x86_64, ARM64 (Raspberry Pi 4/5), etc.
 ## Prerequisites
 
 ```bash
-sudo apt install cmake gcc g++ libmbedtls-dev
+sudo apt install cmake build-essential
 ```
 
 ## Build and Install
 
 ```bash
-./build_cpcd.sh         # Clone, build, install to /usr/local
-./build_cpcd.sh clean   # Remove source
+./build_cpcd.sh              # Build + prompt (TTY) or local (non-TTY)
+./build_cpcd.sh --local      # Build + install to /usr/local
+./build_cpcd.sh --deb        # Build + generate .deb (/usr)
+./build_cpcd.sh clean        # Remove source
 ```
 
 ## Configuration
