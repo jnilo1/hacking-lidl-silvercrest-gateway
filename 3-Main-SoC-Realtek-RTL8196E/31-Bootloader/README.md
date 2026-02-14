@@ -33,8 +33,7 @@ Flashing: 76%
 ```
 
 Outputs:
-- `boot_noreboot.bin` — stays in download mode after boot-code flash (safe default)
-- `boot_reboot.bin` — auto-reboots after boot-code flash
+- `boot.bin` — flash image (stays in download mode after boot-code flash)
 - `btcode/build/test.bin` — RAM-test image (test without flashing)
 
 ## Flashing
@@ -50,7 +49,7 @@ Outputs:
 **From Linux (recommended):**
 
 ```bash
-devmem 0x00050000 32 0x484F4C44 && devmem 0x00050004 32 0xB007C0DE && reboot
+devmem 0x00050000 32 0x484F4C44 && reboot
 ```
 
 The gateway reboots and stops at the `<RealTek>` prompt automatically. The flag is one-shot — the next reboot will boot Linux normally.
@@ -62,12 +61,10 @@ Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt a
 ### Step 2 — Send the bootloader via TFTP
 
 ```bash
-tftp -m binary 192.168.1.6 -c put boot_reboot.bin
+tftp -m binary 192.168.1.6 -c put boot.bin
 ```
 
-The bootloader auto-detects the image type, flashes it, and reboots. That's it.
-
-For a safer approach (no auto-reboot), use `boot_noreboot.bin` instead and reboot manually from the serial console:
+The bootloader auto-detects the image type and flashes it. After flashing, reboot manually:
 ```
 <RealTek>J BFC00000
 ```
@@ -89,7 +86,7 @@ The bootloader identifies each image by its header signature and writes it to th
 - **Never flash mtd0** without a backup and SPI programmer on hand
 - The bootloader is the only recovery path if the device bricks (short of desoldering the flash chip)
 - Always verify TFTP transfers completed before rebooting
-- Use `boot_noreboot.bin` when testing — it stays in download mode after flashing
+- Use `test.bin` for testing — it runs from RAM without touching flash
 
 ## Documentation
 

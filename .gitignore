@@ -12,8 +12,8 @@ node_modules/
 
 # Exception: pre-built firmware files (only .gbl for UART flashing)
 !2-Zigbee-Radio-Silabs-EFR32/*/firmware/*.gbl
-# Exception: bootloader flash images
-!3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot_*.bin
+# Exception: bootloader flash image
+!3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot.bin
 *.img
 *.img.gz
 

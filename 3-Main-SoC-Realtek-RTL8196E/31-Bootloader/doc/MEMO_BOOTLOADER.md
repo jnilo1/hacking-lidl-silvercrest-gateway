@@ -222,15 +222,12 @@ make clean      # clean all build outputs
 
 ### Build variants
 
-Three variants are built:
+Two variants are built:
 
 | Variant | Output file | Description |
 |---------|-------------|-------------|
-| noreboot | `boot_noreboot.bin` | Boot code TFTP flash does NOT auto-reboot (safe) |
-| reboot | `boot_reboot.bin` | Boot code TFTP flash auto-reboots after completion |
+| boot | `boot.bin` | Production flash image (stays in download mode after boot TFTP) |
 | ramtest | `btcode/build/test.bin` | RAM-test image with read-back verification |
-
-The `BOOT_REBOOT` define controls whether flashing a new boot code image via TFTP triggers an automatic reboot. In the `noreboot` variant (default), the device stays in download mode after flashing boot code.
 
 ### Build pipeline
 

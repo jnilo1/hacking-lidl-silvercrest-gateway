@@ -5,14 +5,14 @@
 #
 # Usage: ./flash_bootloader.sh [IP] [IMAGE]
 #   IP    - Target IP (default: 192.168.1.6)
-#   IMAGE - Image file (default: boot_reboot.bin)
+#   IMAGE - Image file (default: boot.bin)
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 TARGET_IP="${1:-192.168.1.6}"
-IMAGE="${2:-${SCRIPT_DIR}/boot_reboot.bin}"
+IMAGE="${2:-${SCRIPT_DIR}/boot.bin}"
 
 if [ ! -f "$IMAGE" ]; then
     echo "Error: $IMAGE not found"
@@ -36,4 +36,4 @@ fi
 
 tftp -m binary "$TARGET_IP" -c put "$IMAGE"
 echo ""
-echo "Done. Device should reboot automatically (boot_reboot variant)."
+echo "Done. Reboot with: J BFC00000"

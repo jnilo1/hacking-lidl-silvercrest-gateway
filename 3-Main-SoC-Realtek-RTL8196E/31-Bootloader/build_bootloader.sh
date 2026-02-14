@@ -9,15 +9,13 @@
 #
 # Uses the Lexra/musl toolchain from the project x-tools directory.
 #
-# Three variants are built:
-#   - noreboot: boot code TFTP flash does NOT auto-reboot (safe default)
-#   - reboot:   boot code TFTP flash auto-reboots after completion
-#   - ramtest:  RAM-test image with read-back verification of BSS clears
+# Two variants are built:
+#   - boot:    production flash image (stays in download mode after boot TFTP)
+#   - ramtest: RAM-test image with read-back verification of BSS clears
 #
 # Outputs:
-#   boot_noreboot.bin          - flash image, no reboot after boot-code TFTP
-#   boot_reboot.bin            - flash image, auto-reboot after boot-code TFTP
-#   btcode/build/test.bin      - RAM-loadable image for RAM testing
+#   boot.bin               - flash image
+#   btcode/build/test.bin  - RAM-loadable image for RAM testing
 #
 # Usage:
 #   ./build_bootloader.sh          # build all variants
@@ -80,7 +78,7 @@ do_clean() {
     echo "Cleaning all build outputs..."
     make -C "$SCRIPT_DIR/boot"   CROSS="$CROSS_PREFIX" clean 2>/dev/null || true
     make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" clean 2>/dev/null || true
-    rm -f "$SCRIPT_DIR/boot_noreboot.bin" "$SCRIPT_DIR/boot_reboot.bin"
+    rm -f "$SCRIPT_DIR/boot.bin"
     echo "Done."
 }
 
@@ -103,21 +101,13 @@ echo ""
 # boot/ must be cleaned between variants because the Makefiles do not
 # track CFLAGS changes.
 
-# --- noreboot variant ---
-echo "--- Building noreboot variant ---"
+# --- boot variant ---
+echo "--- Building boot image ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR"
 make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" clean
 make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX"
-cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot_noreboot.bin"
-
-# --- reboot variant (only boot/ changes; btcode sees new boot.out) ---
-echo ""
-echo "--- Building reboot variant ---"
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" BOOT_REBOOT=1
-make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX"
-cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot_reboot.bin"
+cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot.bin"
 
 # --- ramtest variant (btcode CFLAGS change -> clean btcode too) ---
 echo ""
@@ -134,8 +124,7 @@ echo "========================================="
 echo "  BUILD SUMMARY"
 echo "========================================="
 echo ""
-[ -f "$SCRIPT_DIR/boot_noreboot.bin" ]      && ls -lh "$SCRIPT_DIR/boot_noreboot.bin"
-[ -f "$SCRIPT_DIR/boot_reboot.bin" ]        && ls -lh "$SCRIPT_DIR/boot_reboot.bin"
-[ -f "$SCRIPT_DIR/btcode/build/test.bin" ]  && ls -lh "$SCRIPT_DIR/btcode/build/test.bin"
+[ -f "$SCRIPT_DIR/boot.bin" ]              && ls -lh "$SCRIPT_DIR/boot.bin"
+[ -f "$SCRIPT_DIR/btcode/build/test.bin" ] && ls -lh "$SCRIPT_DIR/btcode/build/test.bin"
 echo ""
 echo "Done."

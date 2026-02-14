@@ -7,7 +7,7 @@ bootloader prompt, ready for TFTP firmware updates — no need to press
 ESC on the serial console.
 
 ```sh
-devmem 0x00050000 32 0x484F4C44 && devmem 0x00050004 32 0xB007C0DE && reboot
+devmem 0x00050000 32 0x484F4C44 && reboot
 ```
 
 The flag is **one-shot**: the bootloader clears it before entering
@@ -17,26 +17,25 @@ download mode, so the next reboot boots Linux normally.
 
 ## How it works
 
-The mechanism uses a **two-word magic in DRAM** that survives the
+The mechanism uses a **magic word in DRAM** that survives the
 watchdog reset triggered by `reboot`.  No flash writes are involved.
 
 1. Linux writes `0x484F4C44` ("HOLD") to physical address `0x00050000`
-   and `0xB007C0DE` to `0x00050004` via `/dev/mem`.
+   via `/dev/mem`.
 2. Linux triggers `reboot`, which causes a watchdog reset.
 3. The CPU restarts at `BFC00000` (flash reset vector).  The btcode
    re-initialises the DDR controller, but DRAM cell contents survive
    because the DDR2 retention time (~64-256 ms) exceeds the re-init
    delay (~1-2 ms).
 4. The stage-2 bootloader checks `0x80050000` (kseg0 cached alias of
-   physical `0x00050000`) for the two-word magic.
-5. If both words match, the bootloader **clears them** and enters
+   physical `0x00050000`) for the magic word.
+5. If it matches, the bootloader **clears it** and enters
    download mode (`goToDownMode()`).
-6. If they don't match (normal boot, cold power-on), the bootloader
+6. If it doesn't match (normal boot, cold power-on), the bootloader
    proceeds to load and boot the kernel as usual.
 
-Two words (64 bits) are checked to eliminate false positives from stale
-DRAM data, which was observed to survive even brief power interruptions
-on this hardware.
+A full power cycle (disconnect all cables) clears DRAM and restores
+normal boot.
 
 ### Boot flow with boot-hold
 
@@ -46,7 +45,7 @@ initHeap()
 initInterrupt()
 initFlash()
 showBoardInfo()
-                    ← NEW: check BOOTHOLD_RAM[0..1]
+                    ← NEW: check BOOTHOLD_RAM[0]
                        if match → clear, goToDownMode(), return
 check_image()
 doBooting()
@@ -62,7 +61,7 @@ not touched by any code that runs before the boot-hold check:
 | Region                          | Address range              | Status    |
 |---------------------------------|----------------------------|-----------|
 | Exception vectors               | `0x80000000 - 0x800001FF` | Avoid     |
-| **Boot-hold flag**              | **`0x80050000 - 0x80050007`** | **Used** |
+| **Boot-hold flag**              | **`0x80050000 - 0x80050003`** | **Used** |
 | DDR calibration (`DDR_cali_API7`, `Calc_TRxDly`) | `0xA0080000`, `0xA0100000` | Avoid |
 | DDR size detection (`Calc_Dram_Size`) | `0xA0000000`, power-of-2 offsets | Avoid |
 | Stage-2 code/data/BSS           | `0x80400000 - 0x80422000` | Avoid     |
@@ -75,18 +74,15 @@ not touched by any code that runs before the boot-hold check:
 In `boot/main.c`, at file scope:
 
 ```c
-#define BOOTHOLD_MAGIC0 0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_MAGIC1 0xB007C0DE  /* second guard word */
+#define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
 #define BOOTHOLD_RAM    ((volatile unsigned long *)0x80050000)
 ```
 
 In `start_kernel()`, after `showBoardInfo()`:
 
 ```c
-if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC0 &&
-    BOOTHOLD_RAM[1] == BOOTHOLD_MAGIC1) {
+if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC) {
     BOOTHOLD_RAM[0] = 0;
-    BOOTHOLD_RAM[1] = 0;
     prom_printf("---Boot hold requested\n");
     goToDownMode();
     return;
@@ -100,14 +96,15 @@ if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC0 &&
 ### With devmem (BusyBox applet)
 
 ```sh
-devmem 0x00050000 32 0x484F4C44 && devmem 0x00050004 32 0xB007C0DE && reboot
+devmem 0x00050000 32 0x484F4C44 && reboot
 ```
+
+Or use the `boothold` script installed in `/userdata/usr/bin/`.
 
 ### With /dev/mem (fallback)
 
 ```sh
 printf 'HOLD' | dd of=/dev/mem bs=1 seek=$((0x50000)) conv=notrunc 2>/dev/null
-printf '\xB0\x07\xC0\xDE' | dd of=/dev/mem bs=1 seek=$((0x50004)) conv=notrunc 2>/dev/null
 sync && reboot
 ```
 
@@ -123,7 +120,6 @@ Tested on the Lidl Silvercrest gateway (RTL8196E, 32 MB DDR2):
 | Boot-hold from Linux SSH (`devmem` + `reboot`) | **Works** — bootloader prints `---Boot hold requested` and enters `<RealTek>` prompt |
 | One-shot behavior (subsequent reboot) | **Works** — flag is cleared, Linux boots normally |
 | Full power cycle (disconnect all cables) | **Flag cleared** — DRAM lost, normal boot |
-| Brief power glitch (disconnect only 3.3V, GND+TX+RX still connected) | **Flag may survive** — back-feeding through serial pins keeps DDR2 alive; this is a non-issue in practice |
 
 ---
 

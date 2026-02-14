@@ -127,9 +127,8 @@ reboots after a successful flash:
 | `ALL1`    | Total image            | yes                    | yes                  |
 | `ALL2`    | Total image (no check) | yes                    | yes                  |
 
-The build produces two flash images: `boot_noreboot.bin` (default, safe)
-and `boot_reboot.bin` (auto-reboots after boot code flash).  The only
-difference is the `reboot` field for the `boot` signature.
+Boot code flashing does not auto-reboot — the board stays at the
+`<RealTek>` prompt after flashing.  Reboot manually with `J BFC00000`.
 
 Without arguments, displays the current setting.
 
@@ -346,16 +345,10 @@ Readback PHYID=0x0 regID=0x0 data=0x3300
 
 ### Flash a new bootloader
 
-Two flash images are produced by the build:
-
-- `boot_noreboot.bin` — the board stays at the prompt after flashing
-  (safe default, reboot manually with `J BFC00000`)
-- `boot_reboot.bin` — the board reboots automatically after flashing
-
 ```
 <RealTek>AUTOBURN 1
-<RealTek>                          (upload boot_noreboot.bin via TFTP to 192.168.1.6)
-**TFTP Client Upload, File Name: boot_noreboot.bin
+<RealTek>                          (upload boot.bin via TFTP to 192.168.1.6)
+**TFTP Client Upload, File Name: boot.bin
 **TFTP Client Upload File Size = 55E2 Bytes at 80500000
 Success!
 Boot code upgrade.

@@ -2,16 +2,12 @@
 
 ## Overview
 
-The bootloader build produces three binaries:
+The bootloader build produces two binaries:
 
 | File                | Description                              | Build flag      |
 |---------------------|------------------------------------------|-----------------|
-| `boot_noreboot.bin` | Flash image, no reboot after boot TFTP   | —               |
-| `boot_reboot.bin`   | Flash image, auto-reboot after boot TFTP | `BOOT_REBOOT`   |
+| `boot.bin`          | Flash image (no reboot after boot TFTP)  | —               |
 | `test.bin`          | RAM-testable bootloader (raw binary)     | `RAMTEST_TRACE` |
-
-`boot_noreboot.bin` and `boot_reboot.bin` differ only in the `reboot`
-field of the `BOOT_SIGNATURE` entry in the TFTP signature table.
 
 `test.bin` mirrors the bootloader behavior except it **skips kernel boot**
 and enters download mode directly.  This allows testing all bootloader
@@ -124,11 +120,7 @@ each prompt before sending the next.
 
 ## 2. Flashing the bootloader
 
-Once test.bin is validated, flash the production bootloader.  Two
-variants are available:
-
-- `boot_noreboot.bin` — board stays at the prompt after flashing (safe)
-- `boot_reboot.bin` — board auto-reboots after flashing
+Once test.bin is validated, flash the production bootloader.
 
 ### From the flash bootloader (ESC at boot)
 
@@ -140,13 +132,13 @@ AutoBurning=1
 From the PC:
 
 ```bash
-tftp -m binary 192.168.1.6 -c put boot_noreboot.bin
+tftp -m binary 192.168.1.6 -c put boot.bin
 ```
 
 Expected output:
 
 ```
-**TFTP Client Upload, File Name: boot_noreboot.bin
+**TFTP Client Upload, File Name: boot.bin
 **TFTP Client Upload File Size = 55E2 Bytes at 80500000
 Success!
 
@@ -157,14 +149,11 @@ Flash Write Succeeded!
 <RealTek>
 ```
 
-With `boot_noreboot.bin`, the board stays at the prompt.  Reboot
-manually:
+The board stays at the prompt after flashing.  Reboot manually:
 
 ```
 <RealTek>J BFC00000
 ```
-
-With `boot_reboot.bin`, the board reboots automatically after flashing.
 
 ### From test.bin (running in RAM)
 
@@ -321,8 +310,7 @@ Upload images with known signatures and verify:
 
 | Image | Signature | Expected behavior |
 |-------|-----------|-------------------|
-| `boot_noreboot.bin` | `boot` | Flash to offset 0, no reboot |
-| `boot_reboot.bin` | `boot` | Flash to offset 0, auto-reboot |
+| `boot.bin` | `boot` | Flash to offset 0, no reboot |
 | `firmware.bin` | `cs6c` | Flash to kernel offset, auto-reboot |
 
 ---
@@ -373,20 +361,13 @@ tftp -m binary 192.168.1.6 -c put test.bin
 # On serial console:
 J 80100000
 
-# === Flash bootloader (no reboot) ===
+# === Flash bootloader ===
 # On serial console:
 AUTOBURN 1
 # On PC:
-tftp -m binary 192.168.1.6 -c put boot_noreboot.bin
+tftp -m binary 192.168.1.6 -c put boot.bin
 # On serial console (after "Flash Write Succeeded!"):
 J BFC00000
-
-# === Flash bootloader (auto reboot) ===
-# On serial console:
-AUTOBURN 1
-# On PC:
-tftp -m binary 192.168.1.6 -c put boot_reboot.bin
-# (board reboots automatically)
 
 # === Flash firmware ===
 # On serial console:

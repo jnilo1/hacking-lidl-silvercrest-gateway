@@ -369,11 +369,7 @@ SIGN_T sign_tbl[] = { //  signature, name, sig_len, skip, maxSize, reboot
     {FW_SIGNATURE, "Linux kernel", SIG_LEN, 0, 0x1000000, 1},
     {FW_SIGNATURE_WITH_ROOT, "Linux kernel (root-fs)", SIG_LEN, 0, 0x1000000, 1},
     {ROOT_SIGNATURE, "Root filesystem", SIG_LEN, 1, 0x1000000, 0},
-#ifdef BOOT_REBOOT
-    {BOOT_SIGNATURE, "Boot code", SIG_LEN, 1, 0x1000000, 1},
-#else
     {BOOT_SIGNATURE, "Boot code", SIG_LEN, 1, 0x1000000, 0},
-#endif
     {ALL1_SIGNATURE, "Total Image", SIG_LEN, 1, 0x1000000, 1},
     {ALL2_SIGNATURE, "Total Image (no check)", SIG_LEN, 1, 0x1000000, 1}};
 

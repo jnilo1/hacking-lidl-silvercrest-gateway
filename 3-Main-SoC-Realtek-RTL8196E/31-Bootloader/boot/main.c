@@ -24,15 +24,14 @@ unsigned int gCHKKEY_CNT = 0;
 
 /*
  * Boot-hold: Linux can request the bootloader to stop at the <RealTek>
- * prompt by writing a two-word magic to a fixed RAM address before
+ * prompt by writing a magic word to a fixed RAM address before
  * triggering a watchdog reset.  DRAM contents survive the reset on the
- * RTL8196E (verified experimentally -- even brief power cycles).
- * Two words are checked to avoid false positives from stale DRAM data.
- * The flag is one-shot: the bootloader clears both words before
- * entering download mode.
+ * RTL8196E (verified experimentally).  A full power cycle clears DRAM
+ * and restores normal boot.
+ * The flag is one-shot: the bootloader clears it before entering
+ * download mode.
  */
-#define BOOTHOLD_MAGIC0 0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_MAGIC1 0xB007C0DE  /* second guard word */
+#define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
 #define BOOTHOLD_RAM    ((volatile unsigned long *)0x80050000)
 
 void goToDownMode(void);
@@ -61,10 +60,8 @@ void start_kernel(void)
 
 	showBoardInfo();
 
-	if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC0 &&
-	    BOOTHOLD_RAM[1] == BOOTHOLD_MAGIC1) {
+	if (BOOTHOLD_RAM[0] == BOOTHOLD_MAGIC) {
 		BOOTHOLD_RAM[0] = 0;
-		BOOTHOLD_RAM[1] = 0;
 		prom_printf("---Boot hold requested\n");
 		goToDownMode();
 		return;

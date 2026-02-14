@@ -48,10 +48,6 @@ CFLAGS  += -DRAMTEST_TRACE
 ASFLAGS += -DRAMTEST_TRACE
 endif
 
-ifneq ($(BOOT_REBOOT),)
-CFLAGS  += -DBOOT_REBOOT
-endif
-
 ifneq ($(strip $(JUMP_ADDR)),)
 CFLAGS  += -DJUMP_ADDR=$(JUMP_ADDR)
 endif
