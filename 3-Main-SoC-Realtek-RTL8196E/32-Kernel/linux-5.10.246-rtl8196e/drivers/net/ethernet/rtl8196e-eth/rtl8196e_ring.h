@@ -4,12 +4,17 @@
 
 #include <linux/types.h>
 #include <linux/netdevice.h>
+#include <net/page_pool.h>
 #include "rtl8196e_desc.h"
 
-struct rtl8196e_pool;
 struct rtl8196e_ring;
 
-struct rtl8196e_ring *rtl8196e_ring_create(struct rtl8196e_pool *pool,
+struct rtl8196e_rx_buf {
+	struct page *page;
+	unsigned int offset;
+};
+
+struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
 					   unsigned int tx_cnt,
 					   unsigned int rx_cnt,
 					   unsigned int rx_mbuf_cnt,

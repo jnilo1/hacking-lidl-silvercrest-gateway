@@ -5,5 +5,4 @@ rtl8196e_eth-y := \
 	rtl8196e_main.o \
 	rtl8196e_hw.o \
 	rtl8196e_ring.o \
-	rtl8196e_pool.o \
 	rtl8196e_dt.o

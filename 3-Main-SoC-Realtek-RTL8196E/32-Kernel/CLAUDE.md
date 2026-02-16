@@ -23,7 +23,7 @@ unmaintainable. The new driver is a clean-room rewrite for Linux 5.10.
       Makefile                      #   modified: adds rtl8196e-eth + rtl819x entries
     arch/mips/boot/dts/realtek/
       rtl8196e.dts                  #   modified DTS (loglevel=7, link-poll-ms, phy-id)
-    net/core/skbuff.c               #   vanilla + skbuff patch pre-applied (redundant)
+    net/core/skbuff.c               #   vanilla skb_free_head() (removes legacy pool hooks)
 
   files/                            # Platform overlay for build_kernel.sh
     arch/                           #   Realtek platform code (SoC, DTS, Lexra cache, ...)
@@ -31,6 +31,7 @@ unmaintainable. The new driver is a clean-room rewrite for Linux 5.10.
 
   patches/                          # Patches against vanilla 5.10.246
                                     #   Lexra CPU, platform Kconfig/Makefile, skbuff.c hook
+                                    #   (skbuff.c patch only needed by legacy rtl819x driver)
 
   config-5.10.246-realtek.txt       # Base kernel config (uses RTL819X=y)
 
@@ -49,13 +50,13 @@ unmaintainable. The new driver is a clean-room rewrite for Linux 5.10.
 `build_rtl8196e_eth.sh` creates the build tree by layering:
 
 1. **Vanilla Linux 5.10.246** (downloaded)
-2. **patches/** applied (Lexra CPU, platform Kconfig hooks, skbuff.c pool hook)
+2. **patches/** applied (Lexra CPU, platform Kconfig hooks, skbuff.c pool hook for legacy driver)
 3. **files/** copied (platform code, legacy rtl819x driver)
 4. **linux-5.10.246-rtl8196e/** overlay copied ON TOP
    - Overwrites `drivers/net/ethernet/Kconfig` and `Makefile` (adds rtl8196e-eth)
    - Adds `drivers/net/ethernet/rtl8196e-eth/` (new driver)
    - Overwrites DTS with debug version (loglevel=7, extra DT properties)
-   - Overwrites skbuff.c (identical to patched version, harmless)
+   - Overwrites skbuff.c (removes legacy pool hooks, restores vanilla `skb_free_head()`)
 5. **.config** generated: `RTL819X=n`, `RTL8196E_ETH=y` + `olddefconfig`
 6. Compile + package -> `kernel-rtl8196e-eth.img`
 
@@ -97,8 +98,7 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 |------|------|
 | `rtl8196e_main.c` | net_device, NAPI, IRQ, TX/RX scheduling, module params |
 | `rtl8196e_hw.c/h` | MMIO register access, init sequence, KSEG1 helpers, PHY, L2 toCPU |
-| `rtl8196e_ring.c/h` | TX/RX descriptor rings, ownership, cache flush/invalidate |
-| `rtl8196e_pool.c/h` | Private RX buffer pool, alloc/free, skbuff.c integration |
+| `rtl8196e_ring.c/h` | TX/RX descriptor rings, page_pool RX buffers, ownership, cache flush/invalidate |
 | `rtl8196e_dt.c/h` | Devicetree parsing (interface@0 properties) |
 | `rtl8196e_regs.h` | Register definitions (trimmed to what's needed) |
 | `rtl8196e_desc.h` | Descriptor structures (pktHdr, mbuf) |
@@ -113,14 +113,25 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 - IRQ via SoC interrupt controller (GIMR bit 15).
 - BIST must be skipped (don't block init).
 
-### skbuff.c kernel patch
+### RX buffer management (page_pool)
 
-The driver relies on a patch in `net/core/skbuff.c` that hooks `skb_free_head()`:
-- When the kernel frees an skb whose head buffer belongs to our private pool,
-  it calls `free_rtl865x_eth_priv_buf()` instead of `kfree()`.
-- This is how zero-copy RX works: buffers are returned to the driver's pool
-  instead of being freed.
-- The patch is applied by `patches/net-core-skbuff.c.patch`.
+The driver uses the kernel's `page_pool` API (`include/net/page_pool.h`) for RX
+buffer management. This replaces the former custom buffer pool (`rtl8196e_pool.c/h`)
+that required a kernel patch in `net/core/skbuff.c`.
+
+- `page_pool_create()` in probe, `page_pool_destroy()` in remove.
+- `page_pool_dev_alloc_pages()` allocates RX buffers (order-0 pages).
+- Page-reuse pattern: `page_ref_count() == 1` → reuse same page, else alloc new.
+- `build_skb(page_address, PAGE_SIZE)` sets `head_frag=1` → on SKB free, the
+  kernel calls `skb_free_frag()` → `put_page()`, returning the page naturally.
+- Shadow array `rx_bufs[]` tracks page + offset per RX descriptor.
+- `flags=0` (no DMA mapping) since the RTL8196E uses KSEG1 uncached addresses
+  and manual cache management, not standard `dma_map`.
+- Kconfig `select PAGE_POOL` ensures the subsystem is built in.
+
+The overlay's `net/core/skbuff.c` restores vanilla `skb_free_head()` (no hooks).
+The `patches/net-core-skbuff.c.patch` still exists for the legacy rtl819x driver
+(`build_kernel.sh`) but is dead code in the new driver's kernel.
 
 ### Devicetree bindings
 
@@ -160,15 +171,16 @@ See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
 
 - iperf TCP RX >= 80 Mbps
 - iperf TCP TX gap < 10% vs RX (currently much worse)
-- No `rx_pool_empty_events` warnings
+- No page_pool warnings in dmesg
 - Stable SSH, ping IPv4/IPv6
 
 ## Kernel config differences (vs legacy)
 
-The new driver config differs from `config-5.10.246-realtek.txt` in exactly two lines:
+The new driver config differs from `config-5.10.246-realtek.txt` in these lines:
 ```
 # CONFIG_RTL819X is not set    (was: CONFIG_RTL819X=y)
 CONFIG_RTL8196E_ETH=y          (added)
+CONFIG_PAGE_POOL=y             (auto-selected by RTL8196E_ETH)
 ```
 
 All other RTL819X configs (serial, SPI, GPIO, clocksource, interrupt controller)

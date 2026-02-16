@@ -10,10 +10,10 @@
 #include <linux/errno.h>
 #include <linux/ethtool.h>
 #include <asm/cacheflush.h>
+#include <net/page_pool.h>
 #include "rtl8196e_dt.h"
 #include "rtl8196e_hw.h"
 #include "rtl8196e_ring.h"
-#include "rtl8196e_pool.h"
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
@@ -21,9 +21,8 @@
 #define RTL8196E_TX_DESC      600
 #define RTL8196E_RX_DESC      500
 #define RTL8196E_RX_MBUF_DESC 500
-#define RTL8196E_RX_POOL      1100
-#define RTL8196E_POOL_BUF_SIZE 2048
 #define RTL8196E_CLUSTER_SIZE 1700
+#define RTL8196E_PP_SIZE      512
 
 #define RTL8196E_TX_STOP_THRESH 32
 #define RTL8196E_TX_WAKE_THRESH 128
@@ -50,7 +49,7 @@ struct rtl8196e_priv {
 	struct napi_struct napi;
 	struct rtl8196e_hw hw;
 	struct rtl8196e_ring *ring;
-	struct rtl8196e_pool *pool;
+	struct page_pool *pp;
 	struct rtl8196e_dt_iface iface;
 	struct timer_list tx_timer;
 	struct timer_list link_timer;
@@ -548,20 +547,30 @@ static int rtl8196e_probe(struct platform_device *pdev)
 		goto err_free;
 	}
 
-	priv->pool = rtl8196e_pool_create(RTL8196E_POOL_BUF_SIZE, RTL8196E_RX_POOL);
-	if (!priv->pool) {
-		ret = -ENOMEM;
-		goto err_free;
+	{
+		struct page_pool_params pp_params = {
+			.flags = 0,
+			.order = 0,
+			.pool_size = RTL8196E_PP_SIZE,
+			.nid = NUMA_NO_NODE,
+			.dev = &pdev->dev,
+		};
+		priv->pp = page_pool_create(&pp_params);
+		if (IS_ERR(priv->pp)) {
+			ret = PTR_ERR(priv->pp);
+			priv->pp = NULL;
+			goto err_free;
+		}
 	}
 
-	priv->ring = rtl8196e_ring_create(priv->pool,
+	priv->ring = rtl8196e_ring_create(priv->pp,
 					 RTL8196E_TX_DESC,
 					 RTL8196E_RX_DESC,
 					 RTL8196E_RX_MBUF_DESC,
 					 RTL8196E_CLUSTER_SIZE);
 	if (!priv->ring) {
 		ret = -ENOMEM;
-		goto err_pool;
+		goto err_pp;
 	}
 
 	timer_setup(&priv->tx_timer, rtl8196e_tx_timer_fn, 0);
@@ -598,8 +607,8 @@ err_irq:
 	free_irq(irq, ndev);
 err_ring:
 	rtl8196e_ring_destroy(priv->ring);
-err_pool:
-	rtl8196e_pool_destroy(priv->pool);
+err_pp:
+	page_pool_destroy(priv->pp);
 err_free:
 	free_netdev(ndev);
 	return ret;
@@ -624,8 +633,8 @@ static int rtl8196e_remove(struct platform_device *pdev)
 
 	if (priv->ring)
 		rtl8196e_ring_destroy(priv->ring);
-	if (priv->pool)
-		rtl8196e_pool_destroy(priv->pool);
+	if (priv->pp)
+		page_pool_destroy(priv->pp);
 
 	free_netdev(ndev);
 	return 0;

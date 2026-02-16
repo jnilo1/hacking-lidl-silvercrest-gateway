@@ -6,9 +6,9 @@
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/kernel.h>
+#include <linux/mm.h>
 #include <asm/io.h>
 #include "rtl8196e_ring.h"
-#include "rtl8196e_pool.h"
 #include "rtl8196e_regs.h"
 
 struct rtl8196e_ring {
@@ -33,7 +33,8 @@ struct rtl8196e_ring {
 	unsigned int rx_debug_once;
 	unsigned int rx_debug_bad;
 	size_t buf_size;
-	struct rtl8196e_pool *pool;
+	struct page_pool *pp;
+	struct rtl8196e_rx_buf *rx_bufs;
 	spinlock_t tx_lock;
 };
 
@@ -52,7 +53,7 @@ static struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
 	return (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
 }
 
-struct rtl8196e_ring *rtl8196e_ring_create(struct rtl8196e_pool *pool,
+struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
 					   unsigned int tx_cnt,
 					   unsigned int rx_cnt,
 					   unsigned int rx_mbuf_cnt,
@@ -75,7 +76,7 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct rtl8196e_pool *pool,
 	ring->rx_cnt = rx_cnt;
 	ring->rx_mbuf_cnt = rx_mbuf_cnt;
 	ring->buf_size = buf_size;
-	ring->pool = pool;
+	ring->pp = pp;
 	spin_lock_init(&ring->tx_lock);
 
 	ring->tx_ring = rtl8196e_alloc_uncached(tx_cnt * sizeof(u32), &ring->tx_ring_alloc);
@@ -129,11 +130,17 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct rtl8196e_pool *pool,
 	if (tx_cnt)
 		ring->tx_ring[tx_cnt - 1] |= RTL8196E_DESC_WRAP;
 
+	/* Allocate RX buffer shadow array */
+	ring->rx_bufs = kcalloc(rx_cnt, sizeof(*ring->rx_bufs), GFP_KERNEL);
+	if (!ring->rx_bufs)
+		goto err;
+
 	/* Init RX descriptors */
 	for (i = 0; i < rx_cnt; i++) {
 		struct rtl_pktHdr *ph = &ring->pkthdr_pool[tx_cnt + i];
 		struct rtl_mBuf *mb = &ring->mbuf_pool[tx_cnt + i];
-		struct sk_buff *skb;
+		struct page *page;
+		u8 *buf;
 
 		memset(ph, 0, sizeof(*ph));
 		memset(mb, 0, sizeof(*mb));
@@ -148,18 +155,22 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct rtl8196e_pool *pool,
 		mb->m_len = 0;
 		mb->m_extsize = buf_size;
 
-		skb = rtl8196e_pool_alloc_skb(pool, buf_size);
-		if (!skb)
+		page = page_pool_dev_alloc_pages(pp);
+		if (!page)
 			goto err;
 
-		mb->m_data = skb->data;
-		mb->m_extbuf = skb->data;
-		mb->skb = skb;
+		buf = page_address(page) + NET_SKB_PAD;
+		mb->m_data = buf;
+		mb->m_extbuf = buf;
+		mb->skb = NULL;
+
+		ring->rx_bufs[i].page = page;
+		ring->rx_bufs[i].offset = NET_SKB_PAD;
 
 		ring->rx_pkthdr_ring[i] = (u32)ph | RTL8196E_DESC_SWCORE_OWNED;
 		ring->rx_mbuf_ring[i] = (u32)mb | RTL8196E_DESC_SWCORE_OWNED;
 
-		dma_cache_wback_inv((unsigned long)mb->m_extbuf, buf_size);
+		dma_cache_wback_inv((unsigned long)page_address(page), PAGE_SIZE);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 		dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 	}
@@ -186,14 +197,24 @@ void rtl8196e_ring_destroy(struct rtl8196e_ring *ring)
 	if (!ring)
 		return;
 
+	/* Free TX SKBs */
 	if (ring->mbuf_pool) {
-		for (i = 0; i < ring->tx_cnt + ring->rx_mbuf_cnt; i++) {
+		for (i = 0; i < ring->tx_cnt; i++) {
 			if (ring->mbuf_pool[i].skb) {
 				dev_kfree_skb_any((struct sk_buff *)ring->mbuf_pool[i].skb);
 				ring->mbuf_pool[i].skb = NULL;
 			}
 		}
 	}
+
+	/* Return RX pages to page_pool */
+	if (ring->rx_bufs && ring->pp) {
+		for (i = 0; i < ring->rx_cnt; i++) {
+			if (ring->rx_bufs[i].page)
+				page_pool_put_full_page(ring->pp, ring->rx_bufs[i].page, false);
+		}
+	}
+	kfree(ring->rx_bufs);
 
 	kfree(ring->tx_ring_alloc);
 	kfree(ring->rx_pkthdr_ring_alloc);
@@ -344,9 +365,12 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		u32 entry = ring->rx_pkthdr_ring[ring->rx_idx];
 		struct rtl_pktHdr *ph;
 		struct rtl_mBuf *mb;
-		struct sk_buff *skb, *new_skb;
+		struct rtl8196e_rx_buf *rxb;
+		struct page *page, *new_page;
+		struct sk_buff *skb;
 		unsigned int len;
 		unsigned int mbuf_index;
+		u8 *buf;
 
 		if (entry & RTL8196E_DESC_OWNED_BIT)
 			break;
@@ -356,20 +380,43 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		mb = ph->ph_mbuf;
 		dma_cache_inv((unsigned long)mb, sizeof(*mb));
 
-		skb = (struct sk_buff *)mb->skb;
-		if (!skb)
-			goto rearm;
-
-		new_skb = rtl8196e_pool_alloc_skb(ring->pool, ring->buf_size);
-		if (!new_skb)
+		rxb = &ring->rx_bufs[ring->rx_idx];
+		page = rxb->page;
+		if (!page)
 			goto rearm;
 
 		len = ph->ph_len;
 		if (len < ETH_ZLEN || len > ring->buf_size)
 			goto rearm_bad;
-		skb->tail = skb->data;
-		skb->len = 0;
+
+		/* Invalidate cache on packet data */
+		buf = page_address(page) + rxb->offset;
+		dma_cache_inv((unsigned long)buf, len);
+
+		/* Page reuse: check if we're the sole owner */
+		if (page_ref_count(page) == 1) {
+			/* Reuse same page — take ref for the descriptor */
+			get_page(page);
+			new_page = page;
+		} else {
+			/* Page still held by stack — alloc a new one */
+			new_page = page_pool_dev_alloc_pages(ring->pp);
+			if (!new_page)
+				goto rearm;
+		}
+
+		/* Build SKB from page data (head_frag=1 → put_page on free) */
+		skb = build_skb(page_address(page), PAGE_SIZE);
+		if (!skb) {
+			if (new_page != page)
+				page_pool_put_full_page(ring->pp, new_page, false);
+			else
+				put_page(page);
+			goto rearm;
+		}
+		skb_reserve(skb, rxb->offset);
 		skb_put(skb, len);
+
 		skb->dev = dev;
 		if (dev) {
 			dev->stats.rx_packets++;
@@ -383,12 +430,15 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				    len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
 		}
 
-		/* Install new buffer */
-		mb->m_data = new_skb->data;
-		mb->m_extbuf = new_skb->data;
+		/* Install new/reused page in descriptor */
+		buf = page_address(new_page) + NET_SKB_PAD;
+		mb->m_data = buf;
+		mb->m_extbuf = buf;
 		mb->m_extsize = ring->buf_size;
 		mb->m_len = 0;
-		mb->skb = new_skb;
+		mb->skb = NULL;
+		rxb->page = new_page;
+		rxb->offset = NET_SKB_PAD;
 		ph->ph_len = 0;
 		ph->ph_flags = PKTHDR_USED | PKT_INCOMING;
 
@@ -414,8 +464,8 @@ rearm:
 		ring->rx_pkthdr_ring[ring->rx_idx] =
 			(u32)ph | (ring->rx_pkthdr_ring[ring->rx_idx] & RTL8196E_DESC_WRAP) | RTL8196E_DESC_SWCORE_OWNED;
 
-		if (mb->m_extbuf)
-			dma_cache_wback_inv((unsigned long)mb->m_extbuf, ring->buf_size);
+		if (rxb->page)
+			dma_cache_wback_inv((unsigned long)page_address(rxb->page), PAGE_SIZE);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 		dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 

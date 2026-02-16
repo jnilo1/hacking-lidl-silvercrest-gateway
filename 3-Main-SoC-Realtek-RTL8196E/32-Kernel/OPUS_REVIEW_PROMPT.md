@@ -2,7 +2,7 @@
 
 ## Context
 
-I have implemented a **modern Linux 5.10+ Ethernet driver** for the Realtek RTL8196E SoC by reverse-engineering the legacy rtl819x driver (kernel 2.6.30, 5042 lines). The new driver (`rtl8196e-eth`) is a **modular rewrite** (~2744 lines across 15 files) using zero kernel patches (aside from a skbuff.c hook for private buffer pool recycling).
+I have implemented a **modern Linux 5.10+ Ethernet driver** for the Realtek RTL8196E SoC by reverse-engineering the legacy rtl819x driver (kernel 2.6.30, 5042 lines). The new driver (`rtl8196e-eth`) is a **modular rewrite** (~2500 lines across 13 files) using **zero kernel patches** — RX buffer recycling uses the kernel's standard `page_pool` API instead of a custom skbuff.c hook.
 
 **Your mission:** Perform a **comprehensive code review** to validate functional equivalence, detect bugs, and ensure the driver is production-ready before hardware testing.
 
@@ -13,18 +13,16 @@ I have implemented a **modern Linux 5.10+ Ethernet driver** for the Realtek RTL8
 ### New Driver (to review)
 ```
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/
-├── rtl8196e_main.c      # Net device, NAPI, IRQ, TX/RX scheduling, ethtool (654 lines)
+├── rtl8196e_main.c      # Net device, NAPI, IRQ, TX/RX scheduling, ethtool, page_pool lifecycle
 ├── rtl8196e_hw.c        # MMIO register access, init, PHY, VLAN, L2 tables (693 lines)
 ├── rtl8196e_hw.h        # HW API declarations (34 lines)
-├── rtl8196e_ring.c      # TX/RX descriptor ring management (545 lines)
-├── rtl8196e_ring.h      # Ring API declarations (47 lines)
-├── rtl8196e_pool.c      # Private RX buffer pool, skb construction (212 lines)
-├── rtl8196e_pool.h      # Pool API + kernel patch hooks (22 lines)
+├── rtl8196e_ring.c      # TX/RX descriptor ring management, page_pool RX path (~530 lines)
+├── rtl8196e_ring.h      # Ring API declarations + rtl8196e_rx_buf struct
 ├── rtl8196e_dt.c        # Devicetree parsing (82 lines)
 ├── rtl8196e_dt.h        # DT structures (25 lines)
 ├── rtl8196e_desc.h      # DMA descriptor structures: rtl_pktHdr, rtl_mBuf (98 lines)
 ├── rtl8196e_regs.h      # Hardware register definitions (167 lines)
-├── Kconfig              # Kernel config entry
+├── Kconfig              # Kernel config entry (select PAGE_POOL)
 ├── Makefile             # Build config
 ├── SPEC.md              # Technical specification
 └── AGENTS.md            # Development methodology notes
@@ -49,8 +47,7 @@ The driver is split into 5 modules with clear responsibilities:
 |--------|---------|------|
 | **main** | `rtl8196e_main.c` | net_device ops, NAPI poll, ISR, TX path, ethtool, probe/remove |
 | **hw** | `rtl8196e_hw.c/h` | MMIO register access, switch core init, PHY/MDIO, VLAN/NETIF/L2 table setup |
-| **ring** | `rtl8196e_ring.c/h` | TX/RX descriptor rings, ownership transfer, submit/reclaim/poll |
-| **pool** | `rtl8196e_pool.c/h` | Private RX buffer pool, custom skb construction, kernel patch hooks |
+| **ring** | `rtl8196e_ring.c/h` | TX/RX descriptor rings, page_pool RX buffers, ownership transfer, submit/reclaim/poll |
 | **dt** | `rtl8196e_dt.c/h` | Devicetree parsing (interface@0 properties) |
 
 ---
@@ -109,23 +106,39 @@ The driver is split into 5 modules with clear responsibilities:
 - `rtl8196e_ring.c` (lines 40-48): `rtl8196e_alloc_uncached()`
 - `rtl8196e_hw.c` (lines 663-678): `rtl8196e_hw_set_rx_rings()`, `rtl8196e_hw_set_tx_ring()`
 
-### 4. **Private Buffer Pool (skbuff.c patch)** 🔄
+### 4. **RX Buffer Management (page_pool)** 🔄
 
-**Approach:** Custom pool with magic-tagged buffers + kernel skbuff.c hook for automatic recycling.
+**Approach:** Kernel's standard `page_pool` API for RX buffer allocation and recycling.
+No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free_head()`.
+
+**Design:**
+- `page_pool_create()` with `flags=0` (no DMA mapping — RTL8196E uses KSEG1 uncached, not dma_map)
+- `page_pool_dev_alloc_pages()` allocates order-0 pages for RX buffers
+- Shadow array `rx_bufs[]` (`struct rtl8196e_rx_buf { page, offset }`) tracks page per descriptor
+- Page-reuse pattern (Linux 5.10 lacks `skb_mark_for_recycle()`):
+  - `page_ref_count(page) == 1` → sole owner → `get_page()` + reuse
+  - Otherwise → `page_pool_dev_alloc_pages()` for a new page
+- `build_skb(page_address(page), PAGE_SIZE)` sets `head_frag=1`
+  → on free: `skb_free_frag()` → `put_page()` → page returned naturally
+- `page_pool_put_full_page()` used in ring_destroy cleanup
 
 **Verify:**
-- ✅ Pool creation with pre-allocated buffers (rtl8196e_pool.c:75-112)
-- ✅ Custom `rtl8196e_build_skb()` constructs skb from pool buffer (rtl8196e_pool.c:39-73)
-- ✅ Magic-based identification: `is_rtl865x_eth_priv_buf()` (rtl8196e_pool.c:184-197)
-- ✅ Pool recycling: `free_rtl865x_eth_priv_buf()` (rtl8196e_pool.c:200-211)
-- ✅ Both symbols are EXPORT_SYMBOL for kernel patch access
-- ✅ Error paths: buffers returned to pool on allocation failure
-- ✅ Cleanup: `rtl8196e_pool_destroy()` frees all buffers (rtl8196e_pool.c:114-126)
-- ✅ `skbuff_head_cache` extern usage is safe and correct (rtl8196e_pool.c:37)
+- ✅ page_pool created in probe with `pool_size=512`, `flags=0`, `order=0` (rtl8196e_main.c)
+- ✅ `IS_ERR()` check on `page_pool_create()` return (not NULL check)
+- ✅ `page_pool_destroy()` in remove and error path
+- ✅ `rx_bufs[]` allocated in `ring_create()`, freed in `ring_destroy()`
+- ✅ Page-reuse logic: ref count check → get_page/alloc_new (rtl8196e_ring.c rx_poll)
+- ✅ `build_skb()` failure path: return page (put_page or page_pool_put_full_page)
+- ✅ Cache flush: `PAGE_SIZE` from `page_address()` on rearm
+- ✅ `select PAGE_POOL` in Kconfig ensures subsystem is built in
+- ✅ No more `is_rtl865x_eth_priv_buf` / `free_rtl865x_eth_priv_buf` symbols in vmlinux
+- ❓ Is `page_ref_count() == 1` check safe in NAPI context (softirq)?
+- ❓ Does `build_skb()` with `PAGE_SIZE` leave enough room for skb_shared_info?
 
 **Files to check:**
-- `rtl8196e_pool.c`: All functions
-- `rtl8196e_pool.h`: API declarations and kernel patch hook prototypes
+- `rtl8196e_ring.c`: `ring_create()` RX init, `ring_destroy()` cleanup, `ring_rx_poll()` hot path
+- `rtl8196e_ring.h`: `struct rtl8196e_rx_buf`
+- `rtl8196e_main.c`: `page_pool_create()` / `page_pool_destroy()` lifecycle
 
 ### 5. **NAPI Polling** 📡
 
@@ -164,29 +177,33 @@ The driver is split into 5 modules with clear responsibilities:
 - `rtl8196e_ring.c` (lines 445-457): `rtl8196e_ring_kick_tx()`
 - `rtl8196e_main.c` (lines 305-376): `rtl8196e_start_xmit()`
 
-### 7. **RX Ring Management** 📥
+### 7. **RX Ring Management (page_pool hot path)** 📥
 
 **Verify:**
-- ✅ Descriptor ownership check before processing (rtl8196e_ring.c:351)
-- ✅ Cache invalidation on descriptor read (lines 355-357)
-- ✅ New buffer allocation before consuming old (line 363)
-- ✅ Graceful handling of pool exhaustion (goto rearm, line 365)
-- ✅ Packet length validation: min ETH_ZLEN, max buf_size (line 368)
-- ✅ skb construction: tail reset, skb_put, eth_type_trans (lines 370-378)
-- ✅ Atomic descriptor rearm with WRAP bit preservation (lines 410-415)
-- ✅ Buffer + descriptor cache flush after rearm (lines 417-420)
-- ✅ Ring index wrap-around (lines 422-424)
-- ✅ mbuf index calculation for separate mbuf ring (line 407)
+- ✅ Descriptor ownership check before processing
+- ✅ Cache invalidation on descriptor read (`dma_cache_inv` on ph and mb)
+- ✅ Page-reuse check: `page_ref_count(page) == 1` → reuse, else alloc new
+- ✅ `build_skb(page_address(page), PAGE_SIZE)` for `head_frag=1` SKBs
+- ✅ `skb_reserve()` + `skb_put()` with correct offset and len
+- ✅ Graceful handling of page exhaustion (goto rearm)
+- ✅ build_skb failure: page properly returned (put_page or page_pool_put_full_page)
+- ✅ Packet length validation: min ETH_ZLEN, max buf_size
+- ✅ New page installed in descriptor + shadow rx_bufs[] after SKB built
+- ✅ Atomic descriptor rearm with WRAP bit preservation
+- ✅ Cache flush on rearm: `PAGE_SIZE` from `page_address(rxb->page)`
+- ✅ Ring index wrap-around
+- ✅ mbuf index calculation for separate mbuf ring
+- ❓ Cache invalidate granularity: only `len` bytes invalidated for packet data (correct?)
 
 **Files to check:**
-- `rtl8196e_ring.c` (lines 334-428): `rtl8196e_ring_rx_poll()`
+- `rtl8196e_ring.c`: `rtl8196e_ring_rx_poll()` — the NAPI hot path
 
 ### 8. **Race Conditions & Locking** 🔒
 
 **Verify:**
-- ✅ `tx_lock` spinlock protects TX submit (rtl8196e_ring.c:239-281)
-- ✅ `pool->lock` spinlock protects pool alloc/free (rtl8196e_pool.c:136,161)
-- ✅ No spinlock held during `napi_gro_receive()` (rtl8196e_ring.c:395)
+- ✅ `tx_lock` spinlock protects TX submit
+- ✅ No spinlock held during `napi_gro_receive()`
+- ✅ page_pool is lock-free in NAPI context (single producer/consumer)
 - ✅ NAPI poll and ISR synchronization via `napi_schedule_prep()` (rtl8196e_main.c:452)
 - ✅ Timer deletion with `del_timer_sync()` in stop path (rtl8196e_main.c:297-299)
 - ✅ `atomic_t tx_pending` for timer/queue coordination
@@ -200,15 +217,16 @@ The driver is split into 5 modules with clear responsibilities:
 ### 9. **Memory Leaks & Error Paths** 💧
 
 **Verify:**
-- ✅ All `kmalloc()` have matching `kfree()` in ring_destroy (rtl8196e_ring.c:182-204)
-- ✅ Pool buffers freed in `rtl8196e_pool_destroy()` (rtl8196e_pool.c:114-126)
-- ✅ SKBs freed on TX ring destroy and reclaim
-- ✅ SKBs freed on RX ring destroy (rtl8196e_ring.c:189-195)
+- ✅ All `kmalloc()` have matching `kfree()` in ring_destroy
+- ✅ RX pages returned via `page_pool_put_full_page()` in ring_destroy
+- ✅ `rx_bufs[]` array freed with `kfree()` in ring_destroy
+- ✅ `page_pool_destroy()` in remove and probe error path
+- ✅ TX SKBs freed on ring destroy and reclaim
 - ✅ Resources freed in reverse order during cleanup
-- ✅ Error paths in `rtl8196e_probe()` clean up properly (rtl8196e_main.c:516-605)
-- ✅ `rtl8196e_remove()` frees everything in correct order (rtl8196e_main.c:608-631)
+- ✅ Error paths in `rtl8196e_probe()` clean up properly (err_irq → err_ring → err_pp → err_free)
+- ✅ `rtl8196e_remove()` frees everything in correct order
 - ❓ `rtl8196e_open()` error path: does NAPI disable + return suffice after partial HW init?
-- ❓ Pool buffer leak: if free_count < count after create, some buffers were not allocated but pool is still used
+- ❓ build_skb failure in rx_poll: is the page leak-free? (get_page/put_page balanced?)
 
 **Files to check:**
 - `rtl8196e_main.c` (lines 516-605): `rtl8196e_probe()` error paths
@@ -255,7 +273,7 @@ The driver is split into 5 modules with clear responsibilities:
 - ❓ RX ring completely full → does driver handle gracefully?
 - ❓ TX ring completely full → does `netif_stop_queue()` prevent overrun?
 - ❓ Rapid open/close → any race conditions?
-- ❓ Pool exhaustion → does `rtl8196e_pool_alloc_skb()` return NULL safely?
+- ❓ Page pool exhaustion → does `page_pool_dev_alloc_pages()` return NULL safely?
 - ❓ Non-linear SKBs → `skb_linearize()` called before submit (rtl8196e_main.c:319-324)
 - ❓ Short packets → padded to ETH_ZLEN in submit (rtl8196e_ring.c:234)
 - ❓ Oversized packets → rejected at submit (rtl8196e_ring.c:237)
@@ -286,11 +304,11 @@ swNic_init()                  → rtl8196e_hw_init() [rtl8196e_hw.c:272]
 ```
 Legacy (rtl819x)              New (rtl8196e-eth)
 ─────────────────────────────────────────────────
-swNic_receive()               → rtl8196e_ring_rx_poll() (NAPI) [ring.c:334]
-  - mbuf allocation (mkbuf)   → rtl8196e_pool_alloc_skb() [pool.c:166]
-  - SKB alloc + copy          → Custom build_skb (zero-copy) [pool.c:39]
-  - netif_rx()                → napi_gro_receive() [ring.c:395]
-  - Buffer recycle (mkbuf)    → skbuff.c hook → pool_free() [pool.c:200]
+swNic_receive()               → rtl8196e_ring_rx_poll() (NAPI)
+  - mbuf allocation (mkbuf)   → page_pool_dev_alloc_pages()
+  - SKB alloc + copy          → build_skb(page_addr, PAGE_SIZE) (zero-copy)
+  - netif_rx()                → napi_gro_receive()
+  - Buffer recycle (mkbuf)    → page_ref_count==1 → reuse (no kernel patch)
 ```
 
 ### TX Path
@@ -352,14 +370,15 @@ For each issue:
 - No FPU, no DSP, limited MIPS ISA subset (no ll/sc)
 - Big-endian architecture
 
-**Recent fixes applied (cloud branch):**
-- Atomic descriptor ownership transfer (Issue #4): TX/RX descriptors use single write instead of |= to prevent race conditions
-- Error handling in rtl8196e_open() (Issues #2, #5): VLAN/NETIF failures abort init, proper NAPI cleanup in error paths
+**Recent changes:**
+- Atomic descriptor ownership transfer: TX/RX descriptors use single write instead of |= to prevent race conditions
+- Error handling in rtl8196e_open(): VLAN/NETIF failures abort init, proper NAPI cleanup in error paths
+- **page_pool migration**: replaced custom buffer pool (`rtl8196e_pool.c/h`) + skbuff.c kernel patch with standard `page_pool` API. Zero kernel patches needed. Page-reuse pattern for Linux 5.10 (no `skb_mark_for_recycle`).
 
 ---
 
 ## Your Task
 
-Please perform a thorough review focusing on **correctness** and **production readiness**. This driver has NOT been compiled or tested on hardware yet, so catching bugs now saves debugging time on the gateway.
+Please perform a thorough review focusing on **correctness** and **production readiness**. The driver compiles cleanly but has not been tested on hardware yet, so catching bugs now saves debugging time on the gateway. Pay particular attention to the **page_pool RX hot path** — the page-reuse pattern and build_skb usage.
 
 Thank you
