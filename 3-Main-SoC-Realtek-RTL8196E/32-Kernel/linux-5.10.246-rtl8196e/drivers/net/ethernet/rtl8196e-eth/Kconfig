@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: GPL-2.0
+config RTL8196E_ETH
+	tristate "Realtek RTL8196E minimal Ethernet (new)"
+	depends on MIPS && OF
+	help
+	  New minimal RTL8196E Ethernet driver (single-port, zero-copy).
+	  Currently a skeleton; not functional yet.
