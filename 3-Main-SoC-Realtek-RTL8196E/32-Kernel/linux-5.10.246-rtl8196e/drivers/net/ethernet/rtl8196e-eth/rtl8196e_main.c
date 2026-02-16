@@ -42,7 +42,7 @@ MODULE_PARM_DESC(rtl8196e_force_trap, "Force all unknown traffic to CPU (debug)"
 
 static unsigned int rtl8196e_cpu_port_mask = RTL8196E_CPU_PORT_MASK;
 module_param(rtl8196e_cpu_port_mask, uint, 0644);
-MODULE_PARM_DESC(rtl8196e_cpu_port_mask, "CPU port mask for VLAN/L2 (default=0x100)");
+MODULE_PARM_DESC(rtl8196e_cpu_port_mask, "CPU port mask for VLAN/L2 (default=0x20)");
 
 struct rtl8196e_priv {
 	struct net_device *ndev;
@@ -343,7 +343,9 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 		unsigned int pkts = 0, bytes = 0;
 
 		netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
+		local_bh_disable();
 		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
+		local_bh_enable();
 		ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
 					     priv->vlan_id, priv->portmask,
 					     PKTHDR_USED | PKT_OUTGOING,

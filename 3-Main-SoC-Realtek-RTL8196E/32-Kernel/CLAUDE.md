@@ -121,7 +121,9 @@ that required a kernel patch in `net/core/skbuff.c`.
 
 - `page_pool_create()` in probe, `page_pool_destroy()` in remove.
 - `page_pool_dev_alloc_pages()` allocates RX buffers (order-0 pages).
-- Page-reuse pattern: `page_ref_count() == 1` → reuse same page, else alloc new.
+- Fresh page per packet: each RX allocates a new page for the descriptor.
+  The old page is consumed by `build_skb()` and freed by the stack via
+  `put_page()`. No page-reuse optimization (avoids data corruption risk).
 - `build_skb(page_address, PAGE_SIZE)` sets `head_frag=1` → on SKB free, the
   kernel calls `skb_free_frag()` → `put_page()`, returning the page naturally.
 - Shadow array `rx_bufs[]` tracks page + offset per RX descriptor.

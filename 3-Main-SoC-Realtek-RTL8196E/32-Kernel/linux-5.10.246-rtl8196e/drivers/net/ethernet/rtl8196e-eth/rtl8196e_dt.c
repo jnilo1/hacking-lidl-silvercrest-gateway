@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/device.h>
+#include <linux/err.h>
 #include <linux/of.h>
 #include <linux/of_net.h>
 #include <linux/string.h>
@@ -63,7 +64,7 @@ int rtl8196e_dt_parse(struct device *dev, struct rtl8196e_dt_iface *iface)
 		strscpy(iface->ifname, ifname, sizeof(iface->ifname));
 
 	mac = of_get_mac_address(if_np);
-	if (mac) {
+	if (!IS_ERR_OR_NULL(mac)) {
 		memcpy(iface->mac, mac, ETH_ALEN);
 		iface->mac_set = true;
 	}

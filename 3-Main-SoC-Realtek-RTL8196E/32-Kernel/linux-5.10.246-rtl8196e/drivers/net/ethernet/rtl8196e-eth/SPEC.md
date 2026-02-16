@@ -31,9 +31,10 @@
   KSEG1 uncached addresses and manual cache management).
 - Pool size: 512 pages (`RTL8196E_PP_SIZE`), order-0.
 - Allocation: `page_pool_dev_alloc_pages()` returns one page per RX slot.
-- Page-reuse pattern (Linux 5.10 lacks `skb_mark_for_recycle()`):
-  - If `page_ref_count(page) == 1` → sole owner → `get_page()` + reuse.
-  - Otherwise → allocate a new page from the pool.
+- Fresh page per packet: on each RX, a new page is allocated from the pool
+  for the descriptor; the old page is consumed by `build_skb()` and freed
+  by the stack via `put_page()`. No page-reuse optimization (avoids data
+  corruption risk from sharing a page between SKB and descriptor).
 - `build_skb(page_address(page), PAGE_SIZE)` sets `head_frag=1`.
   On SKB free the kernel calls `skb_free_frag()` → `put_page()`.
   No kernel patch needed.
@@ -79,10 +80,10 @@
   1. Check descriptor ownership bit.
   2. Invalidate cache on pkthdr + mbuf descriptors.
   3. Invalidate cache on packet data (only `len` bytes).
-  4. Page-reuse check: `page_ref_count == 1` → reuse, else alloc new.
-  5. `build_skb()` from page, `skb_reserve()` + `skb_put()`.
+  4. Allocate a fresh page from page_pool for the descriptor.
+  5. `build_skb()` from old page, `skb_reserve()` + `skb_put()`.
   6. `eth_type_trans()`, `napi_gro_receive()`.
-  7. Install new/reused page in mbuf descriptor.
+  7. Install fresh page in mbuf descriptor.
   8. Rearm pkthdr + mbuf ownership bits (preserving WRAP).
   9. Flush cache on full page + descriptors.
 
@@ -97,7 +98,7 @@
 - TX reclaim (`rtl8196e_ring_tx_reclaim()`):
   - Called from NAPI poll (opportunistic).
   - Called from TX timer (2 ms, `RTL8196E_TX_TIMER_MS`) when `tx_pending > 0`.
-  - Called from `start_xmit` on submit failure (emergency reclaim).
+  - Called from `start_xmit` on submit failure (emergency reclaim, under `local_bh_disable`).
 - Flow control:
   - `netif_stop_queue()` when free count < 32 (`RTL8196E_TX_STOP_THRESH`).
   - `netif_wake_queue()` when free count >= 128 (`RTL8196E_TX_WAKE_THRESH`).

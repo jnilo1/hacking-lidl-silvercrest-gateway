@@ -393,25 +393,15 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		buf = page_address(page) + rxb->offset;
 		dma_cache_inv((unsigned long)buf, len);
 
-		/* Page reuse: check if we're the sole owner */
-		if (page_ref_count(page) == 1) {
-			/* Reuse same page — take ref for the descriptor */
-			get_page(page);
-			new_page = page;
-		} else {
-			/* Page still held by stack — alloc a new one */
-			new_page = page_pool_dev_alloc_pages(ring->pp);
-			if (!new_page)
-				goto rearm;
-		}
+		/* Always allocate a fresh page for the descriptor */
+		new_page = page_pool_dev_alloc_pages(ring->pp);
+		if (!new_page)
+			goto rearm;
 
 		/* Build SKB from page data (head_frag=1 → put_page on free) */
 		skb = build_skb(page_address(page), PAGE_SIZE);
 		if (!skb) {
-			if (new_page != page)
-				page_pool_put_full_page(ring->pp, new_page, false);
-			else
-				put_page(page);
+			page_pool_put_full_page(ring->pp, new_page, false);
 			goto rearm;
 		}
 		skb_reserve(skb, rxb->offset);

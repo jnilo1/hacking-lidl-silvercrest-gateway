@@ -115,9 +115,10 @@ No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free
 - `page_pool_create()` with `flags=0` (no DMA mapping — RTL8196E uses KSEG1 uncached, not dma_map)
 - `page_pool_dev_alloc_pages()` allocates order-0 pages for RX buffers
 - Shadow array `rx_bufs[]` (`struct rtl8196e_rx_buf { page, offset }`) tracks page per descriptor
-- Page-reuse pattern (Linux 5.10 lacks `skb_mark_for_recycle()`):
-  - `page_ref_count(page) == 1` → sole owner → `get_page()` + reuse
-  - Otherwise → `page_pool_dev_alloc_pages()` for a new page
+- Fresh page per packet: each RX allocates a new page from the pool for the
+  descriptor. The old page is consumed by `build_skb()` and freed by the stack
+  via `put_page()`. No page-reuse optimization (avoids data corruption risk
+  from sharing a page between SKB and descriptor).
 - `build_skb(page_address(page), PAGE_SIZE)` sets `head_frag=1`
   → on free: `skb_free_frag()` → `put_page()` → page returned naturally
 - `page_pool_put_full_page()` used in ring_destroy cleanup
@@ -127,12 +128,11 @@ No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free
 - ✅ `IS_ERR()` check on `page_pool_create()` return (not NULL check)
 - ✅ `page_pool_destroy()` in remove and error path
 - ✅ `rx_bufs[]` allocated in `ring_create()`, freed in `ring_destroy()`
-- ✅ Page-reuse logic: ref count check → get_page/alloc_new (rtl8196e_ring.c rx_poll)
-- ✅ `build_skb()` failure path: return page (put_page or page_pool_put_full_page)
+- ✅ Fresh page allocation per RX packet (no page-reuse — safe against data corruption)
+- ✅ `build_skb()` failure path: new page returned via `page_pool_put_full_page()`
 - ✅ Cache flush: `PAGE_SIZE` from `page_address()` on rearm
 - ✅ `select PAGE_POOL` in Kconfig ensures subsystem is built in
 - ✅ No more `is_rtl865x_eth_priv_buf` / `free_rtl865x_eth_priv_buf` symbols in vmlinux
-- ❓ Is `page_ref_count() == 1` check safe in NAPI context (softirq)?
 - ❓ Does `build_skb()` with `PAGE_SIZE` leave enough room for skb_shared_info?
 
 **Files to check:**
@@ -182,11 +182,11 @@ No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free
 **Verify:**
 - ✅ Descriptor ownership check before processing
 - ✅ Cache invalidation on descriptor read (`dma_cache_inv` on ph and mb)
-- ✅ Page-reuse check: `page_ref_count(page) == 1` → reuse, else alloc new
+- ✅ Fresh page allocated per packet (no page-reuse — safe against data corruption)
 - ✅ `build_skb(page_address(page), PAGE_SIZE)` for `head_frag=1` SKBs
 - ✅ `skb_reserve()` + `skb_put()` with correct offset and len
 - ✅ Graceful handling of page exhaustion (goto rearm)
-- ✅ build_skb failure: page properly returned (put_page or page_pool_put_full_page)
+- ✅ build_skb failure: new page returned via `page_pool_put_full_page()`
 - ✅ Packet length validation: min ETH_ZLEN, max buf_size
 - ✅ New page installed in descriptor + shadow rx_bufs[] after SKB built
 - ✅ Atomic descriptor rearm with WRAP bit preservation
@@ -208,6 +208,7 @@ No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free
 - ✅ Timer deletion with `del_timer_sync()` in stop path (rtl8196e_main.c:297-299)
 - ✅ `atomic_t tx_pending` for timer/queue coordination
 - ✅ `READ_ONCE` / `WRITE_ONCE` for debug flag (rtl8196e_main.c:330-332)
+- ✅ TX reclaim from `start_xmit` protected with `local_bh_disable()` to prevent concurrent NAPI softirq
 - ❓ TX reclaim in poll path has no lock — is this safe given it's also called from timer?
 
 **Files to check:**
@@ -226,7 +227,7 @@ No kernel patches needed — the overlay's `skbuff.c` restores vanilla `skb_free
 - ✅ Error paths in `rtl8196e_probe()` clean up properly (err_irq → err_ring → err_pp → err_free)
 - ✅ `rtl8196e_remove()` frees everything in correct order
 - ❓ `rtl8196e_open()` error path: does NAPI disable + return suffice after partial HW init?
-- ❓ build_skb failure in rx_poll: is the page leak-free? (get_page/put_page balanced?)
+- ✅ build_skb failure in rx_poll: new page returned via `page_pool_put_full_page()`, old page stays in descriptor
 
 **Files to check:**
 - `rtl8196e_main.c` (lines 516-605): `rtl8196e_probe()` error paths
@@ -308,7 +309,7 @@ swNic_receive()               → rtl8196e_ring_rx_poll() (NAPI)
   - mbuf allocation (mkbuf)   → page_pool_dev_alloc_pages()
   - SKB alloc + copy          → build_skb(page_addr, PAGE_SIZE) (zero-copy)
   - netif_rx()                → napi_gro_receive()
-  - Buffer recycle (mkbuf)    → page_ref_count==1 → reuse (no kernel patch)
+  - Buffer recycle (mkbuf)    → fresh page per packet from page_pool (no kernel patch)
 ```
 
 ### TX Path
@@ -373,7 +374,8 @@ For each issue:
 **Recent changes:**
 - Atomic descriptor ownership transfer: TX/RX descriptors use single write instead of |= to prevent race conditions
 - Error handling in rtl8196e_open(): VLAN/NETIF failures abort init, proper NAPI cleanup in error paths
-- **page_pool migration**: replaced custom buffer pool (`rtl8196e_pool.c/h`) + skbuff.c kernel patch with standard `page_pool` API. Zero kernel patches needed. Page-reuse pattern for Linux 5.10 (no `skb_mark_for_recycle`).
+- **page_pool migration**: replaced custom buffer pool (`rtl8196e_pool.c/h`) + skbuff.c kernel patch with standard `page_pool` API. Zero kernel patches needed. Fresh page per packet (no page-reuse — avoids data corruption).
+- **Bug fixes**: `of_get_mac_address()` error pointer check (`IS_ERR_OR_NULL`), `local_bh_disable` for emergency TX reclaim in `start_xmit`, fixed `MODULE_PARM_DESC` default value for `cpu_port_mask`.
 
 ---
 
