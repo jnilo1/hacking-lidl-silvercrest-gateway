@@ -220,6 +220,20 @@ if [ ! -f .config ]; then
         "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
     make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
     echo ""
+else
+    # Ensure RTL8196E_ETH=y even if Kconfig was added after initial .config
+    if ! grep -q '^CONFIG_RTL8196E_ETH=y' .config; then
+        echo "Fixing .config: enabling RTL8196E_ETH..."
+        sed -i \
+            -e 's/^# CONFIG_RTL8196E_ETH is not set$/CONFIG_RTL8196E_ETH=y/' \
+            .config
+        # If the option wasn't present at all, append it
+        if ! grep -q '^CONFIG_RTL8196E_ETH=y' .config; then
+            echo "CONFIG_RTL8196E_ETH=y" >> .config
+        fi
+        make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+        echo ""
+    fi
 fi
 
 # ── Special modes ─────────────────────────────────────────────────────
