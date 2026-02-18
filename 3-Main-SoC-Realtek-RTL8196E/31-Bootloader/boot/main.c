@@ -32,7 +32,7 @@ unsigned int gCHKKEY_CNT = 0;
  * download mode.
  */
 #define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_RAM    ((volatile unsigned long *)0x80050000)
+#define BOOTHOLD_RAM    ((volatile unsigned long *)0x803FFFFC)
 
 void goToDownMode(void);
 
