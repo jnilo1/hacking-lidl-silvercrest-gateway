@@ -98,7 +98,7 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 |------|------|
 | `rtl8196e_main.c` | net_device, NAPI, IRQ, TX/RX scheduling, module params |
 | `rtl8196e_hw.c/h` | MMIO register access, init sequence, KSEG1 helpers, PHY, L2 toCPU |
-| `rtl8196e_ring.c/h` | TX/RX descriptor rings, page_pool RX buffers, ownership, cache flush/invalidate |
+| `rtl8196e_ring.c/h` | TX/RX descriptor rings, netdev_alloc_skb RX buffers, ownership, cache flush/invalidate |
 | `rtl8196e_dt.c/h` | Devicetree parsing (interface@0 properties) |
 | `rtl8196e_regs.h` | Register definitions (trimmed to what's needed) |
 | `rtl8196e_desc.h` | Descriptor structures (pktHdr, mbuf) |
@@ -113,23 +113,23 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 - IRQ via SoC interrupt controller (GIMR bit 15).
 - BIST must be skipped (don't block init).
 
-### RX buffer management (page_pool)
+### RX buffer management (netdev_alloc_skb)
 
-The driver uses the kernel's `page_pool` API (`include/net/page_pool.h`) for RX
-buffer management. This replaces the former custom buffer pool (`rtl8196e_pool.c/h`)
-that required a kernel patch in `net/core/skbuff.c`.
+The driver uses `netdev_alloc_skb()` for RX buffer allocation. This uses the
+kernel's page frag allocator internally: multiple SKBs share the same underlying
+page, and allocation is a simple pointer bump most of the time.
 
-- `page_pool_create()` in probe, `page_pool_destroy()` in remove.
-- `page_pool_dev_alloc_pages()` allocates RX buffers (order-0 pages).
-- Fresh page per packet: each RX allocates a new page for the descriptor.
-  The old page is consumed by `build_skb()` and freed by the stack via
-  `put_page()`. No page-reuse optimization (avoids data corruption risk).
-- `build_skb(page_address, PAGE_SIZE)` sets `head_frag=1` → on SKB free, the
-  kernel calls `skb_free_frag()` → `put_page()`, returning the page naturally.
-- Shadow array `rx_bufs[]` tracks page + offset per RX descriptor.
-- `flags=0` (no DMA mapping) since the RTL8196E uses KSEG1 uncached addresses
-  and manual cache management, not standard `dma_map`.
-- Kconfig `select PAGE_POOL` ensures the subsystem is built in.
+- Pre-allocated SKBs stored in shadow array `rx_bufs[]` (one `struct sk_buff *`
+  per RX descriptor).
+- On RX: the old SKB is handed to the stack via `napi_gro_receive()`, a new SKB
+  is allocated with `netdev_alloc_skb(dev, NET_SKB_PAD + buf_size)` +
+  `skb_reserve(skb, NET_SKB_PAD)`, and its `data` pointer is installed in the
+  hardware descriptor.
+- On destroy: `dev_kfree_skb_any()` for each `rx_bufs[i].skb`.
+- No `page_pool`, no `build_skb()`, no PAGE_POOL Kconfig dependency.
+
+Previous approach used `page_pool` + `build_skb()` which was ~20% slower due to
+per-packet page allocator + slab allocator overhead on the ~400 MHz Lexra CPU.
 
 The overlay's `net/core/skbuff.c` restores vanilla `skb_free_head()` (no hooks).
 The `patches/net-core-skbuff.c.patch` still exists for the legacy rtl819x driver
@@ -161,7 +161,7 @@ Only `interface@0` is used. Extra interface nodes are ignored with a warning.
 
 ### Known issue: TX throughput
 
-TX (gateway -> host) is ~20 Mbps vs ~80-90 Mbps RX (host -> gateway).
+TX (gateway -> host) is ~42 Mbps vs ~80 Mbps RX (host -> gateway).
 See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
 - Batch TX kicks (MMIO reduction)
 - Interrupt/timer balance
@@ -171,9 +171,9 @@ See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
 
 ### Performance targets
 
-- iperf TCP RX >= 80 Mbps
-- iperf TCP TX gap < 10% vs RX (currently much worse)
-- No page_pool warnings in dmesg
+- iperf TCP RX >= 80 Mbps (currently ~80 Mbps, vs 87 Mbps legacy)
+- iperf TCP TX gap < 10% vs RX (currently ~42 Mbps vs 48 Mbps legacy)
+- No warnings in dmesg
 - Stable SSH, ping IPv4/IPv6
 
 ## Kernel config differences (vs legacy)
@@ -182,7 +182,6 @@ The new driver config differs from `config-5.10.246-realtek.txt` in these lines:
 ```
 # CONFIG_RTL819X is not set    (was: CONFIG_RTL819X=y)
 CONFIG_RTL8196E_ETH=y          (added)
-CONFIG_PAGE_POOL=y             (auto-selected by RTL8196E_ETH)
 ```
 
 All other RTL819X configs (serial, SPI, GPIO, clocksource, interrupt controller)
@@ -195,6 +194,52 @@ remain enabled -- they are platform infrastructure, not the Ethernet driver.
 - **CPU**: Lexra RLX4181 (MIPS32-like, no ll/sc instructions)
 - **LOCALVERSION**: `-rtl8196e-eth`
 - **Image format**: vmlinux -> objcopy -> LZMA -> lzma-loader -> cvimg (Realtek header)
+
+## Testing procedure
+
+The gateway has two network addresses depending on its state:
+- **192.168.1.6** — bootloader (TFTP server for flashing)
+- **192.168.1.126** — Linux (SSH, iperf)
+
+### Build, flash, and test cycle
+
+```bash
+# 1. Build
+./build_rtl8196e_eth.sh
+
+# 2. Flash (gateway must be in bootloader mode at 192.168.1.6)
+tftp -m binary 192.168.1.6 -c put kernel-rtl8196e-eth.img
+
+# 3. Wait for boot (~20s), then verify
+ssh root@192.168.1.126 dmesg | grep rtl8196e
+
+# 4. Run iperf test (TCP RX + TX, 10s each)
+./test_rtl8196e_eth.sh "description of what changed"
+
+# The test script automatically puts the gateway back in boot mode
+# (boothold) at the end, ready for the next flash cycle.
+```
+
+### test_rtl8196e_eth.sh
+
+Runs two TCP iperf tests (~40s total including setup):
+1. **TCP RX** (Ubuntu host → gateway): `iperf -c 192.168.1.126 -t 10`
+2. **TCP TX** (gateway → Ubuntu host): `iperf -c <host_ip> -t 10` from gateway
+
+Reports: throughput, interface stats (errors/drops), TCP retransmissions,
+and comparison vs legacy rtl819x baseline.
+
+Results are saved in `test_results_YYYYMMDD_HHMMSS/`.
+
+**Important**: `flash_kernel.sh` flashes `kernel.img` (the legacy rtl819x kernel).
+To flash the new driver, always use `tftp` directly with `kernel-rtl8196e-eth.img`.
+
+### Baseline comparison
+
+| Test | rtl819x (legacy) | rtl8196e-eth (current) |
+|------|-------------------|------------------------|
+| TCP RX (host → gw) | 86.6 Mbps | ~80 Mbps |
+| TCP TX (gw → host) | 48.1 Mbps | ~42 Mbps |
 
 ## Reference: the legacy driver (rtl819x)
 
