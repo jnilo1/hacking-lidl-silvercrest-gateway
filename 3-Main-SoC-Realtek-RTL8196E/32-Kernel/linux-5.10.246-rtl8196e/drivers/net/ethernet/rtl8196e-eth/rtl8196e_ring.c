@@ -6,7 +6,6 @@
 #include <linux/skbuff.h>
 #include <linux/spinlock.h>
 #include <linux/kernel.h>
-#include <linux/mm.h>
 #include <asm/io.h>
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
@@ -33,7 +32,6 @@ struct rtl8196e_ring {
 	unsigned int rx_debug_once;
 	unsigned int rx_debug_bad;
 	size_t buf_size;
-	struct page_pool *pp;
 	struct rtl8196e_rx_buf *rx_bufs;
 	spinlock_t tx_lock;
 };
@@ -53,8 +51,7 @@ static struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
 	return (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
 }
 
-struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
-					   unsigned int tx_cnt,
+struct rtl8196e_ring *rtl8196e_ring_create(unsigned int tx_cnt,
 					   unsigned int rx_cnt,
 					   unsigned int rx_mbuf_cnt,
 					   size_t buf_size)
@@ -76,7 +73,6 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
 	ring->rx_cnt = rx_cnt;
 	ring->rx_mbuf_cnt = rx_mbuf_cnt;
 	ring->buf_size = buf_size;
-	ring->pp = pp;
 	spin_lock_init(&ring->tx_lock);
 
 	ring->tx_ring = rtl8196e_alloc_uncached(tx_cnt * sizeof(u32), &ring->tx_ring_alloc);
@@ -139,8 +135,7 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
 	for (i = 0; i < rx_cnt; i++) {
 		struct rtl_pktHdr *ph = &ring->pkthdr_pool[tx_cnt + i];
 		struct rtl_mBuf *mb = &ring->mbuf_pool[tx_cnt + i];
-		struct page *page;
-		u8 *buf;
+		struct sk_buff *skb;
 
 		memset(ph, 0, sizeof(*ph));
 		memset(mb, 0, sizeof(*mb));
@@ -155,22 +150,22 @@ struct rtl8196e_ring *rtl8196e_ring_create(struct page_pool *pp,
 		mb->m_len = 0;
 		mb->m_extsize = buf_size;
 
-		page = page_pool_dev_alloc_pages(pp);
-		if (!page)
+		skb = netdev_alloc_skb(NULL, NET_SKB_PAD + buf_size);
+		if (!skb)
 			goto err;
+		skb_reserve(skb, NET_SKB_PAD);
 
-		buf = page_address(page) + NET_SKB_PAD;
-		mb->m_data = buf;
-		mb->m_extbuf = buf;
+		mb->m_data = skb->data;
+		mb->m_extbuf = skb->data;
 		mb->skb = NULL;
 
-		ring->rx_bufs[i].page = page;
-		ring->rx_bufs[i].offset = NET_SKB_PAD;
+		ring->rx_bufs[i].skb = skb;
 
 		ring->rx_pkthdr_ring[i] = (u32)ph | RTL8196E_DESC_SWCORE_OWNED;
 		ring->rx_mbuf_ring[i] = (u32)mb | RTL8196E_DESC_SWCORE_OWNED;
 
-		dma_cache_wback_inv((unsigned long)page_address(page), PAGE_SIZE);
+		dma_cache_wback_inv((unsigned long)skb->head,
+				    NET_SKB_PAD + buf_size);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 		dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 	}
@@ -207,11 +202,11 @@ void rtl8196e_ring_destroy(struct rtl8196e_ring *ring)
 		}
 	}
 
-	/* Return RX pages to page_pool */
-	if (ring->rx_bufs && ring->pp) {
+	/* Free RX SKBs */
+	if (ring->rx_bufs) {
 		for (i = 0; i < ring->rx_cnt; i++) {
-			if (ring->rx_bufs[i].page)
-				page_pool_put_full_page(ring->pp, ring->rx_bufs[i].page, false);
+			if (ring->rx_bufs[i].skb)
+				dev_kfree_skb_any(ring->rx_bufs[i].skb);
 		}
 	}
 	kfree(ring->rx_bufs);
@@ -366,11 +361,9 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		struct rtl_pktHdr *ph;
 		struct rtl_mBuf *mb;
 		struct rtl8196e_rx_buf *rxb;
-		struct page *page, *new_page;
-		struct sk_buff *skb;
+		struct sk_buff *skb, *new_skb;
 		unsigned int len;
 		unsigned int mbuf_index;
-		u8 *buf;
 
 		if (entry & RTL8196E_DESC_OWNED_BIT)
 			break;
@@ -381,8 +374,8 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		dma_cache_inv((unsigned long)mb, sizeof(*mb));
 
 		rxb = &ring->rx_bufs[ring->rx_idx];
-		page = rxb->page;
-		if (!page)
+		skb = rxb->skb;
+		if (!skb)
 			goto rearm;
 
 		len = ph->ph_len;
@@ -390,23 +383,16 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 			goto rearm_bad;
 
 		/* Invalidate cache on packet data */
-		buf = page_address(page) + rxb->offset;
-		dma_cache_inv((unsigned long)buf, len);
+		dma_cache_inv((unsigned long)skb->data, len);
 
-		/* Always allocate a fresh page for the descriptor */
-		new_page = page_pool_dev_alloc_pages(ring->pp);
-		if (!new_page)
+		/* Allocate a fresh SKB for the descriptor */
+		new_skb = netdev_alloc_skb(dev, NET_SKB_PAD + ring->buf_size);
+		if (!new_skb)
 			goto rearm;
+		skb_reserve(new_skb, NET_SKB_PAD);
 
-		/* Build SKB from page data (head_frag=1 → put_page on free) */
-		skb = build_skb(page_address(page), PAGE_SIZE);
-		if (!skb) {
-			page_pool_put_full_page(ring->pp, new_page, false);
-			goto rearm;
-		}
-		skb_reserve(skb, rxb->offset);
+		/* Set length on received SKB and hand to stack */
 		skb_put(skb, len);
-
 		skb->dev = dev;
 		if (dev) {
 			dev->stats.rx_packets++;
@@ -420,15 +406,13 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				    len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
 		}
 
-		/* Install new/reused page in descriptor */
-		buf = page_address(new_page) + NET_SKB_PAD;
-		mb->m_data = buf;
-		mb->m_extbuf = buf;
+		/* Install new SKB in descriptor */
+		mb->m_data = new_skb->data;
+		mb->m_extbuf = new_skb->data;
 		mb->m_extsize = ring->buf_size;
 		mb->m_len = 0;
 		mb->skb = NULL;
-		rxb->page = new_page;
-		rxb->offset = NET_SKB_PAD;
+		rxb->skb = new_skb;
 		ph->ph_len = 0;
 		ph->ph_flags = PKTHDR_USED | PKT_INCOMING;
 
@@ -454,8 +438,9 @@ rearm:
 		ring->rx_pkthdr_ring[ring->rx_idx] =
 			(u32)ph | (ring->rx_pkthdr_ring[ring->rx_idx] & RTL8196E_DESC_WRAP) | RTL8196E_DESC_SWCORE_OWNED;
 
-		if (rxb->page)
-			dma_cache_wback_inv((unsigned long)page_address(rxb->page), PAGE_SIZE);
+		if (rxb->skb)
+			dma_cache_wback_inv((unsigned long)rxb->skb->head,
+					    NET_SKB_PAD + ring->buf_size);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 		dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 
@@ -485,8 +470,6 @@ int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 void rtl8196e_ring_kick_tx(bool was_empty)
 {
 	u32 icr;
-
-	(void)was_empty;
 
 	icr = *(volatile u32 *)CPUICR;
 	*(volatile u32 *)CPUICR = icr | TXFD;

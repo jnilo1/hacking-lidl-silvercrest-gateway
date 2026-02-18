@@ -23,7 +23,7 @@ export LC_ALL=C
 RTL8196E_IP="192.168.1.126"
 RTL8196E_USER="root"
 IPERF_PORT=5001
-DURATION=30
+DURATION=10
 RTL_IFACE="eth0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOG_DIR="${SCRIPT_DIR}/test_results_$(date +%Y%m%d_%H%M%S)"
@@ -261,3 +261,8 @@ print_comparison
 
 echo
 log_success "Results in: $LOG_DIR"
+
+# Put gateway back in boot mode for reflashing
+log "Putting gateway in boot mode (boothold)..."
+ssh ${RTL8196E_USER}@${RTL8196E_IP} "boothold" >/dev/null 2>&1 || true
+log_success "Gateway is now in boot mode at 192.168.1.6"
