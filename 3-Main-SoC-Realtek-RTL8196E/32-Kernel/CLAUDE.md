@@ -197,7 +197,7 @@ remain enabled -- they are platform infrastructure, not the Ethernet driver.
 
 - **Toolchain**: `mips-lexra-linux-musl-gcc` 8.5.0 (crosstool-NG, in `x-tools/`)
 - **ARCH**: mips (big-endian, 32-bit)
-- **CPU**: Lexra RLX4181 (MIPS32-like, no ll/sc instructions)
+- **CPU**: Lexra RLX4181 (400 MHz, MIPS-1 + MIPS16 ISA, no ll/sc, 16 KB I-cache, 8 KB D-cache, 16 KB I-MEM, 8 KB D-MEM)
 - **LOCALVERSION**: `-rtl8196e-eth`
 - **Image format**: vmlinux -> objcopy -> LZMA -> lzma-loader -> cvimg (Realtek header)
 
