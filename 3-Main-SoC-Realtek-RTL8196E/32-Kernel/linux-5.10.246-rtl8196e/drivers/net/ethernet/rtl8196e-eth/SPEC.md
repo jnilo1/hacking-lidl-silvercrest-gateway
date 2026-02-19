@@ -150,7 +150,9 @@
 ## 13. Verification
 - Ping IPv4/IPv6.
 - Stable SSH session.
-- iperf TCP RX >= 80 Mbps (currently ~91 Mbps, exceeds 87 Mbps legacy).
-- iperf TCP TX: ~45 Mbps (legacy: 48 Mbps, ~7% gap — likely structural).
+- iperf TCP RX: ~91 Mbps (legacy: 85.3 Mbps, +6%).
+- iperf TCP TX: ~44 Mbps (legacy: 42.1 Mbps, +5%).
 - `ethtool -S eth0` shows stats.
 - No warnings in dmesg.
+
+Baseline measured in identical conditions (same host, same day, 10s iperf).

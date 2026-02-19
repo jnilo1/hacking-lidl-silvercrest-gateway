@@ -390,7 +390,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 		if (unlikely(ring->rx_debug_once == 0)) {
 			ring->rx_debug_once = 1;
-			netdev_info(dev, "rx first len=%u flags=0x%04x port=0x%02x vid=%u\n",
+			netdev_dbg(dev, "rx first len=%u flags=0x%04x port=0x%02x vid=%u\n",
 				    len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
 		}
 

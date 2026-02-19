@@ -174,14 +174,13 @@ The TX path is optimized for the uniprocessor Lexra SoC:
 
 ### Performance
 
-- iperf TCP RX: **~91 Mbps** (exceeds legacy 86.6 Mbps by +5%)
-- iperf TCP TX: **~45 Mbps** (legacy: 48.1 Mbps, gap ~7%)
+- iperf TCP RX: **~91 Mbps** (legacy: 85.3 Mbps, **+6%**)
+- iperf TCP TX: **~44 Mbps** (legacy: 42.1 Mbps, **+5%**)
 - No warnings in dmesg
 - Stable SSH, ping IPv4/IPv6
 
-TX gap analysis: the ~3 Mbps difference vs legacy is likely structural —
-the cost of a clean Linux driver (proper SKB lifecycle, standard APIs)
-vs the legacy driver's hand-optimized static buffer pool and SDK code.
+Baseline measured in identical conditions (same host, same day, 10s iperf).
+The new driver exceeds legacy on both RX and TX.
 
 ## Kernel config differences (vs legacy)
 
@@ -243,10 +242,12 @@ To flash the new driver, always use `tftp` directly with `kernel-rtl8196e-eth.im
 
 ### Baseline comparison
 
-| Test | rtl819x (legacy) | rtl8196e-eth (current) |
-|------|-------------------|------------------------|
-| TCP RX (host → gw) | 86.6 Mbps | ~91 Mbps |
-| TCP TX (gw → host) | 48.1 Mbps | ~45 Mbps |
+Measured in identical conditions (same host, same day, 10s iperf):
+
+| Test | rtl819x (legacy) | rtl8196e-eth v1.0 |
+|------|-------------------|-------------------|
+| TCP RX (host → gw) | 85.3 Mbps | ~91 Mbps (**+6%**) |
+| TCP TX (gw → host) | 42.1 Mbps | ~44 Mbps (**+5%**) |
 
 ## Reference: the legacy driver (rtl819x)
 

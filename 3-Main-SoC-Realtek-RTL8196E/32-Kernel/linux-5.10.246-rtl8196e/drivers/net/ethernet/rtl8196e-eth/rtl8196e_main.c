@@ -16,6 +16,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
+#define RTL8196E_DRV_VERSION "1.0"
 
 #define RTL8196E_TX_DESC      600
 #define RTL8196E_RX_DESC      500
@@ -303,7 +304,7 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 		priv->tx_dbg_len = skb->len;
 		priv->tx_dbg_submit = (ret == 0);
 		priv->dbg_tx_idx = rtl8196e_ring_last_tx_submit(priv->ring);
-		netdev_info(ndev, "xmit first packet len=%u portmask=0x%x vid=%u\n",
+		netdev_dbg(ndev, "xmit first packet len=%u portmask=0x%x vid=%u\n",
 			    skb->len, priv->portmask, priv->vlan_id);
 		if (rtl8196e_debug)
 			mod_timer(&priv->dbg_timer, jiffies + msecs_to_jiffies(200));
@@ -544,7 +545,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_irq;
 
-	dev_info(&pdev->dev, "rtl8196e-eth registered (experimental)\n");
+	dev_info(&pdev->dev, "rtl8196e-eth v" RTL8196E_DRV_VERSION " (J. Nilo)\n");
 	return 0;
 
 err_irq:
@@ -599,4 +600,5 @@ module_platform_driver(rtl8196e_driver);
 
 MODULE_AUTHOR("Jacques Nilo");
 MODULE_DESCRIPTION("RTL8196E minimal Ethernet driver");
+MODULE_VERSION(RTL8196E_DRV_VERSION);
 MODULE_LICENSE("GPL");
