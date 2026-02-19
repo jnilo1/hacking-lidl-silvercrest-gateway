@@ -9,6 +9,8 @@
 
 ## MIPS16e + I-MEM experiment (2026-02-19)
 
+### Phase 1 — single function (`rx_poll` only)
+
 `rtl8196e_ring_rx_poll` annotated with `__MIPS16 __iram_fwd`.  Three runs:
 
 | Run | Config             | TCP RX     | TCP TX     |
@@ -17,6 +19,32 @@
 | 2   | IMEM=y (MIPS16e + I-MEM) | 90.0 Mbps | 42.4 Mbps |
 | 3   | IMEM=y (MIPS16e + I-MEM) | 88.7 Mbps | 44.1 Mbps |
 
+**Result: no measurable gain over v1.0.**
+
+### Phase 2 — full hot path
+
+All driver hot-path functions annotated with `__iram_gen`/`__iram_fwd`
+(SRAM placement), and ring functions additionally with `__MIPS16` (16-bit
+instruction encoding).  Functions placed in SRAM:
+
+| Symbol                       | Section    | Encoding | Size  |
+|------------------------------|------------|----------|-------|
+| `plat_irq_dispatch`          | `.iram-gen`| MIPS32   | 160 B |
+| `rtl8196e_isr`               | `.iram-gen`| MIPS32   | 248 B |
+| `rtl8196e_poll`              | `.iram-gen`| MIPS32   | 244 B |
+| `rtl8196e_start_xmit`        | `.iram-fwd`| MIPS32   | 568 B |
+| `rtl8196e_ring_tx_reclaim`   | `.iram-gen`| MIPS16   | 188 B |
+| `rtl8196e_ring_kick_tx`      | `.iram-gen`| MIPS16   |  44 B |
+| `rtl8196e_ring_tx_submit`    | `.iram-fwd`| MIPS16   | 240 B |
+| `rtl8196e_ring_rx_poll`      | `.iram-fwd`| MIPS16   | 452 B |
+| **Total SRAM used**          |            |          | **2144 B / 16 KB** |
+
+One run (IMEM=y, full hot path):
+
+| Config                       | TCP RX     | TCP TX     |
+|------------------------------|------------|------------|
+| IMEM=y, full hot path        | 89.8 Mbps  | 42.8 Mbps  |
+
 **Result: no measurable gain over v1.0.** All values are within iperf
 run-to-run variance (±1–2 Mbps).
 
@@ -24,26 +52,27 @@ run-to-run variance (±1–2 Mbps).
 
 At 90 Mbps, ~6 100 packets/s, 400 MHz CPU → ~65 000 cycles/packet average
 (both directions CPU-bound at 100%).  Eliminating I-cache misses on the
-`rx_poll` entry (~20–50 cycles/packet from the theoretical estimate) would
-be a ~0.08% improvement — well below measurement noise.
+entire driver + IRQ dispatch path (~100–150 cycles/packet savings) would be
+a ~0.2% improvement — well below measurement noise.
 
 The dominant costs are structural (DMA cache flush on TX ~300 cycles,
-TCP stack overhead) and are unaffected by I-MEM.
+TCP stack overhead) and are unaffected by I-MEM.  The network stack
+functions (`napi_gro_receive`, `eth_type_trans`, TCP send/receive path)
+are far too large to fit in the 16 KB I-MEM and would need to be warm
+for any measurable gain.
 
 ### I-MEM infrastructure status
 
 The platform infrastructure (linker script sections, `_imem_dmem_init()`,
 COP3 programming) is **correct and functional**: the kernel boots cleanly
-with `CONFIG_RTL8196E_IMEM=y`, `rx_poll` is placed in `.iram-fwd` at
-`0x80280000`, and the COP3 Instruction Window is programmed at boot.
+with `CONFIG_RTL8196E_IMEM=y`, all annotated functions are placed in
+`.iram-fwd`/`.iram-gen` at `0x80280000`, and the COP3 Instruction Window
+is programmed at boot.  Total SRAM usage: 2144 B out of 16 384 B.
 
-A measurable gain would require annotating the full hot path: IRQ dispatch,
-NAPI entry, TCP checksum — code outside the driver scope.  Single-function
-annotation is not enough to overcome measurement noise on this platform.
-
-**Default: `CONFIG_RTL8196E_IMEM=n`.**  MIPS16e is always active
-(`__MIPS16` is unconditional) and gives the same throughput with less
-platform complexity.
+**Default: `CONFIG_RTL8196E_IMEM=n`.**  MIPS16e is always active on ring
+functions (`__MIPS16` is unconditional) and gives the same throughput with
+less platform complexity.  The `.iram-*` section attributes become no-ops
+when `CONFIG_RTL8196E_IMEM=n`.
 
 Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (400 MHz, MIPS-1 + MIPS16
 ISA, big-endian, single core, no FPU, no SIMD, write-back L1 cache,

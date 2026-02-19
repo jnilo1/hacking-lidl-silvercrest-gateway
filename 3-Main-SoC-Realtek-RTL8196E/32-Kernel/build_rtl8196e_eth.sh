@@ -216,24 +216,38 @@ echo ""
 # ── Config ────────────────────────────────────────────────────────────
 
 if [ ! -f .config ]; then
-    echo "Setting up .config (RTL819X=n, RTL8196E_ETH=y)..."
+    echo "Setting up .config (RTL819X=n, RTL8196E_ETH=y, RTL8196E_IMEM=y)..."
     sed \
         -e 's/^CONFIG_RTL819X=y$/# CONFIG_RTL819X is not set/' \
         -e '/^# CONFIG_RTL819X is not set$/a CONFIG_RTL8196E_ETH=y' \
         "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
+    echo "CONFIG_RTL8196E_IMEM=y" >> .config
     make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
     echo ""
 else
+    NEED_OLDDEFCONFIG=false
+
     # Ensure RTL8196E_ETH=y even if Kconfig was added after initial .config
     if ! grep -q '^CONFIG_RTL8196E_ETH=y' .config; then
         echo "Fixing .config: enabling RTL8196E_ETH..."
-        sed -i \
-            -e 's/^# CONFIG_RTL8196E_ETH is not set$/CONFIG_RTL8196E_ETH=y/' \
-            .config
-        # If the option wasn't present at all, append it
+        sed -i -e 's/^# CONFIG_RTL8196E_ETH is not set$/CONFIG_RTL8196E_ETH=y/' .config
         if ! grep -q '^CONFIG_RTL8196E_ETH=y' .config; then
             echo "CONFIG_RTL8196E_ETH=y" >> .config
         fi
+        NEED_OLDDEFCONFIG=true
+    fi
+
+    # Ensure RTL8196E_IMEM=y
+    if ! grep -q '^CONFIG_RTL8196E_IMEM=y' .config; then
+        echo "Fixing .config: enabling RTL8196E_IMEM..."
+        sed -i -e 's/^# CONFIG_RTL8196E_IMEM is not set$/CONFIG_RTL8196E_IMEM=y/' .config
+        if ! grep -q '^CONFIG_RTL8196E_IMEM=y' .config; then
+            echo "CONFIG_RTL8196E_IMEM=y" >> .config
+        fi
+        NEED_OLDDEFCONFIG=true
+    fi
+
+    if [ "$NEED_OLDDEFCONFIG" = true ]; then
         make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
         echo ""
     fi

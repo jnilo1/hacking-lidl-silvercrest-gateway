@@ -21,6 +21,7 @@
 #include "rtl8196e_hw.h"
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
+#include "rtl8196e_imem.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
 #define RTL8196E_DRV_VERSION "1.0"
@@ -281,6 +282,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 }
 
 /* Transmit a packet: linearize if needed, flush data cache, submit to TX ring. */
+__iram_fwd
 static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
@@ -376,6 +378,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 }
 
 /* NAPI poll: drain RX ring up to budget, reclaim completed TX, wake queue if stalled. */
+__iram_gen
 static int rtl8196e_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl8196e_priv *priv = container_of(napi, struct rtl8196e_priv, napi);
@@ -404,6 +407,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 }
 
 /* Interrupt handler: read and clear CPUIISR, update link state, schedule NAPI. */
+__iram_gen
 static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 {
 	struct net_device *ndev = dev_id;

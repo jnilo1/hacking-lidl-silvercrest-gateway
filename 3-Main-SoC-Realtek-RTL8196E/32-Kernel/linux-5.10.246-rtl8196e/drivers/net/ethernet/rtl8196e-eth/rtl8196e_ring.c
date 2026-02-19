@@ -247,6 +247,7 @@ void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring)
 }
 
 /* Fill the next TX descriptor with @skb's data and hand ownership to the hardware. */
+__MIPS16 __iram_fwd
 int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
 				   u16 vid, u16 portlist, u16 flags,
@@ -306,6 +307,7 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 }
 
 /* Walk the TX consumer ring, free completed SKBs, return the number of packets reclaimed. */
+__MIPS16 __iram_gen
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
@@ -476,6 +478,7 @@ int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 }
 
 /* Pulse the TXFD bit in CPUICR to trigger the TX DMA fetch engine. */
+__MIPS16 __iram_gen
 void rtl8196e_ring_kick_tx(bool was_empty)
 {
 	u32 icr;

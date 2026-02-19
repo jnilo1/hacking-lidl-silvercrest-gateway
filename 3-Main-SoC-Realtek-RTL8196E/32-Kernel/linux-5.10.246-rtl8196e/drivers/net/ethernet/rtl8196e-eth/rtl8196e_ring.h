@@ -26,11 +26,13 @@ void *rtl8196e_ring_tx_desc_base(struct rtl8196e_ring *ring);
 void *rtl8196e_ring_rx_pkthdr_base(struct rtl8196e_ring *ring);
 void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring);
 
+__MIPS16 __iram_fwd
 int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
 				   u16 vid, u16 portlist, u16 flags,
 				   bool *was_empty);
 
+__MIPS16 __iram_gen
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
@@ -43,6 +45,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring);
 
+__MIPS16 __iram_gen
 void rtl8196e_ring_kick_tx(bool was_empty);
 void rtl8196e_ring_tx_reset(struct rtl8196e_ring *ring);
 unsigned int rtl8196e_ring_last_tx_submit(struct rtl8196e_ring *ring);
