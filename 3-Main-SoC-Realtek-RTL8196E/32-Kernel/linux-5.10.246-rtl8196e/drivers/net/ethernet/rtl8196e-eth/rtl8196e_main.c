@@ -90,7 +90,7 @@ static void rtl8196e_tx_timer_fn(struct timer_list *t)
 	if (!priv->ring)
 		return;
 
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
 
 	free_count = rtl8196e_ring_tx_free_count(priv->ring);
 	if (free_count >= RTL8196E_TX_WAKE_THRESH && netif_queue_stopped(priv->ndev))
@@ -296,7 +296,6 @@ static int rtl8196e_stop(struct net_device *ndev)
 static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
-	struct netdev_queue *txq;
 	bool was_empty = false;
 	int ret;
 	int free_count;
@@ -340,9 +339,10 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 	if (ret < 0) {
 		unsigned int pkts = 0, bytes = 0;
 
-		netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
+		if (net_ratelimit())
+			netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
 		local_bh_disable();
-		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
+		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
 		local_bh_enable();
 		ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
 					     priv->vlan_id, priv->portmask,
@@ -386,7 +386,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 	rtl8196e_hw_disable_irqs(&priv->hw);
 	rtl8196e_hw_stop(&priv->hw);
 
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
 	rtl8196e_ring_tx_reset(priv->ring);
 	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
 
@@ -405,7 +405,14 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 
 	work_done = rtl8196e_ring_rx_poll(priv->ring, budget, napi, priv->ndev);
 
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, budget);
+
+	if (pkts && netif_queue_stopped(priv->ndev)) {
+		int free_count = rtl8196e_ring_tx_free_count(priv->ring);
+
+		if (free_count >= RTL8196E_TX_WAKE_THRESH)
+			netif_wake_queue(priv->ndev);
+	}
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {

@@ -300,7 +300,8 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
-				    unsigned int *bytes)
+				    unsigned int *bytes,
+				    int napi_budget)
 {
 	unsigned int done_pkts = 0;
 	unsigned int done_bytes = 0;
@@ -329,7 +330,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 		if (skb) {
 			done_pkts++;
 			done_bytes += skb->len;
-			dev_kfree_skb_any(skb);
+			napi_consume_skb(skb, napi_budget);
 			mb->skb = NULL;
 		}
 

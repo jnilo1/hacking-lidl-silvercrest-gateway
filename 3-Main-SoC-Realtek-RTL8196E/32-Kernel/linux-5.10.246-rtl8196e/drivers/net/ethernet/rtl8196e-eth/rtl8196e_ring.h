@@ -29,7 +29,8 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
-				    unsigned int *bytes);
+				    unsigned int *bytes,
+				    int napi_budget);
 
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
