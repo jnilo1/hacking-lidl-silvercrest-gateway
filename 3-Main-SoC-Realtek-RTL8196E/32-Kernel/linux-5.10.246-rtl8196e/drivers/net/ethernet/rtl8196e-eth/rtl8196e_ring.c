@@ -240,19 +240,19 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	struct rtl_pktHdr *ph;
 	struct rtl_mBuf *mb;
 
-	if (!ring || !skb || !data || len == 0)
+	if (unlikely(!ring || !skb || !data || len == 0))
 		return -EINVAL;
 
 	if (len < ETH_ZLEN)
 		len = ETH_ZLEN;
-	if (len > 1518)
+	if (unlikely(len > 1518))
 		return -EINVAL;
 
 	next = ring->tx_prod + 1;
 	if (next >= ring->tx_cnt)
 		next = 0;
 
-	if (next == ring->tx_cons)
+	if (unlikely(next == ring->tx_cons))
 		return -ENOSPC;
 
 	if (was_empty)
@@ -297,7 +297,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 	unsigned int done_pkts = 0;
 	unsigned int done_bytes = 0;
 
-	if (!ring)
+	if (unlikely(!ring))
 		return 0;
 
 	while (ring->tx_cons != ring->tx_prod) {
@@ -318,7 +318,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 		dma_cache_inv((unsigned long)mb, sizeof(*mb));
 
 		skb = (struct sk_buff *)mb->skb;
-		if (skb) {
+		if (likely(skb)) {
 			done_pkts++;
 			done_bytes += skb->len;
 			napi_consume_skb(skb, napi_budget);
@@ -344,7 +344,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 {
 	int work_done = 0;
 
-	if (!ring)
+	if (unlikely(!ring))
 		return 0;
 
 	while (work_done < budget) {
@@ -366,11 +366,11 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 		rxb = &ring->rx_bufs[ring->rx_idx];
 		skb = rxb->skb;
-		if (!skb)
+		if (unlikely(!skb))
 			goto rearm;
 
 		len = ph->ph_len;
-		if (len < ETH_ZLEN || len > ring->buf_size)
+		if (unlikely(len < ETH_ZLEN || len > ring->buf_size))
 			goto rearm_bad;
 
 		/* Invalidate cache on packet data */
@@ -378,19 +378,17 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 		/* Allocate a fresh SKB for the descriptor (NAPI-optimized) */
 		new_skb = napi_alloc_skb(napi, ring->buf_size);
-		if (!new_skb)
+		if (unlikely(!new_skb))
 			goto rearm;
 
 		/* Set length on received SKB and hand to stack */
 		skb_put(skb, len);
 		skb->dev = dev;
-		if (dev) {
-			dev->stats.rx_packets++;
-			dev->stats.rx_bytes += len;
-		}
+		dev->stats.rx_packets++;
+		dev->stats.rx_bytes += len;
 		skb->protocol = eth_type_trans(skb, dev);
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
-		if (dev && ring->rx_debug_once == 0) {
+		if (unlikely(ring->rx_debug_once == 0)) {
 			ring->rx_debug_once = 1;
 			netdev_info(dev, "rx first len=%u flags=0x%04x port=0x%02x vid=%u\n",
 				    len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
@@ -411,7 +409,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		goto rearm;
 
 rearm_bad:
-		if (dev && ring->rx_debug_bad < 3) {
+		if (unlikely(ring->rx_debug_bad < 3)) {
 			ring->rx_debug_bad++;
 			netdev_warn(dev, "rx bad len=%u flags=0x%04x port=0x%02x vid=%u\n",
 				    len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
@@ -419,7 +417,7 @@ rearm_bad:
 
 rearm:
 		mbuf_index = (unsigned int)(mb - ring->rx_mbuf_base);
-		if (mbuf_index < ring->rx_mbuf_cnt) {
+		if (likely(mbuf_index < ring->rx_mbuf_cnt)) {
 			/* Atomic write preserving WRAP bit */
 			ring->rx_mbuf_ring[mbuf_index] = (u32)mb | RTL8196E_DESC_SWCORE_OWNED |
 							  (ring->rx_mbuf_ring[mbuf_index] & RTL8196E_DESC_WRAP);
@@ -428,7 +426,7 @@ rearm:
 		ring->rx_pkthdr_ring[ring->rx_idx] =
 			(u32)ph | (ring->rx_pkthdr_ring[ring->rx_idx] & RTL8196E_DESC_WRAP) | RTL8196E_DESC_SWCORE_OWNED;
 
-		if (rxb->skb)
+		if (likely(rxb->skb))
 			dma_cache_wback_inv((unsigned long)rxb->skb->head,
 					    NET_SKB_PAD + ring->buf_size);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));

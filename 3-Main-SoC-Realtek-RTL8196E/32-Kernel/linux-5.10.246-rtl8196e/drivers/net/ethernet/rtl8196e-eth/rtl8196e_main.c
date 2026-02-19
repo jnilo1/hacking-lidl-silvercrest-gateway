@@ -274,7 +274,7 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 	int ret;
 	int free_count;
 
-	if (!priv->ring || !priv->portmask) {
+	if (unlikely(!priv->ring || !priv->portmask)) {
 		dev_kfree_skb_any(skb);
 		return NETDEV_TX_OK;
 	}
@@ -370,7 +370,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, budget);
 
-	if (pkts && netif_queue_stopped(priv->ndev)) {
+	if (unlikely(pkts && netif_queue_stopped(priv->ndev))) {
 		int free_count = rtl8196e_ring_tx_free_count(priv->ring);
 
 		if (free_count >= RTL8196E_TX_WAKE_THRESH)
@@ -402,7 +402,7 @@ static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 	*(volatile u32 *)CPUIISR = status;
 	status &= *(volatile u32 *)CPUIIMR;
 
-	if (status & LINK_CHANGE_IP) {
+	if (unlikely(status & LINK_CHANGE_IP)) {
 		link = rtl8196e_hw_link_up(&priv->hw, priv->phy_port);
 		if (link)
 			netif_carrier_on(ndev);
@@ -410,8 +410,8 @@ static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 			netif_carrier_off(ndev);
 	}
 
-	if (status & (RX_DONE_IP_ALL | TX_ALL_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL)) {
-		if (napi_schedule_prep(&priv->napi)) {
+	if (likely(status & (RX_DONE_IP_ALL | TX_ALL_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL))) {
+		if (likely(napi_schedule_prep(&priv->napi))) {
 			rtl8196e_hw_disable_irqs(&priv->hw);
 			__napi_schedule(&priv->napi);
 		}
