@@ -7,6 +7,44 @@
 | RX (host → gw)   | 85.3 Mbps        | ~91 Mbps          | +6.7%  |
 | TX (gw → host)   | 42.1 Mbps        | ~44 Mbps          | +4.5%  |
 
+## MIPS16e + I-MEM experiment (2026-02-19)
+
+`rtl8196e_ring_rx_poll` annotated with `__MIPS16 __iram_fwd`.  Three runs:
+
+| Run | Config             | TCP RX     | TCP TX     |
+|-----|--------------------|------------|------------|
+| 1   | IMEM=n (MIPS16e)   | 90.3 Mbps  | 44.0 Mbps  |
+| 2   | IMEM=y (MIPS16e + I-MEM) | 90.0 Mbps | 42.4 Mbps |
+| 3   | IMEM=y (MIPS16e + I-MEM) | 88.7 Mbps | 44.1 Mbps |
+
+**Result: no measurable gain over v1.0.** All values are within iperf
+run-to-run variance (±1–2 Mbps).
+
+### Why the gain is negligible
+
+At 90 Mbps, ~6 100 packets/s, 400 MHz CPU → ~65 000 cycles/packet average
+(both directions CPU-bound at 100%).  Eliminating I-cache misses on the
+`rx_poll` entry (~20–50 cycles/packet from the theoretical estimate) would
+be a ~0.08% improvement — well below measurement noise.
+
+The dominant costs are structural (DMA cache flush on TX ~300 cycles,
+TCP stack overhead) and are unaffected by I-MEM.
+
+### I-MEM infrastructure status
+
+The platform infrastructure (linker script sections, `_imem_dmem_init()`,
+COP3 programming) is **correct and functional**: the kernel boots cleanly
+with `CONFIG_RTL8196E_IMEM=y`, `rx_poll` is placed in `.iram-fwd` at
+`0x80280000`, and the COP3 Instruction Window is programmed at boot.
+
+A measurable gain would require annotating the full hot path: IRQ dispatch,
+NAPI entry, TCP checksum — code outside the driver scope.  Single-function
+annotation is not enough to overcome measurement noise on this platform.
+
+**Default: `CONFIG_RTL8196E_IMEM=n`.**  MIPS16e is always active
+(`__MIPS16` is unconditional) and gives the same throughput with less
+platform complexity.
+
 Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (400 MHz, MIPS-1 + MIPS16
 ISA, big-endian, single core, no FPU, no SIMD, write-back L1 cache,
 16 KB I-cache, 8 KB D-cache, 16 KB I-MEM, 8 KB D-MEM).
