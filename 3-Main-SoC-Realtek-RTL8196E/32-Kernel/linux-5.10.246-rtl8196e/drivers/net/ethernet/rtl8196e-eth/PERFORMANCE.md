@@ -7,8 +7,9 @@
 | RX (host → gw)   | 85.3 Mbps        | ~91 Mbps          | +6.7%  |
 | TX (gw → host)   | 42.1 Mbps        | ~44 Mbps          | +4.5%  |
 
-Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (~250 MHz, MIPS32-like,
-big-endian, single core, no FPU, no SIMD, write-back L1 cache).
+Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (400 MHz, MIPS-1 + MIPS16
+ISA, big-endian, single core, no FPU, no SIMD, write-back L1 cache,
+16 KB I-cache, 8 KB D-cache, 16 KB I-MEM, 8 KB D-MEM).
 Link: 100BASE-TX full duplex.
 
 ---
@@ -82,7 +83,7 @@ Each payload byte touches the DRAM bus **once** from the CPU's perspective
 |--------------------------|-------------------------------------|---------------------------|
 | Data cache op (~94 lines)| ~94 × (writeback + inv) ≈ 300 cyc  | ~94 × inv ≈ 50 cycles     |
 | Descriptor cache ops     | ~4 × (writeback + inv) ≈ 24 cycles  | ~4 × inv ≈ 8 cycles       |
-| **Total cache overhead** | **~324 cycles (~1.30 µs)**          | **~58 cycles (~0.23 µs)** |
+| **Total cache overhead** | **~324 cycles (~0.81 µs)**          | **~58 cycles (~0.15 µs)** |
 
 This 6× difference in cache overhead per packet is the dominant contributor
 to the 2:1 throughput asymmetry, compounded by secondary factors below.
@@ -165,7 +166,7 @@ checksum computation but achieves *lower* throughput, for a different reason:
 With TCP, iperf pushes large buffers and the kernel's TCP stack handles
 segmentation efficiently, amortising syscall overhead across many packets.
 With UDP, iperf calls `sendto()` once per 1470-byte datagram (~2160 calls/s),
-with additional `gettimeofday()` calls for rate limiting.  On a 250 MHz Lexra
+with additional `gettimeofday()` calls for rate limiting.  On a 400 MHz Lexra
 without a VDSO fast path, this per-call overhead is significant.
 
 The UDP experiment confirms that the bottleneck is in the **data production
