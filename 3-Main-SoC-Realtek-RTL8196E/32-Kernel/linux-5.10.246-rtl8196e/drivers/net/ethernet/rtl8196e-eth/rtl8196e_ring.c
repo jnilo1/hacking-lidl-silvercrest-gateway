@@ -385,11 +385,10 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		/* Invalidate cache on packet data */
 		dma_cache_inv((unsigned long)skb->data, len);
 
-		/* Allocate a fresh SKB for the descriptor */
-		new_skb = netdev_alloc_skb(dev, NET_SKB_PAD + ring->buf_size);
+		/* Allocate a fresh SKB for the descriptor (NAPI-optimized) */
+		new_skb = napi_alloc_skb(napi, ring->buf_size);
 		if (!new_skb)
 			goto rearm;
-		skb_reserve(new_skb, NET_SKB_PAD);
 
 		/* Set length on received SKB and hand to stack */
 		skb_put(skb, len);
