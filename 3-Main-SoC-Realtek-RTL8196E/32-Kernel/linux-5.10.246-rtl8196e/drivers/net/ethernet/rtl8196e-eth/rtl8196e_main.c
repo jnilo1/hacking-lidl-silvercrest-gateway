@@ -22,8 +22,8 @@
 #define RTL8196E_RX_MBUF_DESC 500
 #define RTL8196E_CLUSTER_SIZE 1700
 
-#define RTL8196E_TX_STOP_THRESH 32
-#define RTL8196E_TX_WAKE_THRESH 128
+#define RTL8196E_TX_STOP_THRESH 16
+#define RTL8196E_TX_WAKE_THRESH 64
 #define RTL8196E_TX_TIMER_MS    2
 
 static unsigned int link_poll_ms;
@@ -317,6 +317,12 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 			dev_kfree_skb_any(skb);
 			return NETDEV_TX_OK;
 		}
+	}
+
+	/* Flush packet data before spinlock (descriptor flush stays inside) */
+	{
+		unsigned int flush_len = skb->len < ETH_ZLEN ? ETH_ZLEN : skb->len;
+		dma_cache_wback_inv((unsigned long)skb->data, flush_len);
 	}
 
 	ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,

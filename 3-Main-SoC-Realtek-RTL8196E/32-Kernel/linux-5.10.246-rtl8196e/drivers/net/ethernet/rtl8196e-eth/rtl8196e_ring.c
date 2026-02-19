@@ -282,8 +282,7 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	ph->ph_srcExtPortNum = 0;
 	ph->ph_flags = flags;
 
-	/* Flush packet data and descriptors */
-	dma_cache_wback_inv((unsigned long)data, len);
+	/* Flush descriptors only (packet data flushed by caller before lock) */
 	dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 	dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 
