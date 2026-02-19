@@ -23,7 +23,7 @@ unmaintainable. The new driver is a clean-room rewrite for Linux 5.10.
       Makefile                      #   modified: adds rtl8196e-eth + rtl819x entries
     arch/mips/boot/dts/realtek/
       rtl8196e.dts                  #   modified DTS (loglevel=7, link-poll-ms, phy-id)
-    net/core/skbuff.c               #   vanilla skb_free_head() (removes legacy pool hooks)
+    # (no net/core/skbuff.c — build script skips the legacy patch)
 
   files/                            # Platform overlay for build_kernel.sh
     arch/                           #   Realtek platform code (SoC, DTS, Lexra cache, ...)
@@ -50,13 +50,12 @@ unmaintainable. The new driver is a clean-room rewrite for Linux 5.10.
 `build_rtl8196e_eth.sh` creates the build tree by layering:
 
 1. **Vanilla Linux 5.10.246** (downloaded)
-2. **patches/** applied (Lexra CPU, platform Kconfig hooks, skbuff.c pool hook for legacy driver)
+2. **patches/** applied (Lexra CPU, platform Kconfig hooks — skbuff.c patch skipped)
 3. **files/** copied (platform code, legacy rtl819x driver)
 4. **linux-5.10.246-rtl8196e/** overlay copied ON TOP
    - Overwrites `drivers/net/ethernet/Kconfig` and `Makefile` (adds rtl8196e-eth)
    - Adds `drivers/net/ethernet/rtl8196e-eth/` (new driver)
    - Overwrites DTS with debug version (loglevel=7, extra DT properties)
-   - Overwrites skbuff.c (removes legacy pool hooks, restores vanilla `skb_free_head()`)
 5. **.config** generated: `RTL819X=n`, `RTL8196E_ETH=y` + `olddefconfig`
 6. Compile + package -> `kernel-rtl8196e-eth.img`
 
@@ -98,7 +97,7 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 |------|------|
 | `rtl8196e_main.c` | net_device, NAPI, IRQ, TX/RX scheduling, module params |
 | `rtl8196e_hw.c/h` | MMIO register access, init sequence, KSEG1 helpers, PHY, L2 toCPU |
-| `rtl8196e_ring.c/h` | TX/RX descriptor rings, netdev_alloc_skb RX buffers, ownership, cache flush/invalidate |
+| `rtl8196e_ring.c/h` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache flush/invalidate |
 | `rtl8196e_dt.c/h` | Devicetree parsing (interface@0 properties) |
 | `rtl8196e_regs.h` | Register definitions (trimmed to what's needed) |
 | `rtl8196e_desc.h` | Descriptor structures (pktHdr, mbuf) |
@@ -113,27 +112,23 @@ Source: `linux-5.10.246-rtl8196e/drivers/net/ethernet/rtl8196e-eth/`
 - IRQ via SoC interrupt controller (GIMR bit 15).
 - BIST must be skipped (don't block init).
 
-### RX buffer management (netdev_alloc_skb)
+### RX buffer management (napi_alloc_skb)
 
-The driver uses `netdev_alloc_skb()` for RX buffer allocation. This uses the
-kernel's page frag allocator internally: multiple SKBs share the same underlying
-page, and allocation is a simple pointer bump most of the time.
+The RX hot path uses `napi_alloc_skb()` for buffer allocation. This API uses a
+per-CPU page frag cache dedicated to NAPI context, avoiding locks and maximizing
+cache locality. It internally adds `NET_SKB_PAD` headroom and calls `skb_reserve`.
+
+Ring init uses `netdev_alloc_skb()` (no NAPI context available at probe time).
 
 - Pre-allocated SKBs stored in shadow array `rx_bufs[]` (one `struct sk_buff *`
   per RX descriptor).
 - On RX: the old SKB is handed to the stack via `napi_gro_receive()`, a new SKB
-  is allocated with `netdev_alloc_skb(dev, NET_SKB_PAD + buf_size)` +
-  `skb_reserve(skb, NET_SKB_PAD)`, and its `data` pointer is installed in the
-  hardware descriptor.
+  is allocated with `napi_alloc_skb(napi, buf_size)`, and its `data` pointer is
+  installed in the hardware descriptor.
 - On destroy: `dev_kfree_skb_any()` for each `rx_bufs[i].skb`.
 - No `page_pool`, no `build_skb()`, no PAGE_POOL Kconfig dependency.
-
-Previous approach used `page_pool` + `build_skb()` which was ~20% slower due to
-per-packet page allocator + slab allocator overhead on the ~400 MHz Lexra CPU.
-
-The overlay's `net/core/skbuff.c` restores vanilla `skb_free_head()` (no hooks).
-The `patches/net-core-skbuff.c.patch` still exists for the legacy rtl819x driver
-(`build_kernel.sh`) but is dead code in the new driver's kernel.
+- No kernel patches required. The `patches/net-core-skbuff.c.patch` (legacy
+  rtl819x hooks) is skipped by `build_rtl8196e_eth.sh`.
 
 ### Devicetree bindings
 
@@ -161,7 +156,7 @@ Only `interface@0` is used. Extra interface nodes are ignored with a warning.
 
 ### Known issue: TX throughput
 
-TX (gateway -> host) is ~42 Mbps vs ~80 Mbps RX (host -> gateway).
+TX (gateway -> host) is ~43 Mbps vs ~91 Mbps RX (host -> gateway).
 See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
 - Batch TX kicks (MMIO reduction)
 - Interrupt/timer balance
@@ -171,8 +166,8 @@ See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
 
 ### Performance targets
 
-- iperf TCP RX >= 80 Mbps (currently ~80 Mbps, vs 87 Mbps legacy)
-- iperf TCP TX gap < 10% vs RX (currently ~42 Mbps vs 48 Mbps legacy)
+- iperf TCP RX >= 80 Mbps (currently ~91 Mbps, exceeds 87 Mbps legacy)
+- iperf TCP TX gap < 10% vs RX (currently ~43 Mbps vs 48 Mbps legacy)
 - No warnings in dmesg
 - Stable SSH, ping IPv4/IPv6
 
@@ -238,8 +233,8 @@ To flash the new driver, always use `tftp` directly with `kernel-rtl8196e-eth.im
 
 | Test | rtl819x (legacy) | rtl8196e-eth (current) |
 |------|-------------------|------------------------|
-| TCP RX (host → gw) | 86.6 Mbps | ~80 Mbps |
-| TCP TX (gw → host) | 48.1 Mbps | ~42 Mbps |
+| TCP RX (host → gw) | 86.6 Mbps | ~91 Mbps |
+| TCP TX (gw → host) | 48.1 Mbps | ~43 Mbps |
 
 ## Reference: the legacy driver (rtl819x)
 

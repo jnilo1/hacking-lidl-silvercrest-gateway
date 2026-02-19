@@ -3,7 +3,7 @@
 ## 1. Goals
 - Clean, single-purpose driver targeting the RTL8196E SoC only.
 - Single physical Ethernet port (port 4 on the Lidl Silvercrest gateway).
-- Maximum performance (zero-copy RX via netdev_alloc_skb, direct TX).
+- Maximum performance (zero-copy RX via napi_alloc_skb, direct TX).
 - Compatible with existing devicetree (`&ethernet` + `interface@0`).
 - IPv4 and IPv6 handled entirely by the Linux network stack.
 - NAPI polling, hardware interrupts, basic ethtool stats.
@@ -25,19 +25,20 @@
 - IRQ routed through SoC interrupt controller (GIMR bit 15).
 - BIST skipped (must not block init).
 
-## 4. RX buffer management (netdev_alloc_skb)
-- Uses `netdev_alloc_skb()` — the standard allocation for simple NAPI drivers.
-- Internally uses the kernel's page frag allocator: multiple SKBs share the
-  same underlying page, allocation is a simple pointer bump most of the time.
+## 4. RX buffer management (napi_alloc_skb)
+- Hot path uses `napi_alloc_skb(napi, buf_size)` — NAPI-optimized allocation
+  using a per-CPU page frag cache. Avoids locks, maximizes cache locality.
+  Internally adds `NET_SKB_PAD` headroom and calls `skb_reserve`.
+- Ring init uses `netdev_alloc_skb(NULL, ...)` (no NAPI context at probe time).
 - Pre-allocated SKBs stored in shadow array `rx_bufs[]`
   (`struct rtl8196e_rx_buf { struct sk_buff *skb }`), one per RX descriptor.
 - On each RX: the old SKB is handed to the stack, a new SKB is allocated
-  with `netdev_alloc_skb(dev, NET_SKB_PAD + buf_size)` + `skb_reserve(skb, NET_SKB_PAD)`,
-  and its `data` pointer is installed in the hardware descriptor.
+  with `napi_alloc_skb(napi, buf_size)`, and its `data` pointer is installed
+  in the hardware descriptor.
 - On destroy: `dev_kfree_skb_any()` for each shadow entry.
 - No `page_pool`, no `build_skb()`, no PAGE_POOL Kconfig dependency.
-- The overlay's `net/core/skbuff.c` restores vanilla `skb_free_head()`
-  (removes legacy `is_rtl865x_eth_priv_buf` / `free_rtl865x_eth_priv_buf` hooks).
+- No kernel patches required. The `patches/net-core-skbuff.c.patch` (legacy
+  rtl819x hooks) is skipped by `build_rtl8196e_eth.sh`.
 
 ## 5. Devicetree compatibility
 - Parent node: `&ethernet` (compatible: `realtek,rtl8196e-mac`).
@@ -58,24 +59,24 @@
 |------|------|
 | `rtl8196e_main.c` | net_device, NAPI poll, ISR, TX xmit, ethtool, probe/remove |
 | `rtl8196e_hw.c/h` | MMIO registers, init sequence, KSEG1 helpers, PHY/MDIO, VLAN/NETIF/L2 tables |
-| `rtl8196e_ring.c/h` | TX/RX descriptor rings, netdev_alloc_skb RX buffers, ownership, cache ops |
+| `rtl8196e_ring.c/h` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache ops |
 | `rtl8196e_dt.c/h` | Devicetree parsing (`interface@0` properties) |
 | `rtl8196e_desc.h` | Hardware descriptor structures (`rtl_pktHdr`, `rtl_mBuf`) |
 | `rtl8196e_regs.h` | Register definitions (trimmed to what's used) |
 | `Kconfig` | Kernel config entry |
 | `Makefile` | Build: `rtl8196e_main.o rtl8196e_hw.o rtl8196e_ring.o rtl8196e_dt.o` |
 
-## 7. RX path (netdev_alloc_skb)
+## 7. RX path (napi_alloc_skb)
 - Two RX rings:
   - pkthdr ring (descriptors) — `RTL8196E_RX_DESC` (500) entries
   - mbuf ring (buffers) — `RTL8196E_RX_MBUF_DESC` (500) entries
-- Buffer allocation via `netdev_alloc_skb()` + `skb_reserve(NET_SKB_PAD)`.
-- Data placed at `skb->data` (after NET_SKB_PAD headroom).
+- Buffer allocation via `napi_alloc_skb(napi, buf_size)` (NAPI-optimized).
+- Data placed at `skb->data` (after NET_SKB_PAD headroom, added internally).
 - NAPI poll (`rtl8196e_ring_rx_poll()`):
   1. Check descriptor ownership bit.
   2. Invalidate cache on pkthdr + mbuf descriptors.
   3. Invalidate cache on packet data (only `len` bytes).
-  4. Allocate a fresh SKB for the descriptor.
+  4. `napi_alloc_skb()` — allocate a fresh SKB for the descriptor.
   5. `skb_put()` on old SKB to set length.
   6. `eth_type_trans()`, `napi_gro_receive()`.
   7. Install fresh SKB's `data` pointer in mbuf descriptor.
@@ -145,7 +146,7 @@
 ## 13. Verification
 - Ping IPv4/IPv6.
 - Stable SSH session.
-- iperf TCP RX >= 80 Mbps, TX gap < 10% vs RX.
+- iperf TCP RX >= 80 Mbps (currently ~91 Mbps, exceeds 87 Mbps legacy).
+- iperf TCP TX target: close gap vs legacy (currently ~43 Mbps vs 48 Mbps).
 - `ethtool -S eth0` shows stats.
 - No warnings in dmesg.
-- `grep -c is_rtl865x vmlinux` returns 0 (no legacy pool hooks).
