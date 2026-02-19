@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * rtl8196e_hw.h - Public API for the RTL8196E hardware abstraction layer.
+ */
 #ifndef RTL8196E_HW_H
 #define RTL8196E_HW_H
 

@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * rtl8196e_ring.h - Public API for the RTL8196E TX/RX descriptor ring module.
+ */
 #ifndef RTL8196E_RING_H
 #define RTL8196E_RING_H
 

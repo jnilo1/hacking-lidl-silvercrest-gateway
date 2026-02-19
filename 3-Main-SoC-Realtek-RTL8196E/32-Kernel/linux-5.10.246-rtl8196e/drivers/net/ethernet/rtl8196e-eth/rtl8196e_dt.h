@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0 */
+/*
+ * rtl8196e_dt.h - Devicetree interface descriptor and parser API.
+ */
 #ifndef RTL8196E_DT_H
 #define RTL8196E_DT_H
 

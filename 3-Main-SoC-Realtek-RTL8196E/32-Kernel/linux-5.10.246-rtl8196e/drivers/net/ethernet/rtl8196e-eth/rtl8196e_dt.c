@@ -1,4 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * rtl8196e_dt.c - Devicetree parsing for the RTL8196E Ethernet interface node.
+ *
+ * Reads properties from the &ethernet / interface@0 DT node and fills
+ * struct rtl8196e_dt_iface for use by the driver core.
+ */
 #include <linux/device.h>
 #include <linux/err.h>
 #include <linux/of.h>
@@ -7,6 +13,7 @@
 #include <linux/if_ether.h>
 #include "rtl8196e_dt.h"
 
+/* Populate @iface with safe default values (port 4, VLAN 1, MTU 1500, eth0). */
 static void rtl8196e_dt_defaults(struct rtl8196e_dt_iface *iface)
 {
 	strscpy(iface->ifname, "eth0", sizeof(iface->ifname));
@@ -21,6 +28,7 @@ static void rtl8196e_dt_defaults(struct rtl8196e_dt_iface *iface)
 	iface->link_poll_ms_set = false;
 }
 
+/* Find the interface@0 child node under @np, first by reg=<0>, then by node name. */
 static struct device_node *rtl8196e_dt_find_iface(struct device_node *np)
 {
 	struct device_node *child;
@@ -39,6 +47,7 @@ static struct device_node *rtl8196e_dt_find_iface(struct device_node *np)
 	return NULL;
 }
 
+/* Parse the &ethernet DT node and its interface@0 child; fill @iface with the result. */
 int rtl8196e_dt_parse(struct device *dev, struct rtl8196e_dt_iface *iface)
 {
 	struct device_node *np = dev->of_node;

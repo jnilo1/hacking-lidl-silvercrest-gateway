@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * rtl8196e_main.c - RTL8196E Ethernet driver core.
+ *
+ * Covers: net_device lifecycle, NAPI poll, interrupt handler, TX path,
+ * ethtool statistics, and platform probe/remove.
+ * Targets a single physical port (port 4) on the Lidl Silvercrest Zigbee gateway.
+ */
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/netdevice.h>
@@ -67,6 +74,7 @@ struct rtl8196e_priv {
 	u32 dbg_irqs;
 };
 
+/* Return the port number (0-5) for the lowest set bit in mask, or -EINVAL. */
 static int rtl8196e_port_from_mask(u16 mask)
 {
 	int port;
@@ -79,6 +87,7 @@ static int rtl8196e_port_from_mask(u16 mask)
 	return -EINVAL;
 }
 
+/* Periodic link poll timer: update carrier state and reschedule. */
 static void rtl8196e_link_timer_fn(struct timer_list *t)
 {
 	struct rtl8196e_priv *priv = from_timer(priv, t, link_timer);
@@ -97,6 +106,7 @@ static void rtl8196e_link_timer_fn(struct timer_list *t)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
 }
 
+/* Debug timer: dump TX/RX descriptor state and key IRQ registers to dmesg. */
 static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 {
 	struct rtl8196e_priv *priv = from_timer(priv, t, dbg_timer);
@@ -174,6 +184,7 @@ static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 	}
 }
 
+/* Bring the interface up: init HW, program rings, setup VLAN/NETIF/L2, enable IRQs. */
 static int rtl8196e_open(struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
@@ -253,6 +264,7 @@ err_disable_napi:
 	return ret;
 }
 
+/* Bring the interface down: stop queue, disable IRQs, stop HW, cancel timers. */
 static int rtl8196e_stop(struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
@@ -268,6 +280,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 	return 0;
 }
 
+/* Transmit a packet: linearize if needed, flush data cache, submit to TX ring. */
 static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
@@ -337,6 +350,7 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 	return NETDEV_TX_OK;
 }
 
+/* TX watchdog handler: reclaim in-flight SKBs, reset the TX ring, and restart. */
 static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
@@ -361,6 +375,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 	netif_wake_queue(ndev);
 }
 
+/* NAPI poll: drain RX ring up to budget, reclaim completed TX, wake queue if stalled. */
 static int rtl8196e_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl8196e_priv *priv = container_of(napi, struct rtl8196e_priv, napi);
@@ -388,6 +403,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 	return work_done;
 }
 
+/* Interrupt handler: read and clear CPUIISR, update link state, schedule NAPI. */
 static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 {
 	struct net_device *ndev = dev_id;
@@ -428,6 +444,7 @@ static const struct net_device_ops rtl8196e_netdev_ops = {
 	.ndo_tx_timeout = rtl8196e_tx_timeout,
 };
 
+/* ethtool: return the number of driver-specific statistics. */
 static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
 {
 	(void)ndev;
@@ -436,6 +453,7 @@ static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
 	return -EOPNOTSUPP;
 }
 
+/* ethtool: fill the statistics name strings array. */
 static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 {
 	static const char stats[][ETH_GSTRING_LEN] = {
@@ -455,6 +473,7 @@ static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 	memcpy(data, stats, sizeof(stats));
 }
 
+/* ethtool: fill the statistics values array. */
 static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 				       struct ethtool_stats *stats, u64 *data)
 {
@@ -476,6 +495,7 @@ static const struct ethtool_ops rtl8196e_ethtool_ops = {
 	.get_ethtool_stats = rtl8196e_get_ethtool_stats,
 };
 
+/* Platform probe: allocate netdev, parse DT, create ring, request IRQ, register. */
 static int rtl8196e_probe(struct platform_device *pdev)
 {
 	struct net_device *ndev;
@@ -557,6 +577,7 @@ err_free:
 	return ret;
 }
 
+/* Platform remove: unregister netdev, free IRQ, destroy ring, free netdev. */
 static int rtl8196e_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);

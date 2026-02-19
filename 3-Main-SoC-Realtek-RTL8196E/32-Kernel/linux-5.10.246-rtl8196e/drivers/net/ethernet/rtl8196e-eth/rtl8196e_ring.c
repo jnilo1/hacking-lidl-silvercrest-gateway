@@ -1,4 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * rtl8196e_ring.c - TX/RX descriptor ring management.
+ *
+ * Allocates and manages two RX rings (pkthdr + mbuf) and one TX ring backed by
+ * pools of struct rtl_pktHdr and struct rtl_mBuf descriptors in KSEG1 (uncached)
+ * memory.  Handles SKB lifecycle, DMA cache coherency, and NAPI buffer recycling.
+ */
 #include <linux/slab.h>
 #include <linux/errno.h>
 #include <linux/etherdevice.h>
@@ -34,6 +41,7 @@ struct rtl8196e_ring {
 	struct rtl8196e_rx_buf *rx_bufs;
 };
 
+/* Allocate @size bytes, store the original pointer in *orig_out, return KSEG1 address. */
 static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 {
 	void *p = kmalloc(size, GFP_ATOMIC);
@@ -44,11 +52,13 @@ static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 	return rtl8196e_uncached_addr(p);
 }
 
+/* Extract the descriptor pointer from a raw ring entry (strip ownership and wrap bits). */
 static struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
 {
 	return (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
 }
 
+/* Allocate and initialise TX/RX descriptor rings with pre-allocated SKB buffers. */
 struct rtl8196e_ring *rtl8196e_ring_create(unsigned int tx_cnt,
 					   unsigned int rx_cnt,
 					   unsigned int rx_mbuf_cnt,
@@ -182,6 +192,7 @@ err:
 	return NULL;
 }
 
+/* Free all ring memory: release in-flight SKBs, descriptor pools, and ring arrays. */
 void rtl8196e_ring_destroy(struct rtl8196e_ring *ring)
 {
 	unsigned int i;
@@ -216,21 +227,25 @@ void rtl8196e_ring_destroy(struct rtl8196e_ring *ring)
 	kfree(ring);
 }
 
+/* Return the KSEG1 base address of the TX descriptor array. */
 void *rtl8196e_ring_tx_desc_base(struct rtl8196e_ring *ring)
 {
 	return ring ? ring->tx_ring : NULL;
 }
 
+/* Return the KSEG1 base address of the RX pkthdr descriptor array. */
 void *rtl8196e_ring_rx_pkthdr_base(struct rtl8196e_ring *ring)
 {
 	return ring ? ring->rx_pkthdr_ring : NULL;
 }
 
+/* Return the KSEG1 base address of the RX mbuf descriptor array. */
 void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring)
 {
 	return ring ? ring->rx_mbuf_ring : NULL;
 }
 
+/* Fill the next TX descriptor with @skb's data and hand ownership to the hardware. */
 int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
 				   u16 vid, u16 portlist, u16 flags,
@@ -289,6 +304,7 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	return 0;
 }
 
+/* Walk the TX consumer ring, free completed SKBs, return the number of packets reclaimed. */
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
@@ -338,6 +354,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 	return done_pkts;
 }
 
+/* NAPI RX poll: process up to @budget received packets and hand them to the stack. */
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
 				 struct net_device *dev)
@@ -440,6 +457,7 @@ rearm:
 	return work_done;
 }
 
+/* Return the number of free TX descriptor slots available for new submissions. */
 int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 {
 	int used;
@@ -455,6 +473,7 @@ int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 	return (int)ring->tx_cnt - 1 - used;
 }
 
+/* Pulse the TXFD bit in CPUICR to trigger the TX DMA fetch engine. */
 void rtl8196e_ring_kick_tx(bool was_empty)
 {
 	u32 icr;
@@ -468,6 +487,7 @@ void rtl8196e_ring_kick_tx(bool was_empty)
 	(void)*(volatile u32 *)CPUICR;
 }
 
+/* Reinitialise the TX ring after a watchdog timeout, freeing any in-flight SKBs. */
 void rtl8196e_ring_tx_reset(struct rtl8196e_ring *ring)
 {
 	unsigned int i;
@@ -512,6 +532,7 @@ void rtl8196e_ring_tx_reset(struct rtl8196e_ring *ring)
 	ring->last_tx_submit = 0;
 }
 
+/* Return the ring index of the last successfully submitted TX descriptor (for debug). */
 unsigned int rtl8196e_ring_last_tx_submit(struct rtl8196e_ring *ring)
 {
 	if (!ring)
@@ -519,6 +540,7 @@ unsigned int rtl8196e_ring_last_tx_submit(struct rtl8196e_ring *ring)
 	return ring->last_tx_submit;
 }
 
+/* Return the total capacity (number of slots) of the TX ring. */
 unsigned int rtl8196e_ring_tx_count(struct rtl8196e_ring *ring)
 {
 	if (!ring)
@@ -526,6 +548,7 @@ unsigned int rtl8196e_ring_tx_count(struct rtl8196e_ring *ring)
 	return ring->tx_cnt;
 }
 
+/* Return the raw descriptor entry at @idx in the TX ring (for debug). */
 u32 rtl8196e_ring_tx_entry(struct rtl8196e_ring *ring, unsigned int idx)
 {
 	if (!ring || idx >= ring->tx_cnt)
@@ -533,6 +556,7 @@ u32 rtl8196e_ring_tx_entry(struct rtl8196e_ring *ring, unsigned int idx)
 	return ring->tx_ring[idx];
 }
 
+/* Return the current RX consumer index. */
 unsigned int rtl8196e_ring_rx_index(struct rtl8196e_ring *ring)
 {
 	if (!ring)
@@ -540,6 +564,7 @@ unsigned int rtl8196e_ring_rx_index(struct rtl8196e_ring *ring)
 	return ring->rx_idx;
 }
 
+/* Return the raw pkthdr descriptor entry at @idx in the RX ring (for debug). */
 u32 rtl8196e_ring_rx_pkthdr_entry(struct rtl8196e_ring *ring, unsigned int idx)
 {
 	if (!ring || idx >= ring->rx_cnt)
@@ -547,6 +572,7 @@ u32 rtl8196e_ring_rx_pkthdr_entry(struct rtl8196e_ring *ring, unsigned int idx)
 	return ring->rx_pkthdr_ring[idx];
 }
 
+/* Return the raw mbuf descriptor entry at @idx in the RX mbuf ring (for debug). */
 u32 rtl8196e_ring_rx_mbuf_entry(struct rtl8196e_ring *ring, unsigned int idx)
 {
 	if (!ring || idx >= ring->rx_mbuf_cnt)

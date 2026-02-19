@@ -1,19 +1,29 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * rtl8196e_hw.c - RTL8196E hardware abstraction layer.
+ *
+ * Covers: MMIO read/write helpers, SoC clock and reset sequence, MDIO/PHY access,
+ * hardware table engine (VLAN, NETIF, L2 forwarding tables), and CPU DMA ring
+ * register programming.
+ */
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/string.h>
 #include "rtl8196e_hw.h"
 
+/* Write a 32-bit value to an MMIO-mapped register. */
 static inline void rtl8196e_writel(u32 val, u32 reg)
 {
 	*(volatile u32 *)(reg) = val;
 }
 
+/* Read a 32-bit value from an MMIO-mapped register. */
 static inline u32 rtl8196e_readl(u32 reg)
 {
 	return *(volatile u32 *)(reg);
 }
 
+/* Poll MDCIOSR until the MDC/MDIO bus is idle; return -ETIMEDOUT on failure. */
 static int rtl8196e_mdio_wait_ready(void)
 {
 	int i;
@@ -27,6 +37,7 @@ static int rtl8196e_mdio_wait_ready(void)
 	return -ETIMEDOUT;
 }
 
+/* Read PHY register @reg from PHY address @phy via MDIO; store result in *val. */
 static int rtl8196e_mdio_read(int phy, int reg, u16 *val)
 {
 	int ret;
@@ -40,12 +51,14 @@ static int rtl8196e_mdio_read(int phy, int reg, u16 *val)
 	return 0;
 }
 
+/* Write @val to PHY register @reg on PHY address @phy via MDIO. */
 static int rtl8196e_mdio_write(int phy, int reg, u16 val)
 {
 	rtl8196e_writel(COMMAND_WRITE | (phy << PHYADD_OFFSET) | (reg << REGADD_OFFSET) | val, MDCIOCR);
 	return rtl8196e_mdio_wait_ready();
 }
 
+/* Poll TBL_ACCESS_CTRL until the hardware table access engine is idle. */
 static int rtl8196e_table_wait_ready(void)
 {
 	int i;
@@ -59,6 +72,7 @@ static int rtl8196e_table_wait_ready(void)
 	return -ETIMEDOUT;
 }
 
+/* Assert TLU_CTRL_START and wait for TLU_CTRL_READY; return -ETIMEDOUT on failure. */
 static int rtl8196e_tlu_start(void)
 {
 	u32 tlu;
@@ -75,6 +89,7 @@ static int rtl8196e_tlu_start(void)
 	return -ETIMEDOUT;
 }
 
+/* Clear TLU_CTRL_START and TLU_CTRL_READY to stop the Table Lookup Unit. */
 static void rtl8196e_tlu_stop(void)
 {
 	u32 tlu;
@@ -83,6 +98,7 @@ static void rtl8196e_tlu_stop(void)
 	rtl8196e_writel(tlu & ~(TLU_CTRL_START | TLU_CTRL_READY), TLU_CTRL);
 }
 
+/* Write @nwords data words to a hardware table entry of @type at @index. */
 static int rtl8196e_table_write(u32 type, u32 index, const u32 *words, u32 nwords)
 {
 	u32 addr = ASIC_TABLE_BASE + (type << 16) + (index << 5);
@@ -133,6 +149,10 @@ out_stop:
 	return ret;
 }
 
+/*
+ * Write two 32-bit words to L2 forwarding table entry @index via both the table
+ * access engine and a direct ASIC RAM mirror write for silicon compatibility.
+ */
 static int rtl8196e_l2_write_entry(u32 index, u32 word0, u32 word1)
 {
 	u32 addr = ASIC_TABLE_BASE + (index << 5);
@@ -190,6 +210,7 @@ out_stop:
 	return ret;
 }
 
+/* Write a single VLAN table entry at @index with @word0 (3-word layout, words 1-2 zeroed). */
 static int rtl8196e_vlan_write_entry(u32 index, u32 word0)
 {
 	u32 words[3] = { word0, 0, 0 };
@@ -197,6 +218,7 @@ static int rtl8196e_vlan_write_entry(u32 index, u32 word0)
 	return rtl8196e_table_write(RTL8196E_TBL_VLAN, index, words, 3);
 }
 
+/* Clear all entries in the VLAN table. */
 static int rtl8196e_vlan_clear_table(void)
 {
 	u32 index;
@@ -211,6 +233,7 @@ static int rtl8196e_vlan_clear_table(void)
 	return 0;
 }
 
+/* Clear all entries in the NETIF table. */
 static int rtl8196e_netif_clear_table(void)
 {
 	u32 words[4] = { 0, 0, 0, 0 };
@@ -226,6 +249,7 @@ static int rtl8196e_netif_clear_table(void)
 	return 0;
 }
 
+/* Clear all 1024 entries in the L2 forwarding table. */
 static int rtl8196e_l2_clear_table(void)
 {
 	u32 index;
@@ -240,6 +264,10 @@ static int rtl8196e_l2_clear_table(void)
 	return 0;
 }
 
+/*
+ * Read L2 entry @index, double-checking by reading twice until both reads agree,
+ * to guard against transient update races in the ASIC RAM.
+ */
 static int rtl8196e_l2_read_entry(u32 index, u32 *word0, u32 *word1)
 {
 	u32 addr = ASIC_TABLE_BASE + (index << 5);
@@ -269,6 +297,7 @@ static int rtl8196e_l2_read_entry(u32 index, u32 *word0, u32 *word1)
 	return -EIO;
 }
 
+/* Full hardware initialisation: enable switch clock, MEMCR, full reset, clear L2 table. */
 int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 {
 	u32 clk;
@@ -310,6 +339,7 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	return 0;
 }
 
+/* Set the port default VLAN ID (PVID) for @port in the PVCR register pair. */
 static int rtl8196e_set_pvid(u32 port, u32 pvid)
 {
 	u32 reg;
@@ -329,6 +359,7 @@ static int rtl8196e_set_pvid(u32 port, u32 pvid)
 	return 0;
 }
 
+/* Assign NETIF table index @netif to @port in the PLITIMR register. */
 static int rtl8196e_set_port_netif(u32 port, u32 netif)
 {
 	u32 reg;
@@ -346,6 +377,7 @@ static int rtl8196e_set_port_netif(u32 port, u32 netif)
 	return 0;
 }
 
+/* Program the VLAN table entry 0 and set PVIDs for all member ports. */
 int rtl8196e_hw_vlan_setup(struct rtl8196e_hw *hw, u16 vid, u8 fid,
 			   u32 member_ports, u32 untag_ports)
 {
@@ -384,6 +416,7 @@ int rtl8196e_hw_vlan_setup(struct rtl8196e_hw *hw, u16 vid, u8 fid,
 	return 0;
 }
 
+/* Program NETIF table entry 0 with MAC, VLAN, MTU and member ports, then assign ports. */
 int rtl8196e_hw_netif_setup(struct rtl8196e_hw *hw, const u8 *mac, u16 vid,
 			    u16 mtu, u32 member_ports)
 {
@@ -437,6 +470,7 @@ int rtl8196e_hw_netif_setup(struct rtl8196e_hw *hw, const u8 *mac, u16 vid,
 	return 0;
 }
 
+/* Reset the PHY via PCR, then enable auto-negotiation via MDIO BMCR write. */
 int rtl8196e_hw_init_phy(struct rtl8196e_hw *hw, int port, int phy_id)
 {
 	u32 pcr;
@@ -462,6 +496,7 @@ int rtl8196e_hw_init_phy(struct rtl8196e_hw *hw, int port, int phy_id)
 	return rtl8196e_mdio_write(phy_id, 0, bmcr);
 }
 
+/* Return true if the link is up on @port, by reading the port status register. */
 bool rtl8196e_hw_link_up(struct rtl8196e_hw *hw, int port)
 {
 	u32 status;
@@ -474,6 +509,7 @@ bool rtl8196e_hw_link_up(struct rtl8196e_hw *hw, int port)
 	return (status & PortStatusLinkUp) != 0;
 }
 
+/* Configure L2 forwarding mode, flood control, aging, queue count, and STP state. */
 void rtl8196e_hw_l2_setup(struct rtl8196e_hw *hw)
 {
 	u32 swtcr;
@@ -538,6 +574,7 @@ void rtl8196e_hw_l2_setup(struct rtl8196e_hw *hw)
 	}
 }
 
+/* Enable trap-to-CPU for all unknown unicast traffic (debug fallback when L2 entry fails). */
 void rtl8196e_hw_l2_trap_enable(struct rtl8196e_hw *hw)
 {
 	u32 swtcr;
@@ -559,6 +596,7 @@ void rtl8196e_hw_l2_trap_enable(struct rtl8196e_hw *hw)
 	rtl8196e_writel(cscr, CSCR);
 }
 
+/* Add a static toCPU L2 entry for @mac so frames destined to it are forwarded to the CPU. */
 int rtl8196e_hw_l2_add_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid, u32 portmask)
 {
 	static const u8 fid_hash[] = { 0x00, 0x0f, 0xf0, 0xff };
@@ -592,6 +630,7 @@ int rtl8196e_hw_l2_add_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid, 
 	return rtl8196e_l2_write_entry(index, word0, word1);
 }
 
+/* Add a static broadcast L2 entry to flood frames to all @portmask member ports. */
 int rtl8196e_hw_l2_add_bcast_entry(struct rtl8196e_hw *hw, u8 fid, u32 portmask)
 {
 	static const u8 bcast[6] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
@@ -599,6 +638,7 @@ int rtl8196e_hw_l2_add_bcast_entry(struct rtl8196e_hw *hw, u8 fid, u32 portmask)
 	return rtl8196e_hw_l2_add_cpu_entry(hw, bcast, fid, portmask);
 }
 
+/* Verify the toCPU L2 entry for @mac is readable and matches the expected content. */
 int rtl8196e_hw_l2_check_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid)
 {
 	static const u8 fid_hash[] = { 0x00, 0x0f, 0xf0, 0xff };
@@ -642,6 +682,7 @@ int rtl8196e_hw_l2_check_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid
 	return -EIO;
 }
 
+/* Enable TX and RX DMA in CPUICR, then assert TRXRDY to start the switch. */
 void rtl8196e_hw_start(struct rtl8196e_hw *hw)
 {
 	u32 icr = TXCMD | RXCMD | BUSBURST_32WORDS | MBUF_2048BYTES | EXCLUDE_CRC;
@@ -651,6 +692,7 @@ void rtl8196e_hw_start(struct rtl8196e_hw *hw)
 	rtl8196e_writel(TRXRDY, SIRR);
 }
 
+/* Disable TX and RX DMA in CPUICR and deassert TRXRDY. */
 void rtl8196e_hw_stop(struct rtl8196e_hw *hw)
 {
 	u32 icr = rtl8196e_readl(CPUICR);
@@ -660,6 +702,7 @@ void rtl8196e_hw_stop(struct rtl8196e_hw *hw)
 	rtl8196e_writel(0, SIRR);
 }
 
+/* Program all six CPURPDCR registers with the RX pkthdr ring base and CPURMDCR0 with mbuf base. */
 void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 {
 	(void)hw;
@@ -672,12 +715,14 @@ void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 	rtl8196e_writel((u32)rtl8196e_uncached_addr(mbuf), CPURMDCR0);
 }
 
+/* Program CPUTPDCR0 with the TX pkthdr ring base address. */
 void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 {
 	(void)hw;
 	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPUTPDCR0);
 }
 
+/* Unmask RX done, TX done, link change and descriptor runout interrupts in CPUIIMR. */
 void rtl8196e_hw_enable_irqs(struct rtl8196e_hw *hw)
 {
 	u32 mask = RX_DONE_IE_ALL | TX_ALL_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
@@ -685,6 +730,7 @@ void rtl8196e_hw_enable_irqs(struct rtl8196e_hw *hw)
 	rtl8196e_writel(mask, CPUIIMR);
 }
 
+/* Mask all interrupts by writing 0 to CPUIIMR. */
 void rtl8196e_hw_disable_irqs(struct rtl8196e_hw *hw)
 {
 	(void)hw;
