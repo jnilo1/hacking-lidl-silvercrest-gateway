@@ -154,22 +154,34 @@ The driver reads from the existing `&ethernet` node in `rtl8196e.dts`:
 
 Only `interface@0` is used. Extra interface nodes are ignored with a warning.
 
-### Known issue: TX throughput
+### TX path design
 
-TX (gateway -> host) is ~43 Mbps vs ~91 Mbps RX (host -> gateway).
-See `TX_OPTIMIZATION_MEMO.md` for investigation paths:
-- Batch TX kicks (MMIO reduction)
-- Interrupt/timer balance
-- Descriptor/threshold tuning
-- Cache flush granularity
-- TCP window effects
+The TX path is optimized for the uniprocessor Lexra SoC:
 
-### Performance targets
+- **No spinlock**: `start_xmit` runs with BH disabled on this UP system, so
+  softirq (NAPI, timers) cannot preempt. The ISR doesn't touch TX state.
+- **No TX timer**: NAPI poll handles TX reclaim + queue wake via TX_DONE IRQs.
+  Emergency reclaim in `start_xmit` handles ring-full edge cases.
+- **No BQL**: Byte Queue Limits add atomic ops overhead unnecessary on a
+  single-queue 100 Mbps embedded SoC.
+- **`napi_consume_skb`**: TX reclaim uses batched SKB freeing when called
+  from NAPI context (budget > 0), falling back to `dev_kfree_skb_any`
+  equivalent when budget == 0.
+- **Cache flush split**: packet data is flushed before `tx_submit`, only
+  descriptor flushes (pkthdr + mbuf) happen inside the submit function.
+- **TXFD kick on every packet**: hardware requires a pulse on every submit
+  (conditional kick breaks boot — tested and confirmed).
 
-- iperf TCP RX >= 80 Mbps (currently ~91 Mbps, exceeds 87 Mbps legacy)
-- iperf TCP TX gap < 10% vs RX (currently ~43 Mbps vs 48 Mbps legacy)
+### Performance
+
+- iperf TCP RX: **~91 Mbps** (exceeds legacy 86.6 Mbps by +5%)
+- iperf TCP TX: **~45 Mbps** (legacy: 48.1 Mbps, gap ~7%)
 - No warnings in dmesg
 - Stable SSH, ping IPv4/IPv6
+
+TX gap analysis: the ~3 Mbps difference vs legacy is likely structural —
+the cost of a clean Linux driver (proper SKB lifecycle, standard APIs)
+vs the legacy driver's hand-optimized static buffer pool and SDK code.
 
 ## Kernel config differences (vs legacy)
 
@@ -234,7 +246,7 @@ To flash the new driver, always use `tftp` directly with `kernel-rtl8196e-eth.im
 | Test | rtl819x (legacy) | rtl8196e-eth (current) |
 |------|-------------------|------------------------|
 | TCP RX (host → gw) | 86.6 Mbps | ~91 Mbps |
-| TCP TX (gw → host) | 48.1 Mbps | ~43 Mbps |
+| TCP TX (gw → host) | 48.1 Mbps | ~45 Mbps |
 
 ## Reference: the legacy driver (rtl819x)
 

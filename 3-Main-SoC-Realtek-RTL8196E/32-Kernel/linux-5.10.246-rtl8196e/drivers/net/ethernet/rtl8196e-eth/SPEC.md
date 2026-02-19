@@ -88,17 +88,22 @@
 - `rtl8196e_start_xmit()` → `rtl8196e_ring_tx_submit()`:
   - Non-linear SKBs linearized via `skb_linearize()`.
   - Short packets padded to `ETH_ZLEN`, oversized (>1518) rejected.
-  - Single cache flush per packet (`dma_cache_wback_inv` on data + descriptors).
+  - Packet data flushed before submit (`dma_cache_wback_inv` on `skb->data`).
+  - Descriptor flushes (pkthdr + mbuf) inside `tx_submit`.
+  - No spinlock: uniprocessor SoC, `start_xmit` runs with BH disabled.
   - Atomic ownership transfer (single write preserving WRAP bit).
 - TX kick: `TXFD` pulse on every submit via `rtl8196e_ring_kick_tx()`.
+  Hardware requires kick for every packet (conditional kick breaks boot).
 - TX reclaim (`rtl8196e_ring_tx_reclaim()`):
-  - Called from NAPI poll (opportunistic).
-  - Called from TX timer (2 ms, `RTL8196E_TX_TIMER_MS`) when `tx_pending > 0`.
-  - Called from `start_xmit` on submit failure (emergency reclaim, under `local_bh_disable`).
+  - Called from NAPI poll with `napi_budget > 0` (uses `napi_consume_skb`
+    for batched SKB freeing).
+  - Called from `start_xmit` on submit failure (emergency reclaim).
+  - No TX timer — NAPI poll handles reclaim + queue wake via TX_DONE IRQs.
 - Flow control:
-  - `netif_stop_queue()` when free count < 32 (`RTL8196E_TX_STOP_THRESH`).
-  - `netif_wake_queue()` when free count >= 128 (`RTL8196E_TX_WAKE_THRESH`).
-- BQL: `netdev_tx_sent_queue()` / `netdev_tx_completed_queue()`.
+  - `netif_stop_queue()` when free count < 16 (`RTL8196E_TX_STOP_THRESH`).
+  - `netif_wake_queue()` when free count >= 64 (`RTL8196E_TX_WAKE_THRESH`),
+    checked in NAPI poll after TX reclaim.
+- No BQL (unnecessary overhead on single-queue 100 Mbps embedded SoC).
 - TX timeout: full TX ring reset with SKB cleanup, re-init HW TX ring.
 
 ## 9. PHY / Link
@@ -115,9 +120,8 @@
 | `RTL8196E_RX_DESC` | 500 | `rtl8196e_main.c` |
 | `RTL8196E_RX_MBUF_DESC` | 500 | `rtl8196e_main.c` |
 | `RTL8196E_CLUSTER_SIZE` | 1700 | `rtl8196e_main.c` (buf_size passed to ring) |
-| `RTL8196E_TX_STOP_THRESH` | 32 | `rtl8196e_main.c` |
-| `RTL8196E_TX_WAKE_THRESH` | 128 | `rtl8196e_main.c` |
-| `RTL8196E_TX_TIMER_MS` | 2 | `rtl8196e_main.c` |
+| `RTL8196E_TX_STOP_THRESH` | 16 | `rtl8196e_main.c` |
+| `RTL8196E_TX_WAKE_THRESH` | 64 | `rtl8196e_main.c` |
 
 ## 11. Init sequence (in `rtl8196e_open()`)
 1. Enable NAPI.
@@ -147,6 +151,6 @@
 - Ping IPv4/IPv6.
 - Stable SSH session.
 - iperf TCP RX >= 80 Mbps (currently ~91 Mbps, exceeds 87 Mbps legacy).
-- iperf TCP TX target: close gap vs legacy (currently ~43 Mbps vs 48 Mbps).
+- iperf TCP TX: ~45 Mbps (legacy: 48 Mbps, ~7% gap — likely structural).
 - `ethtool -S eth0` shows stats.
 - No warnings in dmesg.
