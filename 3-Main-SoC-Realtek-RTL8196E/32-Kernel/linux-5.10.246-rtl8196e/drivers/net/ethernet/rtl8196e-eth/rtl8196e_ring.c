@@ -4,7 +4,6 @@
 #include <linux/etherdevice.h>
 #include <linux/if_ether.h>
 #include <linux/skbuff.h>
-#include <linux/spinlock.h>
 #include <linux/kernel.h>
 #include <asm/io.h>
 #include "rtl8196e_ring.h"
@@ -33,7 +32,6 @@ struct rtl8196e_ring {
 	unsigned int rx_debug_bad;
 	size_t buf_size;
 	struct rtl8196e_rx_buf *rx_bufs;
-	spinlock_t tx_lock;
 };
 
 static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
@@ -73,7 +71,6 @@ struct rtl8196e_ring *rtl8196e_ring_create(unsigned int tx_cnt,
 	ring->rx_cnt = rx_cnt;
 	ring->rx_mbuf_cnt = rx_mbuf_cnt;
 	ring->buf_size = buf_size;
-	spin_lock_init(&ring->tx_lock);
 
 	ring->tx_ring = rtl8196e_alloc_uncached(tx_cnt * sizeof(u32), &ring->tx_ring_alloc);
 	ring->rx_pkthdr_ring = rtl8196e_alloc_uncached(rx_cnt * sizeof(u32), &ring->rx_pkthdr_ring_alloc);
@@ -239,7 +236,6 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   u16 vid, u16 portlist, u16 flags,
 				   bool *was_empty)
 {
-	unsigned long irq_flags;
 	unsigned int next;
 	struct rtl_pktHdr *ph;
 	struct rtl_mBuf *mb;
@@ -252,16 +248,12 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	if (len > 1518)
 		return -EINVAL;
 
-	spin_lock_irqsave(&ring->tx_lock, irq_flags);
-
 	next = ring->tx_prod + 1;
 	if (next >= ring->tx_cnt)
 		next = 0;
 
-	if (next == ring->tx_cons) {
-		spin_unlock_irqrestore(&ring->tx_lock, irq_flags);
+	if (next == ring->tx_cons)
 		return -ENOSPC;
-	}
 
 	if (was_empty)
 		*was_empty = (ring->tx_prod == ring->tx_cons);
@@ -282,7 +274,7 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	ph->ph_srcExtPortNum = 0;
 	ph->ph_flags = flags;
 
-	/* Flush descriptors only (packet data flushed by caller before lock) */
+	/* Flush descriptors (packet data flushed by caller) */
 	dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 	dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 
@@ -293,7 +285,6 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	wmb();
 
 	ring->tx_prod = next;
-	spin_unlock_irqrestore(&ring->tx_lock, irq_flags);
 
 	return 0;
 }

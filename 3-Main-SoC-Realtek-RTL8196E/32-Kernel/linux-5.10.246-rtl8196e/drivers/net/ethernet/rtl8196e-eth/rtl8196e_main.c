@@ -24,7 +24,6 @@
 
 #define RTL8196E_TX_STOP_THRESH 16
 #define RTL8196E_TX_WAKE_THRESH 64
-#define RTL8196E_TX_TIMER_MS    2
 
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
@@ -48,10 +47,8 @@ struct rtl8196e_priv {
 	struct rtl8196e_hw hw;
 	struct rtl8196e_ring *ring;
 	struct rtl8196e_dt_iface iface;
-	struct timer_list tx_timer;
 	struct timer_list link_timer;
 	struct timer_list dbg_timer;
-	atomic_t tx_pending;
 	u16 vlan_id;
 	u16 portmask;
 	int phy_port;
@@ -79,28 +76,6 @@ static int rtl8196e_port_from_mask(u16 mask)
 	}
 
 	return -EINVAL;
-}
-
-static void rtl8196e_tx_timer_fn(struct timer_list *t)
-{
-	struct rtl8196e_priv *priv = from_timer(priv, t, tx_timer);
-	unsigned int pkts = 0, bytes = 0;
-	int free_count;
-
-	if (!priv->ring)
-		return;
-
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
-
-	free_count = rtl8196e_ring_tx_free_count(priv->ring);
-	if (free_count >= RTL8196E_TX_WAKE_THRESH && netif_queue_stopped(priv->ndev))
-		netif_wake_queue(priv->ndev);
-
-	if (atomic_read(&priv->tx_pending) && free_count < RTL8196E_TX_WAKE_THRESH) {
-		mod_timer(&priv->tx_timer, jiffies + msecs_to_jiffies(RTL8196E_TX_TIMER_MS));
-	} else {
-		atomic_set(&priv->tx_pending, 0);
-	}
 }
 
 static void rtl8196e_link_timer_fn(struct timer_list *t)
@@ -285,7 +260,6 @@ static int rtl8196e_stop(struct net_device *ndev)
 	rtl8196e_hw_disable_irqs(&priv->hw);
 	rtl8196e_hw_stop(&priv->hw);
 	napi_disable(&priv->napi);
-	del_timer_sync(&priv->tx_timer);
 	del_timer_sync(&priv->link_timer);
 	del_timer_sync(&priv->dbg_timer);
 	netif_carrier_off(ndev);
@@ -299,7 +273,6 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 	bool was_empty = false;
 	int ret;
 	int free_count;
-	u32 debug_val;
 
 	if (!priv->ring || !priv->portmask) {
 		dev_kfree_skb_any(skb);
@@ -313,7 +286,7 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 		}
 	}
 
-	/* Flush packet data before spinlock (descriptor flush stays inside) */
+	/* Flush packet data (descriptor flushes done inside tx_submit) */
 	{
 		unsigned int flush_len = skb->len < ETH_ZLEN ? ETH_ZLEN : skb->len;
 		dma_cache_wback_inv((unsigned long)skb->data, flush_len);
@@ -323,9 +296,8 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 					     priv->vlan_id, priv->portmask,
 					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
-	debug_val = READ_ONCE(priv->tx_debug_once);
-	if (debug_val == 0) {
-		WRITE_ONCE(priv->tx_debug_once, 1);
+	if (unlikely(priv->tx_debug_once == 0)) {
+		priv->tx_debug_once = 1;
 		priv->tx_dbg_portmask = priv->portmask;
 		priv->tx_dbg_vid = priv->vlan_id;
 		priv->tx_dbg_len = skb->len;
@@ -336,22 +308,17 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 		if (rtl8196e_debug)
 			mod_timer(&priv->dbg_timer, jiffies + msecs_to_jiffies(200));
 	}
-	if (ret < 0) {
+	if (unlikely(ret < 0)) {
 		unsigned int pkts = 0, bytes = 0;
 
 		if (net_ratelimit())
 			netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
-		local_bh_disable();
 		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
-		local_bh_enable();
 		ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
 					     priv->vlan_id, priv->portmask,
 					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
 		if (ret < 0) {
-			netdev_warn(ndev, "xmit submit still failed (%d)\n", ret);
-			atomic_set(&priv->tx_pending, 1);
-			mod_timer(&priv->tx_timer, jiffies + msecs_to_jiffies(RTL8196E_TX_TIMER_MS));
 			netif_stop_queue(ndev);
 			return NETDEV_TX_BUSY;
 		}
@@ -363,11 +330,8 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 	ndev->stats.tx_bytes += skb->len;
 
 	free_count = rtl8196e_ring_tx_free_count(priv->ring);
-	if (free_count < RTL8196E_TX_STOP_THRESH) {
+	if (unlikely(free_count < RTL8196E_TX_STOP_THRESH))
 		netif_stop_queue(ndev);
-		atomic_set(&priv->tx_pending, 1);
-		mod_timer(&priv->tx_timer, jiffies + msecs_to_jiffies(RTL8196E_TX_TIMER_MS));
-	}
 
 	return NETDEV_TX_OK;
 }
@@ -393,7 +357,6 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 	rtl8196e_hw_start(&priv->hw);
 	rtl8196e_hw_enable_irqs(&priv->hw);
 
-	atomic_set(&priv->tx_pending, 0);
 	netif_wake_queue(ndev);
 }
 
@@ -556,10 +519,8 @@ static int rtl8196e_probe(struct platform_device *pdev)
 		goto err_free;
 	}
 
-	timer_setup(&priv->tx_timer, rtl8196e_tx_timer_fn, 0);
 	timer_setup(&priv->link_timer, rtl8196e_link_timer_fn, 0);
 	timer_setup(&priv->dbg_timer, rtl8196e_dbg_timer_fn, 0);
-	atomic_set(&priv->tx_pending, 0);
 
 	netif_napi_add(ndev, &priv->napi, rtl8196e_poll, 64);
 	ndev->netdev_ops = &rtl8196e_netdev_ops;
