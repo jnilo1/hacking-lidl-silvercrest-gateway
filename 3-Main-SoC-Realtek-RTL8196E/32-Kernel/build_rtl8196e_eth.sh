@@ -174,10 +174,13 @@ if [ ! -f "$BUILD_DIR/Makefile" ]; then
 
     cd "$BUILD_DIR"
 
-    # Apply patches
+    # Apply patches (skip skbuff.c hook — only needed by legacy rtl819x driver)
     echo "Applying patches..."
     for patch in "${SCRIPT_DIR}/patches"/*.patch; do
         if [ -f "$patch" ]; then
+            case "$(basename "$patch")" in
+                *skbuff*) echo "  $(basename "$patch") (SKIPPED — legacy only)"; continue ;;
+            esac
             echo "  $(basename "$patch")"
             patch -p1 -N < "$patch" 2>/dev/null || echo "    (already applied)"
         fi
