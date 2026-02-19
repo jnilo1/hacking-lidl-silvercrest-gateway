@@ -250,6 +250,7 @@ with it when you need a known-working reference.
 
 ## Important rules
 
+- **Do NOT add "Co-Authored-By" lines to git commit messages.**
 - **Never edit files in the build tree** (`linux-5.10.246-rtl8196e-eth/`).
   Always edit the overlay (`linux-5.10.246-rtl8196e/`) -- changes are synced
   on next build.
