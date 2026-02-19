@@ -84,7 +84,6 @@ static int rtl8196e_port_from_mask(u16 mask)
 static void rtl8196e_tx_timer_fn(struct timer_list *t)
 {
 	struct rtl8196e_priv *priv = from_timer(priv, t, tx_timer);
-	struct netdev_queue *txq;
 	unsigned int pkts = 0, bytes = 0;
 	int free_count;
 
@@ -92,10 +91,6 @@ static void rtl8196e_tx_timer_fn(struct timer_list *t)
 		return;
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
-	if (pkts) {
-		txq = netdev_get_tx_queue(priv->ndev, 0);
-		netdev_tx_completed_queue(txq, pkts, bytes);
-	}
 
 	free_count = rtl8196e_ring_tx_free_count(priv->ring);
 	if (free_count >= RTL8196E_TX_WAKE_THRESH && netif_queue_stopped(priv->ndev))
@@ -364,8 +359,6 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 
 	rtl8196e_ring_kick_tx(was_empty);
 
-	txq = netdev_get_tx_queue(ndev, 0);
-	netdev_tx_sent_queue(txq, skb->len);
 	ndev->stats.tx_packets++;
 	ndev->stats.tx_bytes += skb->len;
 
@@ -407,17 +400,12 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 static int rtl8196e_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl8196e_priv *priv = container_of(napi, struct rtl8196e_priv, napi);
-	struct netdev_queue *txq;
 	unsigned int pkts = 0, bytes = 0;
 	int work_done;
 
 	work_done = rtl8196e_ring_rx_poll(priv->ring, budget, napi, priv->ndev);
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes);
-	if (pkts) {
-		txq = netdev_get_tx_queue(priv->ndev, 0);
-		netdev_tx_completed_queue(txq, pkts, bytes);
-	}
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {
