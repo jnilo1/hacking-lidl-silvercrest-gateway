@@ -51,7 +51,7 @@ dma_cache_wback_inv(mb, sizeof(*mb));
 
 1. The application (iperf) writes the payload → lands in L1 cache, dirty.
 2. The kernel copies it into the skb buffer → more dirty lines in L1 cache.
-3. `dma_cache_wback_inv()` forces every dirty cache line (32 bytes each) to
+3. `dma_cache_wback_inv()` forces every dirty cache line (16 bytes each) to
    be **written back to DRAM** before the DMA engine can read it.
 
 Each payload byte therefore traverses the DRAM bus **twice** from the CPU's
@@ -80,9 +80,9 @@ Each payload byte touches the DRAM bus **once** from the CPU's perspective
 
 | Operation                | TX                                  | RX                        |
 |--------------------------|-------------------------------------|---------------------------|
-| Data cache op (~47 lines)| ~47 × (writeback + inv) ≈ 300 cyc  | ~47 × inv ≈ 50 cycles     |
-| Descriptor cache ops     | ~2 × (writeback + inv) ≈ 12 cycles  | ~2 × inv ≈ 4 cycles       |
-| **Total cache overhead** | **~312 cycles (~1.25 µs)**          | **~54 cycles (~0.22 µs)** |
+| Data cache op (~94 lines)| ~94 × (writeback + inv) ≈ 300 cyc  | ~94 × inv ≈ 50 cycles     |
+| Descriptor cache ops     | ~4 × (writeback + inv) ≈ 24 cycles  | ~4 × inv ≈ 8 cycles       |
+| **Total cache overhead** | **~324 cycles (~1.30 µs)**          | **~58 cycles (~0.23 µs)** |
 
 This 6× difference in cache overhead per packet is the dominant contributor
 to the 2:1 throughput asymmetry, compounded by secondary factors below.
@@ -116,14 +116,14 @@ TX (gw → host):
   tcp_sendmsg: copy user→kernel skb → more dirty lines
   TCP header build + software checksum (~1460 bytes)
   dma_cache_wback_inv(data, ~1500B)  ← dominant cost: ~300 cycles + DRAM stall
-  dma_cache_wback_inv(descriptors)   ← ~12 cycles
+  dma_cache_wback_inv(descriptors)   ← ~24 cycles
   Ring submit + TXFD kick             ← small
   TCP congestion control + ACK rx     ← moderate
 
 RX (host → gw):
   DMA writes payload to DRAM          ← done by hardware, no CPU stall
   dma_cache_inv(data, ~1500B)         ← ~50 cycles, no DRAM write
-  dma_cache_inv(descriptors)          ← ~4 cycles
+  dma_cache_inv(descriptors)          ← ~8 cycles
   Buffer recycle (napi_alloc_skb)     ← small
   TCP receive + deliver to socket     ← moderate
   Application reads from socket       ← passive
