@@ -15,6 +15,7 @@
 #include <asm/io.h>
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
+#include "rtl8196e_imem.h"
 
 struct rtl8196e_ring {
 	u32 *tx_ring;
@@ -355,6 +356,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 }
 
 /* NAPI RX poll: process up to @budget received packets and hand them to the stack. */
+__MIPS16 __iram_fwd
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
 				 struct net_device *dev)

@@ -8,6 +8,7 @@
 #include <linux/types.h>
 #include <linux/netdevice.h>
 #include "rtl8196e_desc.h"
+#include "rtl8196e_imem.h"
 
 struct rtl8196e_ring;
 
@@ -35,6 +36,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *bytes,
 				    int napi_budget);
 
+__MIPS16 __iram_fwd
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
 				 struct net_device *dev);

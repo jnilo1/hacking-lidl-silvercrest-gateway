@@ -5,3 +5,21 @@ config RTL8196E_ETH
 	help
 	  New minimal RTL8196E Ethernet driver (single-port, zero-copy).
 	  Currently a skeleton; not functional yet.
+
+config RTL8196E_IMEM
+	bool "Use on-chip I-MEM for hot-path functions"
+	depends on RTL8196E_ETH
+	default n
+	help
+	  Place rtl8196e_ring_rx_poll() in the RTL8196E 16 KB on-chip
+	  instruction SRAM (I-MEM), giving zero wait-state instruction
+	  fetches on the NAPI RX hot path.
+
+	  Also compiles rx_poll with the MIPS16e ISA extension (16-bit
+	  compressed instructions, ~30% smaller code), which is applied
+	  unconditionally via __MIPS16 regardless of this option.
+
+	  Requires platform-level I-MEM initialisation (_imem_dmem_init)
+	  which programs the Lexra COP3 coprocessor at boot.
+
+	  Say Y to enable. Safe to leave N; MIPS16e is always active.
