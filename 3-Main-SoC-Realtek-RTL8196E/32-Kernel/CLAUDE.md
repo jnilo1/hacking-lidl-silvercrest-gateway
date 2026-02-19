@@ -256,6 +256,17 @@ ported from Realtek's 2.6.30 SDK. It's complex (AsicDriver, l2Driver, vlan,
 netif, swNic layers) but functional. Use `build_kernel.sh` to build a kernel
 with it when you need a known-working reference.
 
+### Size comparison (pure LOC, excluding comments and blank lines)
+
+| Driver | Files | Pure LOC |
+|--------|-------|----------|
+| `rtl8196e-eth` (new) | 9 | **1 842** |
+| `rtl819x` (legacy) | 17 | **9 664** |
+
+**5.2× reduction** in code size for equivalent (and better) functionality on this
+hardware. The legacy driver carries unused layers (FDB, event manager, full L2/VLAN
+tables) inherited from the 2.6.30 SDK.
+
 ## Important rules
 
 - **Do NOT add "Co-Authored-By" lines to git commit messages.**

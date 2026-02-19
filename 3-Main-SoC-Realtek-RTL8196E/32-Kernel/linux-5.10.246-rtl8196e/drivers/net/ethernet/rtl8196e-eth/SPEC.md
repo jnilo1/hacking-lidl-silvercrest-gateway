@@ -55,16 +55,21 @@
 
 ## 6. File architecture
 
-| File | Role |
-|------|------|
-| `rtl8196e_main.c` | net_device, NAPI poll, ISR, TX xmit, ethtool, probe/remove |
-| `rtl8196e_hw.c/h` | MMIO registers, init sequence, KSEG1 helpers, PHY/MDIO, VLAN/NETIF/L2 tables |
-| `rtl8196e_ring.c/h` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache ops |
-| `rtl8196e_dt.c/h` | Devicetree parsing (`interface@0` properties) |
-| `rtl8196e_desc.h` | Hardware descriptor structures (`rtl_pktHdr`, `rtl_mBuf`) |
-| `rtl8196e_regs.h` | Register definitions (trimmed to what's used) |
-| `Kconfig` | Kernel config entry |
-| `Makefile` | Build: `rtl8196e_main.o rtl8196e_hw.o rtl8196e_ring.o rtl8196e_dt.o` |
+| File | Role | Pure LOC |
+|------|------|----------|
+| `rtl8196e_main.c` | net_device, NAPI poll, ISR, TX xmit, ethtool, probe/remove | 498 |
+| `rtl8196e_hw.c` | MMIO registers, init sequence, KSEG1 helpers, PHY/MDIO, VLAN/NETIF/L2 tables | 550 |
+| `rtl8196e_ring.c` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache ops | 433 |
+| `rtl8196e_dt.c` | Devicetree parsing (`interface@0` properties) | 68 |
+| `rtl8196e_regs.h` | Register definitions (trimmed to what's used) | 120 |
+| `rtl8196e_desc.h` | Hardware descriptor structures (`rtl_pktHdr`, `rtl_mBuf`) | 89 |
+| `rtl8196e_ring.h` | Ring API | 38 |
+| `rtl8196e_hw.h` | HW API | 27 |
+| `rtl8196e_dt.h` | DT API | 19 |
+| **Total** | | **1 842** |
+
+Pure LOC = non-blank, non-comment lines.
+For comparison, the legacy `rtl819x` driver (17 files) totals **9 664 pure LOC** — a **5.2× reduction**.
 
 ## 7. RX path (napi_alloc_skb)
 - Two RX rings:
