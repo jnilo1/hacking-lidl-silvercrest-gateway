@@ -25,13 +25,16 @@ NAME=$(basename "$IMAGE")
 
 echo "Flashing ${NAME} (${SIZE} bytes) to ${TARGET_IP}..."
 echo ""
-echo "  Image:  ${IMAGE}"
-echo "  Target: ${TARGET_IP}"
-echo ""
 read -r -p "Proceed? [y/N] " confirm
 if [[ ! "$confirm" =~ ^[yY]$ ]]; then
     echo "Aborted."
     exit 0
+fi
+
+echo "Checking target..."
+if ! arping -c 1 -w 2 "$TARGET_IP" >/dev/null 2>&1; then
+    echo "Error: ${TARGET_IP} unreachable — is the device in download mode?" >&2
+    exit 1
 fi
 
 out=$(tftp -m binary "$TARGET_IP" -c put "$IMAGE" 2>&1)
@@ -41,4 +44,5 @@ if echo "$out" | grep -qiE \
     exit 1
 fi
 echo ""
-echo "Done. Reboot with: J BFC00000"
+echo "Done."
+echo "Reboot: J BFC00000  (serial console)  or  hard reset the device"
