@@ -57,6 +57,7 @@ if [ -d "${SILABS_TOOLS_DIR}/slc_cli" ]; then
     export PATH="${SILABS_TOOLS_DIR}/arm-gnu-toolchain/bin:$PATH"
     export PATH="${SILABS_TOOLS_DIR}/commander:$PATH"
     export GECKO_SDK="${SILABS_TOOLS_DIR}/gecko_sdk"
+    export JAVA_TOOL_OPTIONS="-Duser.home=${SILABS_TOOLS_DIR}"
 fi
 
 # =========================================
