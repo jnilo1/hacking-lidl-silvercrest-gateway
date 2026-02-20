@@ -68,6 +68,11 @@ fi
 # Add to PATH for this session
 export PATH="$INSTALL_DIR/slc_cli:$PATH"
 
+# Redirect SimplicityStudio workspace to silabs-tools.
+# slc is a Java app; Java reads user.home from /etc/passwd, not $HOME,
+# so we must override it via JAVA_TOOL_OPTIONS.
+export JAVA_TOOL_OPTIONS="-Duser.home=$INSTALL_DIR"
+
 # Verify installation
 slc --version || error "slc-cli installation failed"
 
@@ -129,7 +134,7 @@ info "Creating environment setup script..."
 
 cat > "$INSTALL_DIR/env.sh" << 'EOF'
 # Silicon Labs build environment
-# Source this file: source ~/silabs/env.sh
+# Source this file: source <project>/silabs-tools/env.sh
 
 export SILABS_HOME="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export PATH="$SILABS_HOME/slc_cli:$PATH"
@@ -138,9 +143,14 @@ export PATH="$SILABS_HOME/commander:$PATH"
 export GECKO_SDK="$SILABS_HOME/gecko_sdk"
 export ARM_GCC_DIR="$SILABS_HOME/arm-gnu-toolchain"
 
+# slc is a Java app; Java reads user.home from /etc/passwd, not $HOME.
+# Override via JAVA_TOOL_OPTIONS so SimplicityStudio is created in silabs-tools.
+export JAVA_TOOL_OPTIONS="-Duser.home=$SILABS_HOME"
+
 echo "Silicon Labs environment loaded:"
 echo "  GECKO_SDK=$GECKO_SDK"
 echo "  ARM_GCC_DIR=$ARM_GCC_DIR"
+echo "  SimplicityStudio workspace: $SILABS_HOME/SimplicityStudio"
 echo "  slc version: $(slc --version 2>/dev/null | head -1)"
 echo "  commander version: $(commander --version 2>/dev/null | head -1)"
 EOF
