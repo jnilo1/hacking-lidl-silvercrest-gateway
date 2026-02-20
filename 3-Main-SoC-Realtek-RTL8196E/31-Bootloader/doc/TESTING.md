@@ -69,9 +69,10 @@ AutoBurning=0
 Set TFTP Load Addr 0x80100000
 ```
 
-From the PC:
+From the PC (le client `tftp` envoie le fichier par nom, sans chemin — il faut donc se placer dans le répertoire contenant `test.bin`) :
 
 ```bash
+cd /path/to/31-Bootloader/btcode/build
 tftp -m binary 192.168.1.6 -c put test.bin
 ```
 
@@ -321,8 +322,7 @@ Upload images with known signatures and verify:
 
 - Check IP address: default is `192.168.1.6`, reset after every reboot
 - Verify the board is at the `<RealTek>` prompt (not booting kernel)
-- Check PC network: `ping 192.168.1.6` should fail (bootloader does
-  not respond to ICMP), but ARP should resolve
+- Check PC network: `ping 192.168.1.6` should succeed
 
 ### Board reboots unexpectedly after TFTP upload
 
@@ -356,7 +356,8 @@ Upload images with known signatures and verify:
 # On serial console:
 AUTOBURN 0
 LOADADDR 80100000
-# On PC:
+# On PC (must cd into the directory first):
+cd /path/to/31-Bootloader/btcode/build
 tftp -m binary 192.168.1.6 -c put test.bin
 # On serial console:
 J 80100000
