@@ -100,7 +100,9 @@ Build scripts auto-detect these locations — no PATH configuration needed.
 │   ├── slc_cli/
 │   ├── gecko_sdk/
 │   ├── arm-gnu-toolchain/
-│   └── commander/
+│   ├── commander/
+│   ├── SimplicityStudio/       # slc workspace (kept here via JAVA_TOOL_OPTIONS)
+│   └── env.sh                  # Source to load Silabs environment
 │
 └── 1-Build-Environment/
     ├── Dockerfile              # Docker image definition
