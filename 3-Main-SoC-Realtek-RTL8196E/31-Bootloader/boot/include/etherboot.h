@@ -44,9 +44,13 @@ Original etherboot x86 code (BOOTP/DHCP, NFS, ROM, TCP/HTTP) removed.
 
 #define TFTP_PORT 69
 
+#define IPPROTO_ICMP 1
 #define IPPROTO_UDP 17
 /* Same after going through htonl */
 #define IP_BROADCAST 0xFFFFFFFF
+
+#define ICMP_ECHO      8
+#define ICMP_ECHOREPLY 0
 
 #define ARP_REQUEST 1
 #define ARP_REPLY 2
@@ -141,6 +145,14 @@ struct udphdr {
 	unsigned short dest;
 	unsigned short len;
 	unsigned short chksum;
+};
+
+struct icmphdr {
+	unsigned char  type;
+	unsigned char  code;
+	unsigned short chksum;
+	unsigned short id;
+	unsigned short seq;
 };
 
 struct tftp_t {

@@ -689,11 +689,61 @@ void tftpd_send_ack(unsigned short number)
 }
 
 /**
+ * handle_icmp_echo - Reply to an ICMP Echo Request (ping)
+ * @ipheader: pointer to the IP header of the received packet
+ *
+ * Validates the ICMP Echo Request, builds an Echo Reply with swapped
+ * src/dest addresses, recomputes IP and ICMP checksums, and sends it.
+ */
+static void handle_icmp_echo(struct iphdr *ipheader)
+{
+	struct icmphdr *icmp;
+	unsigned short icmp_len;
+	/* Static reply buffer: IP header + ICMP payload (up to 1480 bytes) */
+	static unsigned char icmp_reply[sizeof(struct iphdr) + 1480];
+	struct iphdr *reply_ip;
+	struct icmphdr *reply_icmp;
+
+	icmp = (struct icmphdr *)((unsigned char *)ipheader +
+				  sizeof(struct iphdr));
+	if (icmp->type != ICMP_ECHO || icmp->code != 0)
+		return;
+
+	icmp_len = ntohs(ipheader->len) - sizeof(struct iphdr);
+	if (icmp_len < sizeof(struct icmphdr) ||
+	    icmp_len > 1480)
+		return;
+
+	/* Build IP reply header: swap src/dest, recompute checksum */
+	reply_ip = (struct iphdr *)icmp_reply;
+	*reply_ip = *ipheader;
+	reply_ip->src  = ipheader->dest;
+	reply_ip->dest = ipheader->src;
+	reply_ip->chksum = 0;
+	reply_ip->chksum = ipheader_chksum((unsigned short *)reply_ip,
+					   sizeof(struct iphdr));
+
+	/* Copy ICMP header + data, set type to Echo Reply */
+	reply_icmp = (struct icmphdr *)(icmp_reply + sizeof(struct iphdr));
+	memcpy(reply_icmp, icmp, icmp_len);
+	reply_icmp->type   = ICMP_ECHOREPLY;
+	reply_icmp->chksum = 0;
+	reply_icmp->chksum = ipheader_chksum((unsigned short *)reply_icmp,
+					     icmp_len);
+
+	/* nic.packet[ETH_ALEN..ETH_ALEN+5] is the source MAC of the request */
+	prepare_txpkt(0, ETH_P_IP,
+		      (unsigned char *)&nic.packet[ETH_ALEN],
+		      icmp_reply,
+		      (unsigned short)(sizeof(struct iphdr) + icmp_len));
+}
+
+/**
  * kick_tftpd - Process one received Ethernet packet
  *
  * Called from the Ethernet interrupt handler for each received frame.
- * Classifies the packet (ARP request/reply, TFTP WRQ/DATA/ERROR)
- * and dispatches to the appropriate state-event handler.
+ * Classifies the packet (ARP request/reply, ICMP echo, TFTP WRQ/DATA/ERROR)
+ * and dispatches to the appropriate handler.
  */
 void kick_tftpd(void)
 {
@@ -814,6 +864,8 @@ void kick_tftpd(void)
 							}
 
 							dispatch_event(kick_event);
+						} else if (ipheader->protocol == IPPROTO_ICMP) {
+							handle_icmp_echo(ipheader);
 						}
 					}
 				}
