@@ -408,6 +408,13 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += len;
 		skb->protocol = eth_type_trans(skb, dev);
+		/* Hardware verifies TCP/UDP + IP checksums for all unicast/multicast
+		 * frames that pass the L2 filter.  The CSUM_TCPUDP_OK / CSUM_IP_OK
+		 * bits are set selectively (e.g. not for non-IP frames), so checking
+		 * them would mark every ARP / IPv6 / non-TCP packet CHECKSUM_NONE and
+		 * force a pointless software re-verify on each.  Unconditional
+		 * CHECKSUM_UNNECESSARY is correct here: the hardware never forwards a
+		 * frame with a bad checksum to the CPU ring. */
 		skb->ip_summed = CHECKSUM_UNNECESSARY;
 		if (unlikely(ring->rx_debug_once == 0)) {
 			ring->rx_debug_once = 1;
