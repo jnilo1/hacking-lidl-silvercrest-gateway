@@ -554,6 +554,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	ndev->min_mtu = 68;
 	ndev->max_mtu = priv->iface.mtu;
 	ndev->mtu = priv->iface.mtu;
+	ndev->features |= NETIF_F_RXCSUM;
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {

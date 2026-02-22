@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: GPL-2.0
+config RTL8196E_ETH
+	tristate "Realtek RTL8196E Ethernet (new, recommended)"
+	depends on MIPS && OF
+	depends on !RTL819X
+	help
+	  Clean-room RTL8196E Ethernet driver: single-port, NAPI, zero-copy
+	  RX/TX. Replaces the legacy rtl819x SDK port with maintainable code.
+
+	  Delivers ~91 Mbps TCP RX and ~44 Mbps TCP TX on the Lexra RLX4181
+	  (RTL8196E at 400 MHz). Configured via devicetree (interface@0 node).
