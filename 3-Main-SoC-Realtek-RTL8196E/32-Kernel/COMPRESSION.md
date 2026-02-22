@@ -1,39 +1,25 @@
-# Kernel packaging: zboot (arch/mips/boot/compressed/) vs lzma-loader
-
-**Branch:** `exp/zboot-rtl8196e`
-**Date:** February 2026
-**Status:** Validated — boots on RTL8196E hardware
-
----
+# Kernel compression — from lzma-loader to zboot
 
 ## Background
 
-The original kernel packaging pipeline relied on an external `lzma-loader`: a small
-standalone MIPS binary from the Realtek SDK that decompresses the kernel at boot time.
-This loader self-relocates from its load address (0x80c00000) to its link address
-(0x81000000), decompresses the LZMA kernel to 0x80000000, then jumps to it.
+The kernel must be compressed to fit in the gateway flash (1 MB available for the
+kernel image). Decompression happens at boot time, before the kernel takes control.
 
-The `lzma-loader` was compiled with the Lexra toolchain and depended on two external
-tools from the Realtek SDK 4.65:
-
-- `lzma` — the compression tool (LZMA SDK 4.65 CLI)
-- `lzma-loader/` — the pre-built decompressor binary
-
-This experiment replaces both with the Linux in-tree decompressor:
-`arch/mips/boot/compressed/vmlinuz`.
+Two approaches have been used successively.
 
 ---
 
-## Pipeline comparison
+## Old approach — lzma-loader (Realtek SDK)
 
-### Before — lzma-loader
+The original pipeline, inherited from the Realtek 2.6.30 SDK, relied on an external
+binary: `lzma-loader`, a small MIPS stub compiled separately with the Lexra toolchain.
 
 ```
 vmlinux
   │  objcopy (-O binary)
   ▼
 vmlinux.bin
-  │  lzma e (SDK 4.65, -lc1 -lp2 -pb2)
+  │  lzma e  (Realtek SDK 4.65 tool, options -lc1 -lp2 -pb2)
   ▼
 vmlinux.bin.lzma
   │  make -C lzma-loader/   (Lexra cross-compiled decompressor stub)
@@ -44,24 +30,46 @@ loader.bin                  (decompressor + compressed kernel, linked at 0x81000
 kernel.img
 ```
 
-### After — zboot
+**External dependencies**: `lzma` binary (SDK 4.65) + `lzma-loader/` directory.
+
+At boot, the loader self-relocates from `0x80c00000` to `0x81000000`, decompresses
+the kernel to `0x80000000`, then jumps to it.
+
+---
+
+## New approach — zboot (in-tree)
+
+Linux 5.10 ships its own MIPS decompressor: `arch/mips/boot/compressed/`. Enabling
+`SYS_SUPPORTS_ZBOOT` in the platform Kconfig is enough for the `vmlinuz` target to
+be added automatically to the build.
 
 ```
 vmlinux
-  │  make (SYS_SUPPORTS_ZBOOT + KERNEL_LZMA trigger vmlinuz target automatically)
-  │    → arch/mips/boot/compressed/vmlinux.bin   (objcopy)
-  │    → arch/mips/boot/compressed/vmlinux.bin.z (LZMA, in-tree)
-  │    → arch/mips/boot/compressed/piggy.o       (compressed payload as object)
-  │    → vmlinuz (ELF: head.S + decompress.c + piggy.o)
+  │  make  (SYS_SUPPORTS_ZBOOT + KERNEL_LZMA → vmlinuz target automatic)
+  │    arch/mips/boot/compressed/vmlinux.bin    (objcopy)
+  │    arch/mips/boot/compressed/vmlinux.bin.z  (LZMA, in-tree)
+  │    arch/mips/boot/compressed/piggy.o        (compressed payload as object)
+  │    vmlinuz  (ELF: head.S + decompress.c + piggy.o)
   ▼
-vmlinuz                     (decompressor + compressed kernel, load addr from ELF)
+vmlinuz                     (decompressor + compressed kernel)
   │  objcopy (-O binary)
   ▼
 vmlinuz.bin
-  │  cvimg -e <entry from readelf>
+  │  cvimg -e <entry point read from ELF>
   ▼
-kernel-rtl8196e-zboot.img
+kernel.img
 ```
+
+**External dependencies**: `cvimg` only (unchanged).
+
+The entry point is read dynamically from the ELF header at packaging time:
+
+```bash
+${CROSS_COMPILE}readelf -h vmlinuz | awk '/Entry point address/ {print $NF}'
+```
+
+The value is normalised to 32 bits (masks off MIPS sign-extension
+`0xffffffff8xxxxxxx → 0x8xxxxxxx`).
 
 ---
 
@@ -73,18 +81,14 @@ One line added to `files/arch/mips/realtek/Kconfig`, inside `config SOC_RTL8196E
 select SYS_SUPPORTS_ZBOOT
 ```
 
-Effect: `arch/mips/Makefile` line 86 adds `vmlinuz` to the default build targets:
+Effect in `arch/mips/Makefile`:
 
 ```makefile
 all-$(CONFIG_SYS_SUPPORTS_ZBOOT) += vmlinuz
 ```
 
-`SYS_SUPPORTS_ZBOOT` only selects `HAVE_KERNEL_*` symbols (makes compression options
-visible in menuconfig). It does not activate any compression by itself — no impact on
-existing builds (`build_kernel.sh`, `build_rtl8196e_eth.sh`).
-
-`CONFIG_KERNEL_LZMA=y` is injected by `build_rtl8196e_zboot.sh` to match the
-compression algorithm used by the legacy lzma-loader, enabling direct comparison.
+`CONFIG_KERNEL_LZMA=y` is injected by `build_kernel.sh` to use LZMA, matching the
+algorithm used by the legacy lzma-loader.
 
 ---
 
@@ -100,83 +104,20 @@ For this kernel (~4.2 MB uncompressed): **0x80440000**
 
 This guarantees no overlap between:
 - `[0x80000000 … vmlinux_size]` — decompressed kernel being written
-- `[0x80440000 … ]` — vmlinuz (decompressor + LZMA payload + 4 MB heap + stack)
+- `[0x80440000 … ]` — vmlinuz (decompressor + payload + heap + stack)
 
-The entry address is read at package time from the vmlinuz ELF header:
-
-```bash
-${CROSS_COMPILE}readelf -h vmlinuz | awk '/Entry point address/ {print $NF}'
-```
-
-Result is normalised to 32 bits (masks off MIPS sign-extension `0xffffffff8xxxxxxx`).
-
-Note: `files/arch/mips/realtek/Platform` already sets `load-y = 0xffffffff80000000`
-which `calc_vmlinuz_load_addr` uses as `LINKER_LOAD_ADDRESS`. No changes needed there.
+`files/arch/mips/realtek/Platform` already sets `load-y = 0xffffffff80000000`,
+used by `calc_vmlinuz_load_addr` as `LINKER_LOAD_ADDRESS` — no changes needed there.
 
 ---
 
-## Image sizes (measured on identical source)
+## Image sizes
 
 | Image | Size | Notes |
 |-------|------|-------|
-| `kernel.img` (legacy rtl819x + lzma-loader) | 1 028 096 B (1004 KiB) | reference |
-| `kernel-rtl8196e-eth.img` (eth + lzma-loader) | 1 019 904 B (996 KiB) | −8 KiB |
-| `kernel-rtl8196e-zboot.img` (eth + zboot) | 1 028 096 B (1004 KiB) | = reference |
+| `kernel-legacy.img` (rtl819x + lzma-loader) | 1 004 KiB | reference |
+| `kernel.img` (rtl8196e-eth + zboot)          | 1 004 KiB | identical |
 
-The zboot image is 8 KiB larger than the lzma-loader eth build. Both use LZMA with the
-same parameters — the difference comes from the size difference between the in-tree
-`head.S`/`decompress.c` decompressor and the external `lzma-loader` binary. No
-significant size advantage either way.
-
----
-
-## Dependency analysis
-
-| Tool | Bootloader build | Kernel (legacy) | Kernel (zboot) |
-|------|-----------------|-----------------|----------------|
-| `lzma` binary (SDK 4.65) | **yes** — compresses stage-2 | yes | **no** |
-| `lzma-loader` binary | no | yes | **no** |
-| `LzmaDecode.c` (embedded in btcode) | yes (runtime) | no | no |
-| `cvimg` | yes | yes | yes |
-
-The `lzma` binary from realtek-tools is still required for the bootloader build
-(`31-Bootloader/btcode/Makefile` compresses the stage-2 binary with it). It is not
-needed by `build_rtl8196e_zboot.sh`.
-
-The bootloader uses its own embedded LZMA decoder (`LzmaDecode.c` in `btcode/`),
-not the `lzma-loader` binary. These are two independent components that happen to
-implement the same algorithm.
-
----
-
-## Boot test result
-
-Flashed on 2026-02-21, RTL8196E gateway (Lidl Silvercrest Zigbee):
-
-```
-Linux version 5.10.246-rtl8196e-zboot
-vmlinuz entry: 0x80440000
-Memory: 27968K/32768K available
-```
-
-Full boot, SSH accessible, all init scripts completed normally.
-
----
-
-## Build script
-
-`build_rtl8196e_zboot.sh` — derived from `build_rtl8196e_eth.sh`.
-
-Key differences:
-- No `lzma` or `lzma-loader` dependency check
-- `CONFIG_KERNEL_LZMA=y` injected in `.config`
-- Build tree: `linux-5.10.246-rtl8196e-zboot/`
-- `LOCALVERSION="-rtl8196e-zboot"`
-- Packaging reads entry point from ELF, converts vmlinuz to flat binary, calls cvimg
-
-Usage identical to other build scripts:
-```bash
-./build_rtl8196e_zboot.sh              # full build + package
-./build_rtl8196e_zboot.sh clean        # rebuild from scratch
-./build_rtl8196e_zboot.sh menuconfig
-```
+Both approaches produce images of equivalent size. The in-tree zboot decompressor
+(`head.S` + `decompress.c`) is slightly larger than the external `lzma-loader`, but
+the difference is absorbed by the alignment rounding.
