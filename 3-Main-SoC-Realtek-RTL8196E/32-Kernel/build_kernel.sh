@@ -8,8 +8,8 @@
 #   - rtl819x       (legacy SDK port)  — pass 'legacy' argument
 #
 # Usage:
-#   ./build_kernel.sh              # new driver → kernel-rtl8196e-eth.img
-#   ./build_kernel.sh legacy       # legacy driver → kernel.img
+#   ./build_kernel.sh              # new driver → kernel.img
+#   ./build_kernel.sh legacy       # legacy driver → kernel-legacy.img
 #   ./build_kernel.sh clean        # remove build tree, rebuild from scratch
 #   ./build_kernel.sh menuconfig   # open menuconfig
 #   ./build_kernel.sh olddefconfig # update .config non-interactively
@@ -32,8 +32,6 @@ KERNEL_MAJOR="5.x"
 KERNEL_TARBALL="linux-${KERNEL_VERSION}.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}/${KERNEL_TARBALL}"
 VANILLA_DIR="linux-${KERNEL_VERSION}"
-BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-eth"
-OVERLAY_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e"
 
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
 export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
@@ -78,8 +76,8 @@ for arg in "$@"; do
             echo "  vmlinux       Build vmlinux only (no packaging)"
             echo ""
             echo "Output:"
-            echo "  new driver  → kernel-rtl8196e-eth.img"
-            echo "  legacy      → kernel.img"
+            echo "  new driver  → kernel.img"
+            echo "  legacy      → kernel-legacy.img"
             exit 0
             ;;
         *) echo "Unknown option: $arg (use --help)"; exit 1 ;;
@@ -89,11 +87,13 @@ done
 # Driver-specific settings
 if [ "$DRIVER" = "new" ]; then
     export LOCALVERSION="-rtl8196e-eth"
-    IMAGE="${SCRIPT_DIR}/kernel-rtl8196e-eth.img"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-eth"
+    IMAGE="${SCRIPT_DIR}/kernel.img"
     DRIVER_LABEL="rtl8196e-eth (new, recommended)"
 else
     export LOCALVERSION="-rtl8196e"
-    IMAGE="${SCRIPT_DIR}/kernel.img"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-legacy"
+    IMAGE="${SCRIPT_DIR}/kernel-legacy.img"
     DRIVER_LABEL="rtl819x (legacy)"
 fi
 
@@ -112,11 +112,6 @@ if ! command -v ${CROSS_COMPILE}gcc >/dev/null 2>&1; then
 fi
 echo "Toolchain: $(${CROSS_COMPILE}gcc --version | head -1)"
 
-if [ ! -d "$OVERLAY_DIR" ]; then
-    echo "ERROR: overlay dir not found: $OVERLAY_DIR"
-    exit 1
-fi
-echo "Overlay  : $OVERLAY_DIR"
 echo "Build dir: $BUILD_DIR"
 echo ""
 
@@ -167,18 +162,7 @@ else
     echo ""
 fi
 
-# ── Sync overlay (rtl8196e-eth driver source + arch patches) ───────────────
-
 cd "$BUILD_DIR"
-
-echo "Syncing overlay (${OVERLAY_DIR##*/}/)..."
-for subdir in arch drivers; do
-    if [ -d "${OVERLAY_DIR}/${subdir}" ]; then
-        cp -r "${OVERLAY_DIR}/${subdir}" .
-        echo "  ${subdir}/"
-    fi
-done
-echo ""
 
 # ── Config ─────────────────────────────────────────────────────────────────
 
