@@ -1,6 +1,6 @@
 --- a/net/core/skbuff.c
 +++ b/net/core/skbuff.c
-@@ -89,6 +89,12 @@
+@@ -89,6 +89,13 @@
  int sysctl_max_skb_frags __read_mostly = MAX_SKB_FRAGS;
  EXPORT_SYMBOL(sysctl_max_skb_frags);
 
