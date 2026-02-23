@@ -7,7 +7,7 @@
 	model = "Realtek RTL8196E SoC";
 	
 	chosen {
-	    bootargs = "console=ttyS0,38400 loglevel=4 root=/dev/mtdblock2 rootfstype=squashfs";
+	    bootargs = "console=ttyS0,38400 loglevel=7 root=/dev/mtdblock2 rootfstype=squashfs";
 	};
 	
 	memory@0 {

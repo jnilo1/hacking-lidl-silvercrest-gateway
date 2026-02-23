@@ -18,6 +18,7 @@ choice
 		select GPIOLIB_IRQCHIP
 		select RTL819X_INTC
 		select CLKSRC_RTL819X
+		select SYS_SUPPORTS_ZBOOT
 
 endchoice
 

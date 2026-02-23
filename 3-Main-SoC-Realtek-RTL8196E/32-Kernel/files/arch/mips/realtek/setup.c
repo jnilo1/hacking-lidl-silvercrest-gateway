@@ -40,6 +40,10 @@
 
 #include <asm/mach-realtek/realtek_mem.h>
 
+#ifdef CONFIG_RTL8196E_IMEM
+extern void _imem_dmem_init(void);
+#endif
+
 /* Watchdog Timer Control Register offset in system controller */
 #define REALTEK_WATCHDOG_TIMER_REG	0x311C
 
@@ -178,6 +182,23 @@ void realtek_halt(void)
 void __init plat_mem_setup(void)
 {
 	void *dtb = NULL;
+
+#ifdef CONFIG_RTL8196E_IMEM
+	/*
+	 * Initialise on-chip I-MEM and D-MEM.
+	 *
+	 * Programs the Lexra COP3 Instruction Window (IW) and Data Window (DW)
+	 * registers to pin the .iram/.dram sections in the 16 KB / 8 KB on-chip
+	 * SRAMs, giving zero wait-state instruction and data access on the
+	 * Ethernet hot path.
+	 *
+	 * Must be called before any code annotated with __iram_fwd / __iram_gen
+	 * is executed, and before cache invalidation in later init stages could
+	 * interfere.  plat_mem_setup() is the earliest available hook that has
+	 * a working C environment.
+	 */
+	_imem_dmem_init();
+#endif
 
 	/* Install platform power management handlers */
 	_machine_restart = realtek_machine_restart;
