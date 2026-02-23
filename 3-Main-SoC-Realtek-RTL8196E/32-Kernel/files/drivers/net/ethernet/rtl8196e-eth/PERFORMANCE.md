@@ -1,83 +1,51 @@
 # RTL8196E Ethernet Driver — Performance Analysis
 
-## Measured throughput (v1.0, same-day baseline, 10s iperf TCP)
+## Measured throughput
 
-| Direction        | rtl819x (legacy) | rtl8196e-eth v1.0 | Delta  |
-|------------------|------------------|-------------------|--------|
-| RX (host → gw)   | 85.3 Mbps        | ~91 Mbps          | +6.7%  |
-| TX (gw → host)   | 42.1 Mbps        | ~44 Mbps          | +4.5%  |
+### Test conditions
 
-## MIPS16e + I-MEM experiment (2026-02-19)
+- Ubuntu 22.04 host, gateway 192.168.1.126, iperf 2.x
+- TCP tests: 30 s per run; stress test: 300 s
+- Kernels: 5.10.246-rtl8196e-eth (new) / 5.10.246-rtl8196e (legacy)
+- rtl8196e-eth measured 2026-02-22; rtl819x measured 2026-02-23
 
-### Phase 1 — single function (`rx_poll` only)
+### TCP throughput
 
-`rtl8196e_ring_rx_poll` annotated with `__MIPS16 __iram_fwd`.  Three runs:
+| Test                      | rtl819x (legacy) | rtl8196e-eth v1.0 | Delta              |
+|---------------------------|------------------|-------------------|--------------------|
+| TCP RX (host→gw, 30s)     | 85.7 Mbps        | **91.2 Mbps**     | +5.5 Mbps (+6.4%)  |
+| TCP TX (gw→host, 30s)     | 43.4 Mbps        | **46.9 Mbps**     | +3.5 Mbps (+8.1%)  |
+| TCP Parallel 4 streams    | 90.0 Mbps        | **94.6 Mbps**     | +4.6 Mbps (+5.1%)  |
+| TCP Parallel 8 streams    | 70.0 Mbps        | **70.9 Mbps**     | +0.9 Mbps (+1.3%)  |
+| TCP Stress 300s           | 88.8 Mbps        | **92.0 Mbps**     | +3.2 Mbps (+3.6%)  |
 
-| Run | Config             | TCP RX     | TCP TX     |
-|-----|--------------------|------------|------------|
-| 1   | IMEM=n (MIPS16e)   | 90.3 Mbps  | 44.0 Mbps  |
-| 2   | IMEM=y (MIPS16e + I-MEM) | 90.0 Mbps | 42.4 Mbps |
-| 3   | IMEM=y (MIPS16e + I-MEM) | 88.7 Mbps | 44.1 Mbps |
+The new driver is consistently faster on all TCP tests (+6% RX, +8% TX on single-stream).
 
-**Result: no measurable gain over v1.0.**
+### Driver error counters (full test session)
 
-### Phase 2 — full hot path
+| Counter                    | rtl819x | rtl8196e-eth |
+|----------------------------|---------|--------------|
+| RX errors                  | 0       | 0            |
+| TX errors                  | 0       | 0            |
+| RX dropped                 | 5       | 6            |
+| TX dropped                 | 0       | 0            |
+| TCP RetransSegs (SoC side) | 0       | 0            |
 
-All driver hot-path functions annotated with `__iram_gen`/`__iram_fwd`
-(SRAM placement), and ring functions additionally with `__MIPS16` (16-bit
-instruction encoding).  Functions placed in SRAM:
+5–6 RX drops over 3.5 M packets (0.0001%) — negligible.
 
-| Symbol                       | Section    | Encoding | Size  |
-|------------------------------|------------|----------|-------|
-| `plat_irq_dispatch`          | `.iram-gen`| MIPS32   | 160 B |
-| `rtl8196e_isr`               | `.iram-gen`| MIPS32   | 248 B |
-| `rtl8196e_poll`              | `.iram-gen`| MIPS32   | 244 B |
-| `rtl8196e_start_xmit`        | `.iram-fwd`| MIPS32   | 568 B |
-| `rtl8196e_ring_tx_reclaim`   | `.iram-gen`| MIPS16   | 188 B |
-| `rtl8196e_ring_kick_tx`      | `.iram-gen`| MIPS16   |  44 B |
-| `rtl8196e_ring_tx_submit`    | `.iram-fwd`| MIPS16   | 240 B |
-| `rtl8196e_ring_rx_poll`      | `.iram-fwd`| MIPS16   | 452 B |
-| **Total SRAM used**          |            |          | **2144 B / 16 KB** |
+### UDP loss at saturation
 
-One run (IMEM=y, full hot path):
+| Target bandwidth | rtl819x | rtl8196e-eth |
+|-----------------|---------|--------------|
+| 10 Mbps         | 0%      | 0%           |
+| 50 Mbps         | 40%     | 60%          |
+| 100 Mbps        | 41%     | 57%          |
 
-| Config                       | TCP RX     | TCP TX     |
-|------------------------------|------------|------------|
-| IMEM=y, full hot path        | 89.8 Mbps  | 42.8 Mbps  |
-
-**Result: no measurable gain over v1.0.** All values are within iperf
-run-to-run variance (±1–2 Mbps).
-
-### Why the gain is negligible
-
-At 90 Mbps, ~6 100 packets/s, 400 MHz CPU → ~65 000 cycles/packet average
-(both directions CPU-bound at 100%).  Eliminating I-cache misses on the
-entire driver + IRQ dispatch path (~100–150 cycles/packet savings) would be
-a ~0.2% improvement — well below measurement noise.
-
-The dominant costs are structural (DMA cache flush on TX ~300 cycles,
-TCP stack overhead) and are unaffected by I-MEM.  The network stack
-functions (`napi_gro_receive`, `eth_type_trans`, TCP send/receive path)
-are far too large to fit in the 16 KB I-MEM and would need to be warm
-for any measurable gain.
-
-### I-MEM infrastructure status
-
-The platform infrastructure (linker script sections, `_imem_dmem_init()`,
-COP3 programming) is **correct and functional**: the kernel boots cleanly
-with `CONFIG_RTL8196E_IMEM=y`, all annotated functions are placed in
-`.iram-fwd`/`.iram-gen` at `0x80280000`, and the COP3 Instruction Window
-is programmed at boot.  Total SRAM usage: 2144 B out of 16 384 B.
-
-**Default: `CONFIG_RTL8196E_IMEM=n`.**  MIPS16e is always active on ring
-functions (`__MIPS16` is unconditional) and gives the same throughput with
-less platform complexity.  The `.iram-*` section attributes become no-ops
-when `CONFIG_RTL8196E_IMEM=n`.
-
-Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (400 MHz, MIPS-1 + MIPS16
-ISA, big-endian, single core, no FPU, no SIMD, write-back L1 cache,
-16 KB I-cache, 8 KB D-cache, 16 KB I-MEM, 8 KB D-MEM).
-Link: 100BASE-TX full duplex.
+Legacy shows lower UDP loss at high load. The rtl819x private buffer pool
+pre-allocates receive buffers, absorbing bursts more efficiently than the
+standard page-fragment allocator used by rtl8196e-eth. Both are expected
+behaviour for a 400 MHz MIPS SoC with no hardware UDP offload; neither
+driver approaches UDP line rate.
 
 ---
 
@@ -88,10 +56,10 @@ Link: 100BASE-TX full duplex.
 To settle this question experimentally, CPU utilization was measured on the
 gateway during both TCP tests using `/proc/stat` sampled at 1-second intervals:
 
-| Test              | Gateway CPU   | Throughput   |
-|-------------------|---------------|--------------|
-| TCP RX (host→gw)  | **100% busy** | ~82–91 Mbps  |
-| TCP TX (gw→host)  | **100% busy** | ~39–44 Mbps  |
+| Test              | Gateway CPU   | Throughput     |
+|-------------------|---------------|----------------|
+| TCP RX (host→gw)  | **100% busy** | ~86–92 Mbps    |
+| TCP TX (gw→host)  | **100% busy** | ~43–47 Mbps    |
 
 **Both directions fully saturate the CPU.**  The 2:1 throughput ratio is not
 caused by a hardware asymmetry, a ring management issue, or a protocol
@@ -205,9 +173,9 @@ ratio at 100% CPU utilisation in both directions.
 ### Hardware is not the bottleneck
 
 100BASE-TX is full-duplex: RX and TX are physically independent channels,
-each capable of 100 Mbps simultaneously.  RX reaching 91 Mbps confirms the
-DMA engine, switch fabric, and ring management all function at near line-rate.
-A hardware bottleneck would suppress RX throughput as well.
+each capable of 100 Mbps simultaneously.  RX reaching 91–92 Mbps confirms
+the DMA engine, switch fabric, and ring management all function at near
+line-rate.  A hardware bottleneck would suppress RX throughput as well.
 
 ---
 
@@ -216,7 +184,7 @@ A hardware bottleneck would suppress RX throughput as well.
 A UDP TX test was run (gateway → host, `iperf -u -b 100M -c <host> -t 10`,
 0% packet loss) to isolate the TCP checksum contribution.
 
-**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44 Mbps).**
+**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44–47 Mbps).**
 
 ```
 [  1] 0.00-10.00 sec  30.3 MBytes  25.4 Mbits/sec   0.000 ms  0/21597 (0%)
@@ -264,8 +232,14 @@ no BQL, no TX timer, `napi_consume_skb`, `likely`/`unlikely` hints).
 
 ---
 
+*Hardware: Realtek RTL8196E SoC, Lexra RLX4181 CPU (400 MHz, MIPS-1 + MIPS16
+ISA, big-endian, single core, no FPU, no SIMD, write-back L1 cache,
+16 KB I-cache, 8 KB D-cache).  Link: 100BASE-TX full duplex.*
+
 *TCP baseline: Ubuntu 22.04 host, gateway 192.168.1.126, iperf 2.x,
-10s TCP test, kernel 5.10.246-rtl8196e-eth.*
+30 s TCP tests (stress: 300 s).*
+
 *CPU measurement: `/proc/stat` sampled at 1 Hz during each test.*
+
 *UDP TX test: `iperf -u -b 100M -c 192.168.1.200 -t 10` from gateway,
-0% packet loss, 10s, 21597 datagrams.*
+0% packet loss, 10 s, 21597 datagrams.*
