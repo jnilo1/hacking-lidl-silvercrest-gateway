@@ -37,8 +37,9 @@
   in the hardware descriptor.
 - On destroy: `dev_kfree_skb_any()` for each shadow entry.
 - No `page_pool`, no `build_skb()`, no PAGE_POOL Kconfig dependency.
-- No kernel patches required. The `patches/net-core-skbuff.c.patch` (legacy
-  rtl819x hooks) is skipped by `build_rtl8196e_eth.sh`.
+- The `patches/net-core-skbuff.c.patch` (legacy rtl819x private buffer pool
+  hooks) is applied to all builds but guarded with `#ifdef CONFIG_RTL819X`;
+  it has no effect when `rtl8196e-eth` is selected.
 
 ## 5. Devicetree compatibility
 - Parent node: `&ethernet` (compatible: `realtek,rtl8196e-mac`).
@@ -57,16 +58,16 @@
 
 | File | Role | Pure LOC |
 |------|------|----------|
-| `rtl8196e_main.c` | net_device, NAPI poll, ISR, TX xmit, ethtool, probe/remove | 498 |
-| `rtl8196e_hw.c` | MMIO registers, init sequence, KSEG1 helpers, PHY/MDIO, VLAN/NETIF/L2 tables | 550 |
-| `rtl8196e_ring.c` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache ops | 433 |
+| `rtl8196e_main.c` | net_device, NAPI poll, ISR, TX xmit, ethtool, probe/remove | 501 |
+| `rtl8196e_hw.c` | MMIO registers, init sequence, KSEG1 helpers, PHY/MDIO, VLAN/NETIF/L2 tables | 554 |
+| `rtl8196e_ring.c` | TX/RX descriptor rings, napi_alloc_skb RX buffers, ownership, cache ops | 439 |
 | `rtl8196e_dt.c` | Devicetree parsing (`interface@0` properties) | 68 |
 | `rtl8196e_regs.h` | Register definitions (trimmed to what's used) | 120 |
 | `rtl8196e_desc.h` | Hardware descriptor structures (`rtl_pktHdr`, `rtl_mBuf`) | 89 |
 | `rtl8196e_ring.h` | Ring API | 38 |
 | `rtl8196e_hw.h` | HW API | 27 |
 | `rtl8196e_dt.h` | DT API | 19 |
-| **Total** | | **1 842** |
+| **Total** | | **1 855** |
 
 Pure LOC = non-blank, non-comment lines.
 For comparison, the legacy `rtl819x` driver (17 files) totals **9 664 pure LOC** — a **5.2× reduction**.
@@ -155,9 +156,11 @@ For comparison, the legacy `rtl819x` driver (17 files) totals **9 664 pure LOC**
 ## 13. Verification
 - Ping IPv4/IPv6.
 - Stable SSH session.
-- iperf TCP RX: ~91 Mbps (legacy: 85.3 Mbps, +6%).
-- iperf TCP TX: ~44 Mbps (legacy: 42.1 Mbps, +5%).
+- iperf TCP RX: 91.2 Mbps (legacy rtl819x: 85.7 Mbps, +6.4%).
+- iperf TCP TX: 46.9 Mbps (legacy rtl819x: 43.4 Mbps, +8.1%).
+- TCP stress 300s: 92.0 Mbps, 0 driver errors, 0 TCP retransmissions (SoC side).
 - `ethtool -S eth0` shows stats.
 - No warnings in dmesg.
 
-Baseline measured in identical conditions (same host, same day, 10s iperf).
+Measured on RTL8196E gateway (Lidl Silvercrest), Ubuntu 22.04 host,
+iperf 2.x, 30s TCP tests, kernel 5.10.246-rtl8196e-eth.
