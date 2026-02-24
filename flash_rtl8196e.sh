@@ -87,7 +87,8 @@ if [[ "$do_backup" =~ ^[yY]$ ]]; then
     echo ""
     echo "On the bootloader serial console, run:"
     echo "  FLR 80500000 00000000 01000000"
-    read -r -p "Press Enter when FLR is complete..."
+    echo "Then confirm with Y and wait for 'Flash Read Succeeded!'"
+    read -r -p "Press Enter when done..."
     echo "Downloading backup to ${BACKUP_FILE}..."
     out=$(timeout 120 tftp -m binary "$TARGET_IP" -c get "$BACKUP_FILE" 2>&1) || true
     if echo "$out" | grep -qiE \
