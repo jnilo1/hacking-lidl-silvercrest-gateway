@@ -20,7 +20,13 @@ PART="$1"
 GATEWAY_IP="$2"
 SSH_PORT="${3:-2333}"
 SSH_USER="root"
-SSH_OPTS="-p ${SSH_PORT} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no"
+# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy key algorithm)
+# Port 22:   custom firmware (standard OpenSSH)
+if [ "${SSH_PORT}" = "2333" ]; then
+    SSH_OPTS="-p ${SSH_PORT} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no"
+else
+    SSH_OPTS="-p ${SSH_PORT} -o StrictHostKeyChecking=no"
+fi
 
 if [ -z "$PART" ] || [ -z "$GATEWAY_IP" ]; then
     echo "Usage: $0 <all|mtdX> <gateway_ip> [port]"
