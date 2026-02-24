@@ -88,7 +88,7 @@ echo "  userdata    $(stat -c%s "$USERDATA_IMG") bytes"
 echo "  kernel      $(stat -c%s "$KERNEL_IMG") bytes  (triggers reboot)"
 echo ""
 read -r -p "Proceed? [y/N] " confirm
-[[ ! "$confirm" =~ ^[yY]$ ]] && echo "Aborted." && exit 0
+if [[ ! "$confirm" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
 
 # Helper: flash one image and wait for serial confirmation
 # Args: label dir file timeout_seconds
@@ -106,7 +106,7 @@ flash_image() {
     fi
     echo "${label} uploaded."
     read -r -p "Flash Write Succeeded on serial console? [y/N] " r
-    [[ ! "$r" =~ ^[yY]$ ]] && echo "Aborted." && exit 1
+    if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
 }
 
 flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"    15
