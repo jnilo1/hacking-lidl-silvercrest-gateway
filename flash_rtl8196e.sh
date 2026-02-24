@@ -96,7 +96,7 @@ flash_image() {
     echo ""
     echo "Flashing ${label}..."
     cd "$dir"
-    out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put "$file" 2>&1)
+    out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put "$file" 2>&1) || true
     cd "$SCRIPT_DIR"
     if echo "$out" | grep -qiE \
         "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
@@ -115,7 +115,7 @@ flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin"
 echo ""
 echo "Flashing kernel..."
 cd "${RTL_DIR}/32-Kernel"
-out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put kernel.img 2>&1)
+out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put kernel.img 2>&1) || true
 cd "$SCRIPT_DIR"
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
