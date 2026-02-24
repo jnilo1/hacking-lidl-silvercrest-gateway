@@ -442,6 +442,7 @@ static const struct net_device_ops rtl8196e_netdev_ops = {
 	.ndo_stop = rtl8196e_stop,
 	.ndo_start_xmit = rtl8196e_start_xmit,
 	.ndo_tx_timeout = rtl8196e_tx_timeout,
+	.ndo_set_mac_address = eth_mac_addr,
 };
 
 /* ethtool: return the number of driver-specific statistics. */

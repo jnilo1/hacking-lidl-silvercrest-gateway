@@ -82,8 +82,10 @@
 		reg = <0>;
 		ifname = "eth0";
 
-		/* MAC address (standard DT binding) */
-		local-mac-address = [02 14 B8 EE B7 54];
+		/* No local-mac-address: driver randomises at boot.
+		 * S10network generates a stable locally-administered MAC on first
+		 * boot, persists it to /userdata/etc/mac_address, and restores it
+		 * on every subsequent boot via "ifconfig eth0 hw ether <mac>". */
 
 		/* VLAN configuration */
 		vlan-id = <1>;              /* VLAN ID (VID) */
