@@ -39,27 +39,33 @@ for mtd in "${MTDS[@]}"; do
     fi
 
     echo "  - Restoring ${mtd}..."
+    mtdnum="${mtd:3}"
 
     if [ "$mtd" = "mtd4" ]; then
-        # mtd4 (JFFS2 overlay) may be mounted — unmount before writing
-        ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} bash <<REMOTE < "$binfile" 2>"${binfile}.log"
-mtd=${mtd}
-MOUNT_POINT=\$(grep mtdblock\${mtd:3} /proc/mounts | awk '{print \$2}')
-if [ -n "\$MOUNT_POINT" ]; then
-    echo "Detected mount point: \$MOUNT_POINT" >&2
-    echo "Killing serialgateway..." >&2
-    killall -q serialgateway || true
-    echo "Unmounting \$mtd from \$MOUNT_POINT..." >&2
-    umount \$MOUNT_POINT
-fi
-dd of=/dev/\$mtd bs=1024k 2>/dev/null
-if [ -n "\$MOUNT_POINT" ]; then
-    echo "Remounting \$mtd to \$MOUNT_POINT..." >&2
-    mount -t jffs2 /dev/mtdblock\${mtd:3} \$MOUNT_POINT
-    echo "Restarting serialgateway..." >&2
-    /tuya/serialgateway &
-fi
-REMOTE
+        # mtd4 (JFFS2 overlay) may be mounted.
+        # Cannot combine a heredoc script and binary stdin in a single SSH call,
+        # so split into three calls: unmount / flash / remount.
+
+        # Step 1: find mount point and unmount
+        MOUNT_POINT=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+            "grep mtdblock${mtdnum} /proc/mounts | awk '{print \$2}'" \
+            2>>"${binfile}.log" || true)
+        if [ -n "$MOUNT_POINT" ]; then
+            ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+                "killall -q serialgateway 2>/dev/null || true; umount ${MOUNT_POINT}" \
+                2>>"${binfile}.log"
+        fi
+
+        # Step 2: stream binary data directly to dd stdin
+        ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+            "dd of=/dev/${mtd} bs=1024k 2>/dev/null" < "$binfile" 2>>"${binfile}.log"
+
+        # Step 3: remount and restart service if it was mounted
+        if [ -n "$MOUNT_POINT" ]; then
+            ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+                "mount -t jffs2 /dev/mtdblock${mtdnum} ${MOUNT_POINT}; /tuya/serialgateway &" \
+                2>>"${binfile}.log"
+        fi
     else
         ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
             "dd of=/dev/${mtd} bs=1024k 2>/dev/null" < "$binfile" 2>"${binfile}.log"

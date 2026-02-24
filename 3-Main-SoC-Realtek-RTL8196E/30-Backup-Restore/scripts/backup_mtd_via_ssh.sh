@@ -33,24 +33,24 @@ echo "[*] Starting MTD backup over SSH (${GATEWAY_IP}:${SSH_PORT})..."
 
 for mtd in "${MTDS[@]}"; do
     echo "  - Dumping ${mtd}..."
+    mtdnum="${mtd:3}"
 
     if [ "$mtd" = "mtd4" ]; then
-        # mtd4 (JFFS2 overlay) may be mounted — unmount before reading
-        ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} bash <<REMOTE > "${mtd}.bin" 2>"${mtd}.bin.log"
-mtd=${mtd}
-MOUNT_POINT=\$(grep mtdblock\${mtd:3} /proc/mounts | awk '{print \$2}')
+        # mtd4 (JFFS2 overlay) may be mounted — unmount before reading.
+        # Use sh (BusyBox); expand host-side variables without backslash,
+        # escape remote-side variables with backslash.
+        ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} sh <<REMOTE > "${mtd}.bin" 2>"${mtd}.bin.log"
+MOUNT_POINT=\$(grep mtdblock${mtdnum} /proc/mounts | awk '{print \$2}')
 if [ -n "\$MOUNT_POINT" ]; then
     echo "Detected mount point: \$MOUNT_POINT" >&2
-    echo "Killing serialgateway..." >&2
-    killall -q serialgateway || true
-    echo "Unmounting \$mtd from \$MOUNT_POINT..." >&2
+    killall -q serialgateway 2>/dev/null || true
+    echo "Unmounting ${mtd} from \$MOUNT_POINT..." >&2
     umount \$MOUNT_POINT
 fi
-dd if=/dev/\$mtd bs=1024k 2>/dev/null
+dd if=/dev/${mtd} bs=1024k 2>/dev/null
 if [ -n "\$MOUNT_POINT" ]; then
-    echo "Remounting \$mtd to \$MOUNT_POINT..." >&2
-    mount -t jffs2 /dev/mtdblock\${mtd:3} \$MOUNT_POINT
-    echo "Restarting serialgateway..." >&2
+    echo "Remounting ${mtd} to \$MOUNT_POINT..." >&2
+    mount -t jffs2 /dev/mtdblock${mtdnum} \$MOUNT_POINT
     /tuya/serialgateway &
 fi
 REMOTE
