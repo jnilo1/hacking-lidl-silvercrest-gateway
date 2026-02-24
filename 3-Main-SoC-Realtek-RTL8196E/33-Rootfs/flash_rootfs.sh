@@ -59,7 +59,7 @@ for _ in $(seq 1 "$TRIES"); do
 done
 
 if [ "$ok" -ne 1 ]; then
-    echo "Error: ${TARGET_IP} not detected as bootloader (no ARP lladdr) — is the device in download mode?" >&2
+    echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
     exit 1
 fi
 
