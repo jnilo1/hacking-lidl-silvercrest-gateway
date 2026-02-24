@@ -77,6 +77,15 @@ for mtd in "${MTDS[@]}"; do
         continue
     fi
 
+    # Check MTD_WRITEABLE flag (bit 0x400) — skip read-only partitions
+    MTD_FLAGS=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+        "cat /sys/class/mtd/${mtd}/flags 2>/dev/null" 2>/dev/null || echo "0")
+    MTD_FLAGS=$(printf '%d' "${MTD_FLAGS:-0}" 2>/dev/null || echo "0")
+    if [ $(( MTD_FLAGS & 0x400 )) -eq 0 ]; then
+        echo "  [!] Skipping ${mtd} — write-protected by kernel (flags=$(printf '0x%x' $MTD_FLAGS))."
+        continue
+    fi
+
     echo "  - Restoring ${mtd}..."
     mtdnum="${mtd:3}"
 
@@ -96,7 +105,7 @@ for mtd in "${MTDS[@]}"; do
 
         # Step 2: stream binary data directly to dd stdin
         ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
-            "dd of=/dev/${mtd} bs=1024k 2>/dev/null" < "$binfile" 2>>"${binfile}.log"
+            "dd of=/dev/${mtd} bs=1024k" < "$binfile" 2>>"${binfile}.log"
 
         # Step 3: remount if it was previously mounted
         if [ -n "$MOUNT_POINT" ]; then
@@ -106,7 +115,7 @@ for mtd in "${MTDS[@]}"; do
         fi
     else
         ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
-            "dd of=/dev/${mtd} bs=1024k 2>/dev/null" < "$binfile" 2>"${binfile}.log"
+            "dd of=/dev/${mtd} bs=1024k" < "$binfile" 2>"${binfile}.log"
     fi
 done
 
