@@ -75,6 +75,7 @@ if [[ ! "$confirm" =~ ^[yY]$ ]]; then
 fi
 
 echo "Uploading..."
+cd "$SCRIPT_DIR"
 out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put kernel.img 2>&1) || true
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
