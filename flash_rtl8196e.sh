@@ -99,7 +99,7 @@ flash_image() {
     out=$(tftp -m binary "$TARGET_IP" -c put "$file" 2>&1)
     cd "$SCRIPT_DIR"
     if echo "$out" | grep -qiE \
-        "error|timeout|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+        "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
         echo "Error: transfer failed: $out" >&2
         exit 1
     fi
@@ -118,7 +118,7 @@ cd "${RTL_DIR}/32-Kernel"
 out=$(tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1)
 cd "$SCRIPT_DIR"
 if echo "$out" | grep -qiE \
-    "error|timeout|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
     echo "Error: transfer failed: $out" >&2
     exit 1
 fi

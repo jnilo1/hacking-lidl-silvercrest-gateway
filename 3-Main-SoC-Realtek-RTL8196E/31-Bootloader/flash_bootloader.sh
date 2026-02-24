@@ -74,7 +74,7 @@ fi
 
 out=$(tftp -m binary "$TARGET_IP" -c put "$IMAGE" 2>&1)
 if echo "$out" | grep -qiE \
-    "error|timeout|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
     echo "Error: transfer failed: $out" >&2
     exit 1
 fi
