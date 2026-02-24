@@ -9,9 +9,12 @@ rootfs (33-), and userdata (34-).
 ## [1.1.0] - 2026-02-23
 
 ### 31-Bootloader
-- V2.3: ICMP ping support in the bootloader network stack
+- V2.3: ICMP ping support — `ping 192.168.1.6` works from download mode
 - Boothold mechanism: reboot-to-bootloader from Linux via DRAM magic flag
-- RAM flag relocated to 0x803FFFFC (avoids kernel text corruption)
+  (`devmem 0x003FFFFC 32 0x484F4C44 && reboot`), RAM flag at 0x803FFFFC
+- Download progress shown as percentage instead of endless `.` / `#`
+- `flash_bootloader.sh`: ARP-based boot mode detection (rootless, no arping),
+  clean error reporting with exit code, TFTP error detection
 
 ### 32-Kernel
 - **New driver**: `rtl8196e-eth` — clean-room Ethernet driver (1 855 pure LOC
