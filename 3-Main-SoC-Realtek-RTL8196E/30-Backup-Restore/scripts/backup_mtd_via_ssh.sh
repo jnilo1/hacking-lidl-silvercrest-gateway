@@ -1,10 +1,9 @@
 #!/bin/bash
 #
-# backup_mtd_via_ssh.sh — Backup one or all MTD partitions via SSH + dd
+# backup_mtd_via_ssh.sh — Backup MTD partitions via SSH + cat
 #
-# Automatically detects the gateway firmware layout (original Lidl/Tuya
-# with 5 partitions, or custom firmware with 4 partitions) by reading
-# /proc/mtd on the gateway.
+# Supports the original Lidl/Tuya firmware only (5 partitions, port 2333).
+# For custom firmware (4 partitions), use the bootloader FLR command instead.
 #
 # Usage:
 #   ./backup_mtd_via_ssh.sh all   <gateway_ip> [port]
@@ -54,6 +53,19 @@ while read -r dev size_hex _erase _name; do
 done < <(echo "$GATEWAY_MTD" | tail -n +2)
 
 echo "    Found ${#ALL_MTDS[@]} partitions: ${ALL_MTDS[*]}"
+
+# Only the original Lidl/Tuya firmware (5 partitions) is supported
+if [ "${#ALL_MTDS[@]}" -ne 5 ]; then
+    echo "" >&2
+    echo "Error: ${#ALL_MTDS[@]}-partition layout detected — this is the custom firmware." >&2
+    echo "SSH backup is not supported for this layout." >&2
+    echo "" >&2
+    echo "Use the bootloader FLR command to back up the full flash instead:" >&2
+    echo "  1. Enter boot mode and interrupt the bootloader (ESC on serial console)" >&2
+    echo "  2. Run: FLR 80500000 00000000 01000000" >&2
+    echo "  3. Save the TFTP-transferred file as fullmtd.bin" >&2
+    exit 1
+fi
 
 # Remove any stale mtdX.bin / fullmtd.bin from a previous (possibly different) backup
 STALE=()

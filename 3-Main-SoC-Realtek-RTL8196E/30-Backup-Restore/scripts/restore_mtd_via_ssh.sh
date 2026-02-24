@@ -1,11 +1,10 @@
 #!/bin/bash
 #
-# restore_mtd_via_ssh.sh — Restore one or all MTD partitions via SSH + dd
+# restore_mtd_via_ssh.sh — Restore MTD partitions via SSH + dd
 #
-# Automatically detects the gateway firmware layout (original Lidl/Tuya
-# with 5 partitions, or custom firmware with 4 partitions) by reading
-# /proc/mtd on the gateway. The last partition (JFFS2) is handled with
-# unmount/remount around the flash write.
+# Supports the original Lidl/Tuya firmware only (5 partitions, port 2333).
+# For custom firmware (4 partitions), use the bootloader FLW command instead.
+# The last partition (JFFS2/mtd4) is handled with unmount/remount around the write.
 #
 # Usage:
 #   ./restore_mtd_via_ssh.sh all   <gateway_ip> [port]
@@ -56,6 +55,20 @@ JFFS2_MTD="${ALL_MTDS[-1]}"
 JFFS2_NUM="${JFFS2_MTD:3}"
 
 echo "    Found ${#ALL_MTDS[@]} partitions: ${ALL_MTDS[*]}"
+
+# Only the original Lidl/Tuya firmware (5 partitions) is supported
+if [ "${#ALL_MTDS[@]}" -ne 5 ]; then
+    echo "" >&2
+    echo "Error: ${#ALL_MTDS[@]}-partition layout detected — this is the custom firmware." >&2
+    echo "SSH restore is not supported for this layout." >&2
+    echo "" >&2
+    echo "Use the bootloader FLW command to restore the full flash instead:" >&2
+    echo "  1. Enter boot mode and interrupt the bootloader (ESC on serial console)" >&2
+    echo "  2. Transfer fullmtd.bin via TFTP to RAM: tftpboot 80500000 fullmtd.bin" >&2
+    echo "  3. Run: FLW 00000000 80500000 01000000 0" >&2
+    exit 1
+fi
+
 echo "    JFFS2 partition: ${JFFS2_MTD}"
 
 if [ "$PART" = "all" ]; then
