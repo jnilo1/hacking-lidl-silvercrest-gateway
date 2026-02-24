@@ -19,15 +19,18 @@ This guide explains how to **back up and restore** the embedded flash memory usi
 | No service interruption | ✅ | ❌ (reboot into bootloader) | ❌ (desolder chip) |
 | Works if Linux is broken | ❌ | ✅ | ✅ |
 | Full flash image | ✅ (concatenate) | ✅ (single FLR command) | ✅ |
+| Firmware layout | **Original only** (5 partitions) | Any | Any |
 | Simplest procedure | ➖ | ✅ **recommended for full backup** | ❌ (requires hardware) |
 
 **Method 2 (FLR/FLW) is the most practical for a full flash backup/restore**: two commands, no SSH, no password, no dependency on the running OS. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
+
+> **Note for custom firmware users:** The SSH scripts only support the original Lidl/Tuya firmware (5 partitions). If your gateway runs the custom firmware (4 partitions), use Method 2 (FLR/FLW) for backup and restore.
 
 ---
 
 ## 🔧 Method 1 – Linux Access via SSH
 
-✅ Use this method if the gateway is bootable and reachable over SSH.
+✅ Use this method if the gateway runs the **original Lidl/Tuya firmware** (5 partitions, port 2333), is bootable, and reachable over SSH.
 
 ### 🔄 Backup
 
@@ -293,31 +296,35 @@ jnilo@HP-ZBook:
 
 ## 📁 Included Scripts
 
-| Script                                | Method   | Description                                    |
-|---------------------------------------|----------|------------------------------------------------|
-| `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH + dd      |
-| `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH + dd     |
+| Script                                | Method   | Description                                                        |
+|---------------------------------------|----------|--------------------------------------------------------------------|
+| `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH (original firmware only)      |
+| `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH (original firmware only)     |
 
 ### Usage
 
-Both scripts auto-detect the partition layout by reading `/proc/mtd` on the gateway (works for both the original 5-partition and the custom 4-partition firmware).
+Both scripts connect to the gateway, detect the partition layout from `/proc/mtd`, and abort with FLR/FLW instructions if the custom firmware (4-partition) layout is detected.
 
-SSH options are selected automatically based on the port:
-- port `2333` (default): original Lidl/Tuya firmware — adds `-o HostKeyAlgorithms=+ssh-rsa` for compatibility with the old Dropbear daemon
-- port `22`: custom firmware — standard SSH options
+The default port is `2333` (original Lidl/Tuya firmware). The `-o HostKeyAlgorithms=+ssh-rsa` option is added automatically for compatibility with the old Dropbear daemon.
 
 ```sh
-# Original gateway (port 2333, auto-detected)
+# Backup all partitions
 ./scripts/backup_mtd_via_ssh.sh all <gateway_ip>
+
+# Restore all partitions
 ./scripts/restore_mtd_via_ssh.sh all <gateway_ip>
 
-# Custom firmware (port 22)
-./scripts/backup_mtd_via_ssh.sh all <gateway_ip> 22
-./scripts/restore_mtd_via_ssh.sh all <gateway_ip> 22
-
 # Single partition
-./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip> [port]
-./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip> [port]
+./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip>
+./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip>
+```
+
+If the gateway runs the custom firmware, the scripts will print:
+```
+Error: 4-partition layout detected — this is the custom firmware.
+SSH backup/restore is not supported for this layout.
+
+Use the bootloader FLR/FLW commands instead: ...
 ```
 
 
