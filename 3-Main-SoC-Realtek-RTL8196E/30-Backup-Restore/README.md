@@ -74,16 +74,16 @@ ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<GATEWAY_IP> "dd if=/tmp/rootfs-n
 
 🟠 Use this method if Linux no longer boots, but the Realtek bootloader is still accessible via UART.
 
-⚠️ Note: If Linux fails to boot, it may be due to a corrupted partition.  
-- In that case, backup via the bootloader might be **unreliable or incomplete**,  
+⚠️ Note: If Linux fails to boot, it may be due to a corrupted partition.
+- In that case, backup via the bootloader might be **unreliable or incomplete**,
 - but restore can be useful **if you have previously created a valid backup using Method 1**.
 
 
 ### 🛠 Setup
 
-This second method will use Realtek bootloader's `FLR` and `FLW` commands to transfer files via TFTP. Therefore, a TFTP client must be available on your host.**
+This second method uses the Realtek bootloader's `FLR` and `FLW` commands to transfer data via TFTP.
 
-#### Install a tftp client & server on your linux host
+#### Install a TFTP client on your Linux host
 ```sh
 sudo apt install tftp-hpa
 ```
@@ -95,87 +95,127 @@ sudo apt install tftp-hpa
 
 ---
 
-### 🔄 Backup (via `FLR`)
+### 🔄 Full Flash Backup (recommended)
 
-This procedure allows you to **extract the content of a specific MTD partition** from flash memory to RAM, and then download it to your host using `tftp`.
+**This is the safest approach.** It captures the entire 16 MiB flash chip as a single image, regardless of the partition layout. Use this before any modification.
 
-The command `FLR` (Flash Load to RAM) instructs the bootloader to:
-- Read data from the SPI flash starting at the given offset
-- Load it into a specified address in RAM
-
-Then, the bootloader automatically exposes the RAM content via `tftp`, allowing the host to download it.
-
-#### Example: Backup of the `rootfs` (mtd2)
+#### Step 1 — Load the entire flash into RAM
 
 On the bootloader:
 ```plaintext
-RealTek>FLR 80500000 00200000 00200000
+RealTek>FLR 80500000 00000000 01000000
 ```
 - `80500000` → RAM address where data will be loaded
-- `00200000` → flash offset of mtd2
-- `00200000` → size of the partition in bytes (here: 2 MiB)
+- `00000000` → start of flash (offset 0)
+- `01000000` → full flash size: 16 MiB
 
-From the host upload the file:
+#### Step 2 — Download the image to your host
+
+```sh
+tftp -m binary 192.168.1.6 -c get flash_full.bin
+```
+
+The resulting `flash_full.bin` is exactly **16,777,216 bytes** and can be restored at any time using Method 3 (SPI programmer) or the procedure below.
+
+⚠️ TFTP is not a reliable protocol. Repeat the transfer 2–3 times and compare `md5sum` values.
+⚠️ A direct Ethernet cable connection is strongly recommended.
+
+---
+
+### ♻️ Full Flash Restore
+
+Use this to restore a previously saved full image.
+
+#### Step 1 — Upload the image to the gateway
+
+On the bootloader:
+```plaintext
+RealTek>LOADADDR 80500000
+```
+
+From the host:
+```sh
+tftp -m binary 192.168.1.6 -c put flash_full.bin
+```
+
+#### Step 2 — Write the full flash
+
+Back on the bootloader:
+```plaintext
+RealTek>FLW 00000000 80500000 01000000 0
+```
+
+⚠️ This overwrites the **entire flash chip**. Double-check the image before proceeding.
+⚠️ All values are in hexadecimal.
+
+---
+
+### 🗂 Original Lidl/Tuya Flash Partition Map
+
+> ⚠️ The table below reflects the **original Lidl/Tuya firmware** partition layout.
+> The custom firmware described in this repository uses a **different layout with one fewer partition** (the Tuya Label partition is removed and the remaining space reallocated).
+> When working with the custom firmware, refer to the partition map in `32-Kernel/`.
+
+| MTD  | Description         | Offset       | Size         |
+|------|---------------------|--------------|--------------|
+| mtd0 | Bootloader + Config | `0x00000000` | `0x00020000` (128 KiB) |
+| mtd1 | Kernel              | `0x00020000` | `0x001E0000` (1.875 MiB) |
+| mtd2 | Rootfs              | `0x00200000` | `0x00200000` (2 MiB) |
+| mtd3 | Tuya Label          | `0x00400000` | `0x00020000` (128 KiB) |
+| mtd4 | JFFS2 Overlay       | `0x00420000` | `0x00BE0000` (~11.875 MiB) |
+
+---
+
+### 📎 Appendix: Per-Partition Backup and Restore
+
+Use this only when you need to back up or restore a **specific partition** rather than the full flash.
+
+#### Backup a partition (FLR)
+
+`FLR` (Flash Load to RAM) reads a flash region into RAM, then the bootloader exposes it via TFTP for download.
+
+```plaintext
+FLR <ram_addr> <flash_offset> <size>
+```
+
+Example — backup rootfs (mtd2):
+```plaintext
+RealTek>FLR 80500000 00200000 00200000
+```
 ```sh
 tftp -m binary 192.168.1.6 -c get mtd2.bin
 ```
-This command uploads the content from the RAM gateway to your host, storing it as `mtd2.bin`.
 
-💡 You can repeat this process for each MTD partition (see reference table below).
-⚠️ tftp is not a secure protocol. Repeat the process 2 or 3 times and make sure md5sum are equals
-⚠️ A direct ethernet cable connection is always better :-)
+#### Restore a partition (FLW)
 
----
+`FLW` (Flash Write from RAM) writes RAM content to flash.
 
-### ♻️ Restore (via `FLW`)
-
-The `FLW` (Flash Write from RAM) command allows you to **write binary data stored in RAM** into a specific region of the SPI flash.
-
-This is typically used after a file has been transferred to the gateway via TFTP and loaded into RAM at a known address.
-
-The command format is:
 ```plaintext
-FLW <flash_offset> <ram_address> <length>
+FLW <flash_offset> <ram_addr> <size> 0
 ```
 
-- `flash_offset`: destination in SPI flash (in hex)
-- `ram_address`: where the data is stored in RAM (in hex, e.g. `80500000`)
-- `length`: number of bytes to write (in hex)
-
-#### Example: Restore of the `rootfs` (mtd2)
-
-1. On the bootloader:
+Example — restore rootfs (mtd2):
 ```plaintext
-LOADADDR 80500000
+RealTek>LOADADDR 80500000
 ```
-
-2. From the host, download the file to the gateway:
 ```sh
 tftp -m binary 192.168.1.6 -c put mtd2.bin
 ```
-
-3. Back on the bootloader, write to flash:
 ```plaintext
-FLW 00200000 80500000 00200000 0
+RealTek>FLW 00200000 80500000 00200000 0
 ```
 
-This writes the file `mtd2.bin` (2 MiB) to SPI flash at offset `0x00200000`.
+⚠️ Always double-check offset and size before writing. This operation is destructive.
 
-⚠️ Always double-check offset and size before writing to flash. This process is destructive.
+#### FLR / FLW quick reference (original Lidl/Tuya layout)
 
-⚠️ All values must be in **hexadecimal**. `AUTOBURN` should be **disabled** (default).
-
----
-
-### 🧾 Quick Reference: FLR / FLW Commands by Partition
-
-| MTD     | Description        | Offset     | Size       | FLR Command                                       | FLW Command                                       |
-|---------|--------------------|------------|------------|--------------------------------------------------|--------------------------------------------------|
-| mtd0    | Bootloader + Config| 0x00000000 | 0x00020000 | `FLR 80500000 00000000 00020000`                | `FLW 00000000 80500000 00020000`               |
-| mtd1    | Kernel             | 0x00020000 | 0x001E0000 | `FLR 80500000 00020000 001E0000`                | `FLW 00020000 80500000 001E0000`               |
-| mtd2    | Rootfs             | 0x00200000 | 0x00200000 | `FLR 80500000 00200000 00200000`                | `FLW 00200000 80500000 00200000`               |
-| mtd3    | Tuya Label         | 0x00400000 | 0x00020000 | `FLR 80500000 00400000 00020000`                | `FLW 00400000 80500000 00020000`               |
-| mtd4    | JFFS2 Overlay      | 0x00420000 | 0x00BE0000 | `FLR 80500000 00420000 00BE0000`                | `FLW 00420000 80500000 00BE0000`               |
+| MTD  | Description         | FLR Command                        | FLW Command                        |
+|------|---------------------|------------------------------------|------------------------------------|
+| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000`   | `FLW 00000000 80500000 00020000 0` |
+| mtd1 | Kernel              | `FLR 80500000 00020000 001E0000`   | `FLW 00020000 80500000 001E0000 0` |
+| mtd2 | Rootfs              | `FLR 80500000 00200000 00200000`   | `FLW 00200000 80500000 00200000 0` |
+| mtd3 | Tuya Label          | `FLR 80500000 00400000 00020000`   | `FLW 00400000 80500000 00020000 0` |
+| mtd4 | JFFS2 Overlay       | `FLR 80500000 00420000 00BE0000`   | `FLW 00420000 80500000 00BE0000 0` |
 
 ---
 
