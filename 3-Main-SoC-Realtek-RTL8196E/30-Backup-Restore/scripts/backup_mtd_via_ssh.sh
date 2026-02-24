@@ -55,6 +55,26 @@ done < <(echo "$GATEWAY_MTD" | tail -n +2)
 
 echo "    Found ${#ALL_MTDS[@]} partitions: ${ALL_MTDS[*]}"
 
+# Remove any stale mtdX.bin / fullmtd.bin from a previous (possibly different) backup
+STALE=()
+for f in mtd*.bin fullmtd.bin; do
+    [ -f "$f" ] || continue
+    # Keep only files that belong to the current layout
+    base="${f%.bin}"
+    if [ "$base" = "fullmtd" ]; then
+        STALE+=("$f")
+    else
+        found=0
+        for m in "${ALL_MTDS[@]}"; do [ "$m" = "$base" ] && found=1 && break; done
+        [ "$found" -eq 0 ] && STALE+=("$f")
+    fi
+done
+if [ ${#STALE[@]} -gt 0 ]; then
+    echo "    Removing stale files from previous backup: ${STALE[*]}"
+    rm -f "${STALE[@]}"
+fi
+rm -f fullmtd.bin
+
 if [ "$PART" = "all" ]; then
     MTDS=("${ALL_MTDS[@]}")
 else
