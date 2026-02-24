@@ -35,7 +35,15 @@ fi
 
 # Detect partition layout from /proc/mtd
 echo "[*] Detecting partition layout on ${GATEWAY_IP}:${SSH_PORT}..."
-GATEWAY_MTD=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} "cat /proc/mtd" 2>/dev/null)
+GATEWAY_MTD=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} "cat /proc/mtd" 2>/dev/null) || {
+    echo "Error: cannot connect to ${GATEWAY_IP} on port ${SSH_PORT}." >&2
+    if [ "${SSH_PORT}" = "2333" ]; then
+        echo "Hint: custom firmware uses port 22 — retry with: $0 ${PART} ${GATEWAY_IP} 22" >&2
+    else
+        echo "Hint: original Lidl/Tuya firmware uses port 2333 — retry with: $0 ${PART} ${GATEWAY_IP} 2333" >&2
+    fi
+    exit 1
+}
 
 declare -A EXPECTED_SIZES
 ALL_MTDS=()
