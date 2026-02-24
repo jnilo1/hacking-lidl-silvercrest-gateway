@@ -120,10 +120,15 @@ sudo apt install tftp-hpa
 On the bootloader:
 ```plaintext
 RealTek>FLR 80500000 00000000 01000000
+Flash read from 0 to 80500000 with 1000000 bytes        ?
+(Y)es , (N)o ? --> Y
+Flash Read Succeeded!
 ```
 - `80500000` → RAM address where data will be loaded
 - `00000000` → start of flash (offset 0)
 - `01000000` → full flash size: 16 MiB
+
+Confirm with `Y` when prompted and wait for `Flash Read Succeeded!` before proceeding.
 
 #### Step 2 — Download the image to your host
 
@@ -196,6 +201,8 @@ FLR <ram_addr> <flash_offset> <size>
 Example — backup rootfs (mtd2):
 ```plaintext
 RealTek>FLR 80500000 00200000 00200000
+(Y)es , (N)o ? --> Y
+Flash Read Succeeded!
 ```
 ```sh
 tftp -m binary 192.168.1.6 -c get mtd2.bin
