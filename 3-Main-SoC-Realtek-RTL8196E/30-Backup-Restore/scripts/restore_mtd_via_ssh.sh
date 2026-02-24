@@ -52,7 +52,7 @@ for mtd in "${MTDS[@]}"; do
             2>>"${binfile}.log" || true)
         if [ -n "$MOUNT_POINT" ]; then
             ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
-                "killall -q serialgateway 2>/dev/null || true; umount ${MOUNT_POINT}" \
+                "killall -q serialgateway 2>/dev/null || true; umount ${MOUNT_POINT} || true" \
                 2>>"${binfile}.log"
         fi
 
