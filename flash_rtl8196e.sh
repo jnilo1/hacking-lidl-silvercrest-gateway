@@ -79,11 +79,38 @@ if [ "$ok" -ne 1 ]; then
     exit 1
 fi
 
+# Optional full flash backup via FLR (before any write)
+echo ""
+read -r -p "Back up the current flash before flashing? [y/N] " do_backup
+if [[ "$do_backup" =~ ^[yY]$ ]]; then
+    BACKUP_FILE="$(date '+%y%m%d-%H.%M')-Gw-Backup.bin"
+    echo ""
+    echo "On the bootloader serial console, run:"
+    echo "  FLR 80500000 00000000 01000000"
+    read -r -p "Press Enter when FLR is complete..."
+    echo "Downloading backup to ${BACKUP_FILE}..."
+    out=$(timeout 120 tftp -m binary "$TARGET_IP" -c get "$BACKUP_FILE" 2>&1) || true
+    if echo "$out" | grep -qiE \
+            "error|timeout|timed out|refused|failed|unknown host|illegal"; then
+        echo "Warning: backup download failed: $out" >&2
+        read -r -p "Continue with flashing anyway? [y/N] " cont
+        if [[ ! "$cont" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
+    else
+        size=$(stat -c %s "$BACKUP_FILE" 2>/dev/null || echo 0)
+        if [ "$size" -eq 16777216 ]; then
+            echo "Backup saved: ${BACKUP_FILE} [OK]"
+        else
+            echo "Warning: ${BACKUP_FILE} is ${size} bytes (expected 16777216)" >&2
+            read -r -p "Continue with flashing anyway? [y/N] " cont
+            if [[ ! "$cont" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
+        fi
+    fi
+fi
+
 # Summary
 echo ""
 echo "Ready to flash 4 partitions to ${TARGET_IP}."
-echo "After each upload, wait for 'Flash Write Succeeded!' on the serial"
-echo "console before confirming. The kernel upload triggers an automatic reboot."
+echo "After each upload, wait for 'Flash Write Succeeded!' on the serial console before confirming"
 echo ""
 read -r -p "Proceed? [y/N] " confirm
 if [[ ! "$confirm" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
