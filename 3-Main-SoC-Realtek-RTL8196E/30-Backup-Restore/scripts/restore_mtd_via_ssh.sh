@@ -30,6 +30,11 @@ else
 fi
 
 echo "[*] Starting MTD restore over SSH (${GATEWAY_IP}:${SSH_PORT})..."
+if [ "$PART" = "all" ]; then
+    echo "    Note: each partition requires a separate SSH connection."
+    echo "    mtd0-mtd3: 1 password prompt each; mtd4: up to 4 (unmount/flash/remount)."
+    echo "    mtd4 (12 MB) will take 1-2 minutes — do not interrupt."
+fi
 
 for mtd in "${MTDS[@]}"; do
     binfile="${mtd}.bin"
@@ -49,7 +54,7 @@ for mtd in "${MTDS[@]}"; do
         # Step 1: find mount point and unmount
         MOUNT_POINT=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
             "grep mtdblock${mtdnum} /proc/mounts | awk '{print \$2}'" \
-            2>>"${binfile}.log" || true)
+            2>"${binfile}.log" || true)
         if [ -n "$MOUNT_POINT" ]; then
             ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
                 "killall -q serialgateway 2>/dev/null || true; umount ${MOUNT_POINT} || true" \
