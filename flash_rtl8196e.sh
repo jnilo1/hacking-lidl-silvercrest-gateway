@@ -91,12 +91,13 @@ read -r -p "Proceed? [y/N] " confirm
 [[ ! "$confirm" =~ ^[yY]$ ]] && echo "Aborted." && exit 0
 
 # Helper: flash one image and wait for serial confirmation
+# Args: label dir file timeout_seconds
 flash_image() {
-    local label="$1" dir="$2" file="$3"
+    local label="$1" dir="$2" file="$3" tmo="$4"
     echo ""
     echo "Flashing ${label}..."
     cd "$dir"
-    out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put "$file" 2>&1) || true
+    out=$(timeout "$tmo" tftp -m binary "$TARGET_IP" -c put "$file" 2>&1) || true
     cd "$SCRIPT_DIR"
     if echo "$out" | grep -qiE \
         "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
@@ -108,14 +109,14 @@ flash_image() {
     [[ ! "$r" =~ ^[yY]$ ]] && echo "Aborted." && exit 1
 }
 
-flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"
-flash_image "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"
-flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin"
+flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"    15
+flash_image "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"  30
+flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin" 120
 
 echo ""
 echo "Flashing kernel..."
 cd "${RTL_DIR}/32-Kernel"
-out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put kernel.img 2>&1) || true
+out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1) || true
 cd "$SCRIPT_DIR"
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then

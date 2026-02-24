@@ -76,7 +76,7 @@ fi
 
 echo "Uploading..."
 cd "$SCRIPT_DIR"
-out=$(tftp -m binary -timeout 10 "$TARGET_IP" -c put kernel.img 2>&1) || true
+out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1) || true
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
     echo "Error: transfer failed: $out" >&2
