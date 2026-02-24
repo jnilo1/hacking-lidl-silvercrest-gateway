@@ -34,9 +34,9 @@ echo "[*] Starting MTD backup over SSH (${GATEWAY_IP}:${SSH_PORT})..."
 for mtd in "${MTDS[@]}"; do
     echo "  - Dumping ${mtd}..."
 
-    # dd reads from the raw character device — no unmount needed regardless of partition
+    # cat streams the raw character device to stdout — no block size issues
     ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
-        "dd if=/dev/${mtd} bs=1024k 2>/dev/null" > "${mtd}.bin" 2>"${mtd}.bin.log"
+        "cat /dev/${mtd}" > "${mtd}.bin" 2>"${mtd}.bin.log"
 done
 
 if [ "$PART" = "all" ]; then
