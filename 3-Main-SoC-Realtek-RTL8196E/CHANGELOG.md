@@ -9,6 +9,7 @@ rootfs (33-), and userdata (34-).
 ## [1.1.0] - 2026-02-23
 
 ### 31-Bootloader
+- Fully rewritten from [Sourceforge V3.4.7.3 SDK](https://sourceforge.net/projects/rtl819x/files/) source code and adapted to the new lexra toolchain
 - V2.3: ICMP ping support — `ping 192.168.1.6` works from download mode
 - Boothold mechanism: reboot-to-bootloader from Linux via DRAM magic flag
   (`devmem 0x003FFFFC 32 0x484F4C44 && reboot`), RAM flag at 0x803FFFFC
@@ -28,26 +29,22 @@ rootfs (33-), and userdata (34-).
   (`./build_kernel.sh` for rtl8196e-eth, `./build_kernel.sh legacy` for rtl819x)
 - **New decompressor**: zboot (`arch/mips/boot/compressed/`) replaces the
   external lzma-loader from the Realtek SDK — no external tool dependency
-- **Fix**: `patches/net-core-skbuff.c.patch` hunk header corrected
-  (`+89,12` → `+89,13`). The malformed header caused `patch` to silently fail,
-  leaving the legacy rtl819x kernel without its private buffer pool hooks and
-  causing a boot hang at S30dropbear
-- Legacy `rtl819x` driver remains available as a reference build
+- Legacy `rtl819x` driver from initial release 1.0.0 remains available as a reference build
 
 ### 34-Userdata
 - `/etc/version` updated to include firmware version
 
 ---
 
-## [1.0.0] - 2025-12-01
+## [1.0.0] - 2025-12-18
 
 Initial release.
 
 ### 31-Bootloader
-- V2.2: basic TFTP boot, network stack
+- Lidl/Tuya/Realtek original bootloader
 
 ### 32-Kernel
-- Linux 5.10.246, legacy `rtl819x` Ethernet driver, lzma-loader decompressor
+- Linux 5.10.246, legacy `rtl819x` Ethernet driver developed from original 2.6 code, lzma-loader decompressor
 
 ### 33-Rootfs
 - musl 1.2.5, busybox 1.37, dropbear 2025.88
