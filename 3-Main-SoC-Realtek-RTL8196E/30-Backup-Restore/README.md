@@ -10,6 +10,19 @@ The Lidl Silvercrest gateway includes a GD25Q127C  flash chip (recognized as GD2
 
 This guide explains how to **back up and restore** the embedded flash memory using three distinct methods, depending on your level of access to the system:
 
+### Which method to choose?
+
+| | Method 1 (SSH) | Method 2 (Bootloader FLR/FLW) | Method 3 (SPI programmer) |
+|---|---|---|---|
+| Gateway boots | ✅ required | ✅ required | ❌ not needed |
+| UART access | ❌ not needed | ✅ required | ❌ not needed |
+| No service interruption | ✅ | ❌ (reboot into bootloader) | ❌ (desolder chip) |
+| Works if Linux is broken | ❌ | ✅ | ✅ |
+| Full flash image | ✅ (concatenate) | ✅ (single FLR command) | ✅ |
+| Simplest procedure | ➖ | ✅ **recommended for full backup** | ❌ (requires hardware) |
+
+**Method 2 (FLR/FLW) is the most practical for a full flash backup/restore**: two commands, no SSH, no password, no dependency on the running OS. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
+
 ---
 
 ## 🔧 Method 1 – Linux Access via SSH
@@ -74,9 +87,9 @@ ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<GATEWAY_IP> "dd if=/tmp/rootfs-n
 
 🟠 Use this method if Linux no longer boots, but the Realtek bootloader is still accessible via UART.
 
-⚠️ Note: If Linux fails to boot, it may be due to a corrupted partition.
-- In that case, backup via the bootloader might be **unreliable or incomplete**,
-- but restore can be useful **if you have previously created a valid backup using Method 1**.
+💡 FLR/FLW reads raw flash regardless of filesystem state — it is the **recommended method for a preventive full backup** (before any modification).
+
+⚠️ However, if Linux fails to boot due to a corrupted partition, a backup taken at that point will faithfully capture the corrupted data. In that situation, restoring a **previously saved healthy backup** is the right approach.
 
 
 ### 🛠 Setup
@@ -117,8 +130,7 @@ tftp -m binary 192.168.1.6 -c get flash_full.bin
 
 The resulting `flash_full.bin` is exactly **16,777,216 bytes** and can be restored at any time using Method 3 (SPI programmer) or the procedure below.
 
-⚠️ TFTP is not a reliable protocol. Repeat the transfer 2–3 times and compare `md5sum` values.
-⚠️ A direct Ethernet cable connection is strongly recommended.
+💡 Use a direct Ethernet cable for best reliability. You can verify the transfer with `md5sum flash_full.bin`.
 
 ---
 
