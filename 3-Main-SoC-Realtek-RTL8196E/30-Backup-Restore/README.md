@@ -300,24 +300,24 @@ jnilo@HP-ZBook:
 
 ### Usage
 
+Both scripts auto-detect the partition layout by reading `/proc/mtd` on the gateway (works for both the original 5-partition and the custom 4-partition firmware).
+
+SSH options are selected automatically based on the port:
+- port `2333` (default): original Lidl/Tuya firmware — adds `-o HostKeyAlgorithms=+ssh-rsa` for compatibility with the old Dropbear daemon
+- port `22`: custom firmware — standard SSH options
+
 ```sh
-# Backup all partitions (produces mtd0.bin … mtd4.bin + fullmtd.bin)
+# Original gateway (port 2333, auto-detected)
 ./scripts/backup_mtd_via_ssh.sh all <gateway_ip>
-
-# Backup a single partition
-./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip>
-
-# Restore all partitions
 ./scripts/restore_mtd_via_ssh.sh all <gateway_ip>
 
-# Restore a single partition
-./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip>
-```
-
-The default SSH port is **2333** (Lidl/Tuya gateway). Pass a third argument to override:
-
-```sh
+# Custom firmware (port 22)
 ./scripts/backup_mtd_via_ssh.sh all <gateway_ip> 22
+./scripts/restore_mtd_via_ssh.sh all <gateway_ip> 22
+
+# Single partition
+./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip> [port]
+./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip> [port]
 ```
 
 
