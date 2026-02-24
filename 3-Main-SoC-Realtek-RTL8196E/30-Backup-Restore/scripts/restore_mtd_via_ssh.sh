@@ -20,8 +20,7 @@ PART="$1"
 GATEWAY_IP="$2"
 SSH_PORT="${3:-2333}"
 SSH_USER="root"
-# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy key algorithm)
-# Port 22:   custom firmware (standard OpenSSH)
+# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy RSA key algorithm)
 if [ "${SSH_PORT}" = "2333" ]; then
     SSH_OPTS="-p ${SSH_PORT} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 else
@@ -87,15 +86,6 @@ for mtd in "${MTDS[@]}"; do
     binfile="${mtd}.bin"
     if [ ! -f "$binfile" ]; then
         echo "  [!] Skipping ${mtd} — file ${binfile} not found."
-        continue
-    fi
-
-    # Check MTD_WRITEABLE flag (bit 0x400) — skip read-only partitions
-    MTD_FLAGS=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
-        "cat /sys/class/mtd/${mtd}/flags 2>/dev/null" 2>/dev/null || echo "0")
-    MTD_FLAGS=$(printf '%d' "${MTD_FLAGS:-0}" 2>/dev/null || echo "0")
-    if [ $(( MTD_FLAGS & 0x400 )) -eq 0 ]; then
-        echo "  [!] Skipping ${mtd} — write-protected by kernel (flags=$(printf '0x%x' $MTD_FLAGS))."
         continue
     fi
 

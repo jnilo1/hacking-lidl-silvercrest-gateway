@@ -19,8 +19,7 @@ PART="$1"
 GATEWAY_IP="$2"
 SSH_PORT="${3:-2333}"
 SSH_USER="root"
-# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy key algorithm)
-# Port 22:   custom firmware (standard OpenSSH)
+# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy RSA key algorithm)
 if [ "${SSH_PORT}" = "2333" ]; then
     SSH_OPTS="-p ${SSH_PORT} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 else
