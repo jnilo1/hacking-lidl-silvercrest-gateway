@@ -81,11 +81,9 @@ fi
 
 # Summary
 echo ""
-echo "Flashing to ${TARGET_IP}:"
-echo "  bootloader  $(stat -c%s "$BOOTLOADER_IMG") bytes"
-echo "  rootfs      $(stat -c%s "$ROOTFS_IMG") bytes"
-echo "  userdata    $(stat -c%s "$USERDATA_IMG") bytes"
-echo "  kernel      $(stat -c%s "$KERNEL_IMG") bytes  (triggers reboot)"
+echo "Ready to flash 4 partitions to ${TARGET_IP}."
+echo "After each upload, wait for 'Flash Write Succeeded!' on the serial"
+echo "console before confirming. The kernel upload triggers an automatic reboot."
 echo ""
 read -r -p "Proceed? [y/N] " confirm
 if [[ ! "$confirm" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
@@ -111,6 +109,7 @@ flash_image() {
 
 flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"    15
 flash_image "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"  30
+echo "Note: userdata is 12 MB — transfer and flash may take 1-2 minutes."
 flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin" 120
 
 echo ""
@@ -125,4 +124,4 @@ if echo "$out" | grep -qiE \
 fi
 echo ""
 echo "Done."
-echo "Gateway is rebooting with the new firmware."
+echo "Gateway will reboot automatically with the new firmware."
