@@ -281,9 +281,9 @@ jnilo@HP-ZBook:
 
 ## 📁 Included Scripts
 
-| Script                        | Method    | Description                                 |
-|------------------------------|-----------|---------------------------------------------|
-| `backup_mtd_via_ssh.sh`      | Method 1  | Bakup one or all partitions via SSH + dd |
-| `restore_mtd_via_ssh.sh`     | Method 1  | Restore one or all partitions via SSH + dd             |
+| Script                                | Method   | Description                                    |
+|---------------------------------------|----------|------------------------------------------------|
+| `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH + dd      |
+| `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH + dd     |
 
 
