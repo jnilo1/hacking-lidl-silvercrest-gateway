@@ -286,4 +286,26 @@ jnilo@HP-ZBook:
 | `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH + dd      |
 | `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH + dd     |
 
+### Usage
+
+```sh
+# Backup all partitions (produces mtd0.bin … mtd4.bin + fullmtd.bin)
+./scripts/backup_mtd_via_ssh.sh all <gateway_ip>
+
+# Backup a single partition
+./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip>
+
+# Restore all partitions
+./scripts/restore_mtd_via_ssh.sh all <gateway_ip>
+
+# Restore a single partition
+./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip>
+```
+
+The default SSH port is **2333** (Lidl/Tuya gateway). Pass a third argument to override:
+
+```sh
+./scripts/backup_mtd_via_ssh.sh all <gateway_ip> 22
+```
+
 
