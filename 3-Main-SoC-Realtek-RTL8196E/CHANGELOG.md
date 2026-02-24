@@ -6,7 +6,11 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [1.1.0] - 2026-02-23
+## [1.1.0] - 2026-02-24
+
+### 30-Backup-Restore (new)
+- `backup_mtd_via_ssh.sh` / `restore_mtd_via_ssh.sh`: per-partition SSH backup and restore, original firmware only (5 partitions, port 2333); 4-partition layout rejected with FLR/FLW guidance
+- README: method comparison table (SSH / FLR/FLW / SPI programmer), full FLR/FLW backup and restore procedure
 
 ### 31-Bootloader
 - Fully rewritten from [Sourceforge V3.4.7.3 SDK](https://sourceforge.net/projects/rtl819x/files/) source code and adapted to the new lexra toolchain
@@ -33,6 +37,11 @@ rootfs (33-), and userdata (34-).
 
 ### 34-Userdata
 - `/etc/version` updated to include firmware version
+
+### Flash scripts
+- Fixed invalid `-timeout` tftp flag in all scripts — replaced by `timeout N tftp` wrapper
+- `flash_rtl8196e.sh`: fixed `set -e` silent exit, improved UX messages
+- `flash_rtl8196e.sh`: optional FLR full flash backup before flashing, saved as `YYMMJJ-HH.MM-Gw-Backup.bin`
 
 ---
 
