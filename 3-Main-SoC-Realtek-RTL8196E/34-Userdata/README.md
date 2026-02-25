@@ -45,7 +45,7 @@ Execute init scripts:
 │   ├── motd            # Message of the day
 │   ├── TZ              # Timezone
 │   ├── ntp.conf        # NTP server configuration
-│   ├── eth0.bak        # Static IP template (rename to eth0.conf to use)
+│   ├── eth0.bak        # Static IP template (for reference)
 │   ├── dropbear/       # Dropbear SSH host keys (generated on first boot)
 │   └── init.d/         # Init scripts (executed by rootfs bootstrap)
 │       ├── S05syslog
@@ -58,31 +58,32 @@ Execute init scripts:
 ├── ssh/
 │   └── authorized_keys # SSH public keys for passwordless access
 └── usr/
-    ├── bin/            # User applications (nano, serialgateway)
+    ├── bin/            # User applications (nano, serialgateway, boothold)
     └── share/
         └── terminfo/   # Terminal definitions (linux, vt100, vt102, xterm)
 ```
 
-## Static IP Configuration
+## Network Configuration
 
-By default, the gateway uses DHCP. To configure a static IP:
+`flash_userdata.sh` asks for network configuration at flash time — static IP or DHCP.
+The chosen IP is baked into `userdata.bin` before flashing.
+
+To change the IP after flashing, edit `/userdata/etc/eth0.conf` on the running gateway:
 
 ```bash
-# Copy the template
-cp /etc/eth0.bak /etc/eth0.conf
-
-# Edit with your network settings
 vi /etc/eth0.conf
 ```
 
-The `eth0.conf` file format:
+Format:
 ```
-IPADDR=192.168.1.100
+IPADDR=192.168.1.88
 NETMASK=255.255.255.0
 GATEWAY=192.168.1.1
 ```
 
-Reboot or restart network: `/userdata/etc/init.d/S10network restart`
+Then restart the network: `/userdata/etc/init.d/S10network restart`
+
+`/userdata/etc/eth0.bak` is provided as a reference template.
 
 ## SSH Passwordless Access
 

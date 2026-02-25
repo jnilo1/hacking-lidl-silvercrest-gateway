@@ -81,7 +81,7 @@ The script will:
 
 ### Step 3: Verify
 
-After reboot, the gateway gets its IP via DHCP. Check the serial console for the assigned IP, then connect via SSH:
+After reboot, the gateway uses the network configuration chosen during flashing (static IP or DHCP). Connect via SSH:
 
 ```bash
 ssh root@<GATEWAY_IP>

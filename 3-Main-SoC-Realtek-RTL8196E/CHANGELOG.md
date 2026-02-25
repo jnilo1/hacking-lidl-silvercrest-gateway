@@ -41,11 +41,16 @@ rootfs (33-), and userdata (34-).
 - `/etc/version` updated to include firmware version
 - `boothold` script installed in `usr/bin/`: one-command reboot-to-bootloader
   from Linux SSH, wraps `devmem 0x003FFFFC 32 0x484F4C44 && reboot` with a root check
+- `flash_userdata.sh`: asks for network configuration (static IP or DHCP) before
+  flashing; generates `skeleton/etc/eth0.conf` temporarily, rebuilds JFFS2, then
+  flashes — `eth0.conf` is removed after flash (trap EXIT), skeleton stays clean
 
 ### Flash scripts
 - Fixed invalid `-timeout` tftp flag in all scripts — replaced by `timeout N tftp` wrapper
 - `flash_rtl8196e.sh`: fixed `set -e` silent exit, improved UX messages
 - `flash_rtl8196e.sh`: optional FLR full flash backup before flashing, saved as `YYMMJJ-HH.MM-Gw-Backup.bin`
+- `flash_rtl8196e.sh`: asks for network configuration (static IP or DHCP) before
+  flashing, rebuilds userdata with the chosen config
 
 ---
 
