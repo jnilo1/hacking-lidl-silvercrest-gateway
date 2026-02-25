@@ -1,0 +1,16 @@
+#!/bin/sh
+# boothold — reboot gateway into <RealTek> bootloader prompt
+#
+# Writes the HOLD magic word (0x484F4C44) to physical address 0x003FFFFC
+# via devmem, then reboots.  The bootloader detects the flag and enters
+# download mode instead of booting Linux.  The flag is one-shot: the next
+# reboot boots Linux normally.
+#
+# Requires root (devmem accesses /dev/mem).
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "boothold: must be run as root" >&2
+    exit 1
+fi
+
+devmem 0x003FFFFC 32 0x484F4C44 && reboot

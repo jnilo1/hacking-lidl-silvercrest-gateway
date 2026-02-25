@@ -51,6 +51,12 @@ Outputs:
 **From Linux (recommended):**
 
 ```bash
+boothold          # script installed in /userdata/usr/bin/
+```
+
+Or directly:
+
+```bash
 devmem 0x003FFFFC 32 0x484F4C44 && reboot
 ```
 
@@ -61,6 +67,12 @@ The gateway reboots and stops at the `<RealTek>` prompt automatically. The flag 
 Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt appears.
 
 ### Step 2 — Send the bootloader via TFTP
+
+```bash
+./flash_bootloader.sh          # checks ARP reachability, then uploads
+```
+
+Or manually:
 
 ```bash
 tftp -m binary 192.168.1.6 -c put boot.bin
