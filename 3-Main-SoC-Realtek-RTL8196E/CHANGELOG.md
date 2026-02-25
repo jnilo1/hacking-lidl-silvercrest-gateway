@@ -19,7 +19,9 @@ rootfs (33-), and userdata (34-).
   (`devmem 0x003FFFFC 32 0x484F4C44 && reboot`), RAM flag at 0x803FFFFC
 - Download progress shown as percentage instead of endless `.` / `#`
 - `flash_bootloader.sh`: ARP-based boot mode detection (rootless, no arping),
-  clean error reporting with exit code, TFTP error detection
+  `set -euo pipefail`, helper functions, background UDP ARP trigger with proper
+  cleanup, `ip neigh del` flush before probing, `timeout 15` on tftp,
+  `TRIES`/`PORT`/`SLEEP_BETWEEN` env-var overrides, clean error reporting
 
 ### 32-Kernel
 - **New driver**: `rtl8196e-eth` — clean-room Ethernet driver (1 855 pure LOC
@@ -37,6 +39,8 @@ rootfs (33-), and userdata (34-).
 
 ### 34-Userdata
 - `/etc/version` updated to include firmware version
+- `boothold` script installed in `usr/bin/`: one-command reboot-to-bootloader
+  from Linux SSH, wraps `devmem 0x003FFFFC 32 0x484F4C44 && reboot` with a root check
 
 ### Flash scripts
 - Fixed invalid `-timeout` tftp flag in all scripts — replaced by `timeout N tftp` wrapper
