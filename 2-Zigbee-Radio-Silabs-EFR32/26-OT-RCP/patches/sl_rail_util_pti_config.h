@@ -55,9 +55,7 @@
 // <<< sl:start pin_tool >>>
 // <pti signal=DOUT,(DFRAME),(DCLK)> SL_RAIL_UTIL_PTI
 // $[PTI_SL_RAIL_UTIL_PTI]
-#if SL_RAIL_UTIL_PTI_MODE != RAIL_PTI_MODE_DISABLED
-#warning "RAIL PTI peripheral not configured"
-#endif
+// PTI disabled on Lidl gateway (no debug probe). Warning suppressed.
 #define SL_RAIL_UTIL_PTI_PERIPHERAL         PTI
 
 // SL_RAIL_UTIL_PTI_DOUT_* needed for UART_ONEWIRE and UART and SPI modes
