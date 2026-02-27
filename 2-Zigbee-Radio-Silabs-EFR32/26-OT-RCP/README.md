@@ -222,7 +222,8 @@ The distinction matters:
 │   ├── ot-rcp.slcp.sdk-original # Original SDK sample for reference
 │   ├── main.c                   # Entry point (RTL8196E boot delay)
 │   ├── app.c / app.h            # OT instance init + hardware watchdog
-│   └── sl_uartdrv_usart_vcom_config.h  # UART: 115200, HW flow control
+│   ├── sl_uartdrv_usart_vcom_config.h  # UART: 115200, HW flow control
+│   └── sl_rail_util_pti_config.h       # PTI disabled (suppresses SDK warning)
 └── firmware/                    # Output (generated)
     ├── ot-rcp.gbl               # For UART flashing
     └── ot-rcp.s37               # For SWD flashing

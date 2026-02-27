@@ -153,6 +153,14 @@ if [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
     echo "  - Copied UARTDRV config (115200 baud, HW flow control, PA0/PA1/PA4/PA5)"
 fi
 
+# Copy PTI config: PTI is disabled on this gateway (no debug probe connected).
+# The SDK-generated file emits an unconditional #warning even when disabled;
+# our patched version guards it with #if MODE != DISABLED.
+if [ -f "${PATCHES_DIR}/sl_rail_util_pti_config.h" ]; then
+    cp "${PATCHES_DIR}/sl_rail_util_pti_config.h" config/
+    echo "  - Copied PTI config (disabled, suppressed spurious warning)"
+fi
+
 # Patch Makefile
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))
 echo "  - Setting ARM_GCC_DIR to ${ARM_GCC_DIR}"
