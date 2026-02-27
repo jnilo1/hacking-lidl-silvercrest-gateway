@@ -169,6 +169,19 @@ serial:
 | Flash | ~100 KB | 256 KB |
 | RAM | ~16 KB | 32 KB |
 
+### UART Driver: uartdrv (not iostream)
+
+OpenThread uses `uartdrv_usart` directly for Spinel/HDLC communication — **not** the `iostream_usart` component.
+
+The distinction matters:
+
+| Driver | Level | Usage |
+|--------|-------|-------|
+| `uartdrv_usart` | Low-level HAL, DMA, async | Spinel/HDLC binary protocol ← **this project** |
+| `iostream_usart` | High-level stdio/printf abstraction (built on uartdrv) | Debug console, CLI, logs |
+
+`iostream` adds text-oriented processing (LF→CRLF conversion, buffering) that would corrupt a binary Spinel stream. The OpenThread platform layer (`otSysProcessDrivers`) calls `uartdrv` APIs directly.
+
 ### Features
 
 - **RTL8196E Boot Delay:** 1-second delay for host UART initialization
@@ -206,8 +219,10 @@ serial:
 ├── README.md                    # This file
 ├── patches/
 │   ├── ot-rcp.slcp              # Project config (based on SDK sample)
+│   ├── ot-rcp.slcp.sdk-original # Original SDK sample for reference
 │   ├── main.c                   # Entry point (RTL8196E boot delay)
-│   └── sl_uartdrv_usart_vcom_config.h
+│   ├── app.c / app.h            # OT instance init + hardware watchdog
+│   └── sl_uartdrv_usart_vcom_config.h  # UART: 115200, HW flow control
 └── firmware/                    # Output (generated)
     ├── ot-rcp.gbl               # For UART flashing
     └── ot-rcp.s37               # For SWD flashing
