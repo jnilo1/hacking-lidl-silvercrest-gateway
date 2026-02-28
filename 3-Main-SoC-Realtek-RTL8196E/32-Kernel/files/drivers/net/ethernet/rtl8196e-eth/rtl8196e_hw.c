@@ -304,6 +304,21 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	int ret;
 
 	(void)hw;
+
+	/*
+	 * Configure pin mux for MII mode (same as legacy SDK driver).
+	 * Without this, bootloader defaults leave pins muxed to functions
+	 * that drive EFR32 nRST LOW, preventing the Zigbee radio from
+	 * operating.
+	 */
+	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL) &
+			~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15)),
+			PIN_MUX_SEL);
+	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL2) &
+			~((3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
+			  (3 << 12) | (7 << 15)),
+			PIN_MUX_SEL2);
+
 	/* Ensure switch core clock is active (vendor sequence) */
 	clk = rtl8196e_readl(SYS_CLK_MAG);
 	rtl8196e_writel(clk | CM_PROTECT, SYS_CLK_MAG);

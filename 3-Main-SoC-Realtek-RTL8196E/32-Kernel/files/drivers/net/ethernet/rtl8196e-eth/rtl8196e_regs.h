@@ -21,6 +21,9 @@ static inline void *rtl8196e_uncached_addr(void *p)
 #define SWCORE_BASE    0xBB800000
 #define ASIC_TABLE_BASE 0xBB000000
 
+#define PIN_MUX_SEL   (SYSTEM_BASE + 0x0040)
+#define PIN_MUX_SEL2  (SYSTEM_BASE + 0x0044)
+
 #define SYS_CLK_MAG   (SYSTEM_BASE + 0x0010)
 #define CM_ACTIVE_SWCORE (1 << 11)
 #define CM_PROTECT (1 << 27)
