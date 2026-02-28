@@ -4,5 +4,5 @@
 # Full configuration is in /userdata/etc/inittab (loaded after mount)
 #
 ::sysinit:/etc/init.d/rcS
-#ttyS0::askfirst:/bin/login        # DEBUG: login bypassed
-ttyS0::respawn:-/bin/sh
+ttyS0::askfirst:/bin/login
+#ttyS0::respawn:-/bin/sh
