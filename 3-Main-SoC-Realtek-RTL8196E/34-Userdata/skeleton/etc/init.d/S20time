@@ -72,7 +72,7 @@ start)
     ;;
 stop)
     if [ "$ENABLE_NTPD_DAEMON" = "Y" ]; then
-        echo "🛑 Stopping ntpd"
+        echo "🔴 Stopping ntpd"
         killall ntpd 2>/dev/null
     else
         echo "ℹ️ ntpd -q was used; nothing to stop"

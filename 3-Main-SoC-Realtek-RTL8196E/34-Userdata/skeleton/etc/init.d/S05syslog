@@ -23,7 +23,7 @@ start)
     klogd &
     ;;
 stop)
-    echo "📝 Stopping syslogd and klogd"
+    echo "🔴 Stopping syslogd and klogd"
     killall syslogd
     killall klogd
     ;;

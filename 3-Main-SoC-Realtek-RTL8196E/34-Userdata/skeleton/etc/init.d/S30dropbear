@@ -44,7 +44,7 @@ generate_keys() {
 }
 # Fix permissions required by dropbear for pubkey authentication
 fix_permissions() {
-    chmod 750 /root
+    chmod 750 /root 2>/dev/null || true
     chmod 700 /userdata/ssh 2>/dev/null || true
     chmod 600 /userdata/ssh/authorized_keys 2>/dev/null || true
 }
@@ -57,7 +57,7 @@ start)
     dropbear $DROPBEAR_OPTS
     ;;
 stop)
-    echo "🛑 Stopping Dropbear..."
+    echo "🔴 Stopping Dropbear..."
     if [ -f "$PIDFILE" ]; then
         kill "$(cat "$PIDFILE")" && rm -f "$PIDFILE"
     else
@@ -65,9 +65,9 @@ stop)
     fi
     ;;
 restart)
-    stop
+    "$0" stop
     sleep 1
-    start
+    "$0" start
     ;;
 *)
     echo "ℹ️  Usage: $0 {start|stop|restart}"
