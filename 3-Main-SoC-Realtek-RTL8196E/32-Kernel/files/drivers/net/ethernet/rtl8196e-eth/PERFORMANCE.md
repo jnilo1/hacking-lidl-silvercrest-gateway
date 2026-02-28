@@ -7,45 +7,50 @@
 - Ubuntu 22.04 host, gateway 192.168.1.126, iperf 2.x
 - TCP tests: 30 s per run; stress test: 300 s
 - Kernels: 5.10.246-rtl8196e-eth (new) / 5.10.246-rtl8196e (legacy)
-- rtl8196e-eth measured 2026-02-22; rtl819x measured 2026-02-23
+- rtl8196e-eth v1.0 measured 2026-02-22; v1.1 measured 2026-02-28; rtl819x measured 2026-02-23
+- v1.1 adds PIN_MUX_SEL/SEL2 clearing (fixes EFR32 nRST, also cleans up MII pin mux)
 
 ### TCP throughput
 
-| Test                      | rtl819x (legacy) | rtl8196e-eth v1.0 | Delta              |
-|---------------------------|------------------|-------------------|--------------------|
-| TCP RX (host→gw, 30s)     | 85.7 Mbps        | **91.2 Mbps**     | +5.5 Mbps (+6.4%)  |
-| TCP TX (gw→host, 30s)     | 43.4 Mbps        | **46.9 Mbps**     | +3.5 Mbps (+8.1%)  |
-| TCP Parallel 4 streams    | 90.0 Mbps        | **94.6 Mbps**     | +4.6 Mbps (+5.1%)  |
-| TCP Parallel 8 streams    | 70.0 Mbps        | **70.9 Mbps**     | +0.9 Mbps (+1.3%)  |
-| TCP Stress 300s           | 88.8 Mbps        | **92.0 Mbps**     | +3.2 Mbps (+3.6%)  |
+| Test                      | rtl819x (legacy) | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 | Delta (v1.1 vs legacy) |
+|---------------------------|------------------|-------------------|-------------------|------------------------|
+| TCP RX (host→gw, 30s)     | 85.7 Mbps        | 91.2 Mbps         | **91.6 Mbps**     | +5.9 Mbps (+6.9%)      |
+| TCP TX (gw→host, 30s)     | 43.4 Mbps        | 46.9 Mbps         | **49.2 Mbps**     | +5.8 Mbps (+13.4%)     |
+| TCP Parallel 4 streams    | 90.0 Mbps        | 94.6 Mbps         | **94.7 Mbps**     | +4.7 Mbps (+5.2%)      |
+| TCP Parallel 8 streams    | 70.0 Mbps        | 70.9 Mbps         | **67.4 Mbps**     | -2.6 Mbps (-3.7%)      |
+| TCP Stress 300s           | 88.8 Mbps        | 92.0 Mbps         | **92.0 Mbps**     | +3.2 Mbps (+3.6%)      |
 
-The new driver is consistently faster on all TCP tests (+6% RX, +8% TX on single-stream).
+The new driver is consistently faster on all single-stream TCP tests.
+v1.1 shows a notable TX improvement (+13.4% vs legacy, +4.9% vs v1.0) —
+clearing PIN_MUX_SEL2 removes pin contention on the MII bus.
+The 8-stream result varies between runs (measurement noise at high contention).
 
 ### Driver error counters (full test session)
 
-| Counter                    | rtl819x | rtl8196e-eth |
-|----------------------------|---------|--------------|
-| RX errors                  | 0       | 0            |
-| TX errors                  | 0       | 0            |
-| RX dropped                 | 5       | 6            |
-| TX dropped                 | 0       | 0            |
-| TCP RetransSegs (SoC side) | 0       | 0            |
+| Counter                    | rtl819x | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 |
+|----------------------------|---------|-------------------|--------------------|
+| RX errors                  | 0       | 0                 | 0                  |
+| TX errors                  | 0       | 0                 | 0                  |
+| RX dropped                 | 5       | 6                 | 2                  |
+| TX dropped                 | 0       | 0                 | 0                  |
+| TCP RetransSegs (SoC side) | 0       | 0                 | 0                  |
 
-5–6 RX drops over 3.5 M packets (0.0001%) — negligible.
+2–6 RX drops over 3.5 M packets (0.0001%) — negligible.
 
 ### UDP loss at saturation
 
-| Target bandwidth | rtl819x | rtl8196e-eth |
-|-----------------|---------|--------------|
-| 10 Mbps         | 0%      | 0%           |
-| 50 Mbps         | 40%     | 60%          |
-| 100 Mbps        | 41%     | 57%          |
+| Target bandwidth | rtl819x | rtl8196e-eth v1.0 | rtl8196e-eth v1.1 |
+|-----------------|---------|-------------------|--------------------|
+| 10 Mbps         | 0%      | 0%                | 0%                 |
+| 50 Mbps         | 40%     | 60%               | 71%                |
+| 100 Mbps        | 41%     | 57%               | 48%                |
 
 Legacy shows lower UDP loss at high load. The rtl819x private buffer pool
 pre-allocates receive buffers, absorbing bursts more efficiently than the
-standard page-fragment allocator used by rtl8196e-eth. Both are expected
-behaviour for a 400 MHz MIPS SoC with no hardware UDP offload; neither
-driver approaches UDP line rate.
+standard page-fragment allocator used by rtl8196e-eth. UDP loss at
+saturation varies between runs (50 Mbps: 60→71%, 100 Mbps: 57→48%);
+these are within normal variance for a 400 MHz MIPS SoC with no hardware
+UDP offload. Neither driver approaches UDP line rate.
 
 ---
 
@@ -59,7 +64,7 @@ gateway during both TCP tests using `/proc/stat` sampled at 1-second intervals:
 | Test              | Gateway CPU   | Throughput     |
 |-------------------|---------------|----------------|
 | TCP RX (host→gw)  | **100% busy** | ~86–92 Mbps    |
-| TCP TX (gw→host)  | **100% busy** | ~43–47 Mbps    |
+| TCP TX (gw→host)  | **100% busy** | ~43–49 Mbps    |
 
 **Both directions fully saturate the CPU.**  The 2:1 throughput ratio is not
 caused by a hardware asymmetry, a ring management issue, or a protocol
@@ -184,7 +189,7 @@ line-rate.  A hardware bottleneck would suppress RX throughput as well.
 A UDP TX test was run (gateway → host, `iperf -u -b 100M -c <host> -t 10`,
 0% packet loss) to isolate the TCP checksum contribution.
 
-**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44–47 Mbps).**
+**Result: UDP TX = 25.4 Mbps — lower than TCP TX (44–49 Mbps).**
 
 ```
 [  1] 0.00-10.00 sec  30.3 MBytes  25.4 Mbits/sec   0.000 ms  0/21597 (0%)
