@@ -5,6 +5,10 @@
 ### Test conditions
 
 - Ubuntu 22.04 host, gateway 192.168.1.126, iperf 2.x
+- **Direct connection**: short Cat 6 cable between host and gateway (no switch,
+  no router).  Throughput drops up to 60% when tested through a LAN with
+  switches or consumer routers due to buffering, QoS, and store-and-forward
+  latency on the intermediate hops.
 - TCP tests: 30 s per run; stress test: 300 s
 - Kernels: 5.10.246-rtl8196e-eth (new) / 5.10.246-rtl8196e (legacy)
 - rtl8196e-eth v1.0 measured 2026-02-22; v1.1 measured 2026-02-28; rtl819x measured 2026-02-23
