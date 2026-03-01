@@ -310,9 +310,13 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 * Without this, bootloader defaults leave pins muxed to functions
 	 * that drive EFR32 nRST LOW, preventing the Zigbee radio from
 	 * operating.
+	 *
+	 * Bits [4:3] are the UART1 TXD mux field — set to 01 (UART1)
+	 * rather than clearing to 00, matching the vendor BSP sequence.
 	 */
-	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL) &
-			~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15)),
+	rtl8196e_writel((rtl8196e_readl(PIN_MUX_SEL) &
+			~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15))) |
+			(1 << 3),
 			PIN_MUX_SEL);
 	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL2) &
 			~((3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
