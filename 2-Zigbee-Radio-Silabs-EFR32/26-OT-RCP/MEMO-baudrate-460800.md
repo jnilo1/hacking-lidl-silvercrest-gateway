@@ -224,3 +224,59 @@ universal-silabs-flasher \
 ```
 
 And launch serialgateway normally (115200 is the default, no `-b` flag needed).
+
+---
+
+## 8. Spinel bootloader entry limitation
+
+### Symptom
+
+When OT-RCP firmware is running on the EFR32, `universal-silabs-flasher` cannot
+flash a different firmware. It detects `SPINEL` successfully but then fails with
+`FailedToEnterBootloaderError`.
+
+### Root cause
+
+USF enters the Gecko Bootloader differently for each protocol:
+
+| Protocol | Bootloader entry method | Works? |
+|----------|------------------------|--------|
+| EZSP (NCP) | `launchStandaloneBootloader(mode=0x01)` | Yes |
+| CPC (RCP) | `PROP_VALUE_SET BOOTLOADER_REBOOT_MODE` + `RESET` | Yes |
+| Spinel (OT-RCP) | `CMD_RESET(RESET_BOOTLOADER)`, `tid=0`, no response | **No** |
+
+The Spinel protocol sends `CMD_RESET` with `ResetReason.BOOTLOADER` and
+`wait_response=False`. The OT-RCP firmware on the EFR32MG1B does not enter the
+Gecko Bootloader — it either performs a normal reset (application restarts) or
+ignores the bootloader reason. After a 3-second delay, USF probes for the Gecko
+Bootloader, finds the application running instead, and raises the error.
+
+### Impact
+
+Once OT-RCP firmware is running, **no firmware can be flashed via serialgateway**
+until the EFR32 is running a different firmware type (NCP/EZSP or RCP/CPC).
+The limitation is not specific to the target firmware — it's about the currently
+running firmware's inability to enter the Gecko Bootloader.
+
+### Workarounds
+
+1. **SWD/JTAG debugger**: Flash NCP or any other firmware directly via the
+   EFR32's debug port, bypassing the serial interface entirely.
+
+2. **Power-cycle timing**: Power-cycle the gateway and immediately run
+   `flash_efr32.sh`. The Gecko Bootloader runs briefly at startup before
+   launching the application. If serialgateway is ready fast enough and the
+   bootloader has a non-zero timeout, USF may catch the bootloader window.
+   This is unreliable — the bootloader typically launches the application
+   within ~200 ms, while serialgateway takes seconds to start.
+
+3. **Fix the OT-RCP firmware**: Implement `otPlatResetToBootloader()` in the
+   Silicon Labs EFR32 platform layer so that Spinel `CMD_RESET(BOOTLOADER)`
+   calls `bootloader_rebootAndInstall()` before resetting. This would make the
+   Spinel bootloader entry work like CPC's `PROP_VALUE_SET BOOTLOADER_REBOOT_MODE`.
+
+### Recommendation
+
+Avoid flashing OT-RCP unless you have SWD/JTAG access for recovery.
+`flash_efr32.sh` prints a diagnostic message if the flash fails due to
+this limitation.

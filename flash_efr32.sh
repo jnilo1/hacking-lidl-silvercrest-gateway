@@ -1,11 +1,15 @@
 #!/bin/bash
-# flash_efr32.sh — Flash NCP-UART-HW firmware to the Silabs EFR32 Zigbee radio
+# flash_efr32.sh — Flash firmware to the Silabs EFR32 Zigbee/Thread radio
 #
-# 1. Ensures universal-silabs-flasher is available (installs in venv if needed)
-# 2. SSHes into the gateway to restart serialgateway in flash mode (-f)
-# 3. Probes the EFR32 to verify connectivity and identify current firmware
-# 4. If probe succeeds, flashes ncp-uart-hw firmware
+# 1. Presents a menu to select the firmware type (NCP, RCP, OT-RCP, Router)
+# 2. Ensures universal-silabs-flasher is available (installs in venv if needed)
+# 3. SSHes into the gateway to restart serialgateway in flash mode (-f)
+# 4. Flashes the selected firmware
 # 5. Reboots the gateway (serialgateway restarts normally via init script)
+#
+# Note: OT-RCP (Spinel) firmware cannot enter the Gecko Bootloader via serial.
+# If the EFR32 is running OT-RCP, you must flash a different firmware first
+# (via SWD/JTAG or by power-cycling and catching the bootloader window).
 #
 # Usage: ./flash_efr32.sh [GATEWAY_IP]
 #   GATEWAY_IP - Gateway IP address (default: 192.168.1.88)
@@ -18,10 +22,38 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GW_IP="${1:-192.168.1.88}"
 GW_PORT=8888
 VENV_DIR="${SCRIPT_DIR}/silabs-flasher"
-FIRMWARE="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/firmware/ncp-uart-hw-7.5.1.gbl"
 
 SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
 SSH="ssh $SSH_OPTS root@${GW_IP}"
+
+FW_DIR="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32"
+
+# --- Firmware table --------------------------------------------------------
+
+FW_NCP="${FW_DIR}/24-NCP-UART-HW/firmware/ncp-uart-hw-7.5.1.gbl"
+FW_RCP="${FW_DIR}/25-RCP-UART-HW/firmware/rcp-uart-802154.gbl"
+FW_OT_RCP="${FW_DIR}/26-OT-RCP/firmware/ot-rcp.gbl"
+FW_ROUTER="${FW_DIR}/27-Router/firmware/z3-router-7.5.1.gbl"
+
+# --- Firmware selection menu -----------------------------------------------
+
+echo "EFR32 Firmware Flasher"
+echo ""
+echo "  [1] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA  ($(basename "$FW_NCP"))"
+echo "  [2] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt     ($(basename "$FW_RCP"))"
+echo "  [3] OT-RCP         — OpenThread RCP for otbr-agent      ($(basename "$FW_OT_RCP"))"
+echo "  [4] Z3-Router      — Zigbee 3.0 standalone router       ($(basename "$FW_ROUTER"))"
+echo ""
+read -r -p "Firmware to flash [1]: " fw_choice
+fw_choice="${fw_choice:-1}"
+
+case "$fw_choice" in
+    1) FIRMWARE="$FW_NCP" ;;
+    2) FIRMWARE="$FW_RCP" ;;
+    3) FIRMWARE="$FW_OT_RCP" ;;
+    4) FIRMWARE="$FW_ROUTER" ;;
+    *) echo "Invalid choice."; exit 1 ;;
+esac
 
 # --- Preflight -------------------------------------------------------------
 
@@ -30,6 +62,7 @@ if [ ! -f "$FIRMWARE" ]; then
     exit 1
 fi
 
+echo ""
 echo "Firmware: $(basename "$FIRMWARE")"
 echo "Gateway:  ${GW_IP}:${GW_PORT}"
 echo ""
@@ -52,31 +85,15 @@ fi
 echo ""
 
 # --- 2. SSH: restart serialgateway in flash mode (-f) ----------------------
-# The Gecko Bootloader uses software flow control (XON/XOFF).
-# serialgateway -f disables hardware RTS/CTS, required for Xmodem to work.
-#
-# We keep the SSH session open for the duration of the flash: BusyBox ash
-# kills background jobs when the session closes, so nohup is not reliable.
-# The session (and serialgateway -f) are terminated after flash via SSH_SGWF_PID.
+# serialgateway -f disables hardware RTS/CTS.  The Gecko Bootloader uses
+# XON/XOFF (software flow control) for Xmodem transfers.
 
 echo "Connecting to ${GW_IP} — restarting serialgateway in flash mode..."
-# serialgateway -f daemonizes after printing its banner, so SSH exits normally.
 $SSH "killall serialgateway 2>/dev/null || true; serialgateway -f"
 echo "serialgateway -f running on port ${GW_PORT}."
 echo ""
 
-# --- 3. Probe ---------------------------------------------------------------
-
-echo "Probing EFR32 firmware..."
-if ! "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" probe; then
-    echo "" >&2
-    echo "Error: probe failed." >&2
-    echo "Check: gateway reachable, serialgateway -f running, no other client on port ${GW_PORT}." >&2
-    exit 1
-fi
-echo ""
-
-# --- 4. Flash ---------------------------------------------------------------
+# --- 3. Flash ---------------------------------------------------------------
 
 read -r -p "Flash $(basename "$FIRMWARE") to ${GW_IP}? [y/N] " confirm
 if [[ ! "$confirm" =~ ^[yY]$ ]]; then
@@ -87,9 +104,21 @@ fi
 
 echo ""
 echo "Flashing..."
-"$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"
+if ! "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"; then
+    echo ""
+    echo "Flash failed."
+    echo ""
+    echo "If the EFR32 is running OT-RCP (Spinel) firmware, it cannot enter the"
+    echo "Gecko Bootloader via serial — this is a known Spinel protocol limitation."
+    echo ""
+    echo "Workaround: power-cycle the gateway, then re-run this script within a"
+    echo "few seconds of boot (before the OT-RCP application fully starts)."
+    echo "Or flash a different firmware (NCP, RCP) via SWD/JTAG debugger first."
+    $SSH "reboot" 2>/dev/null || true
+    exit 1
+fi
 
-# --- 5. Reboot -------------------------------------------------------------
+# --- 4. Reboot -------------------------------------------------------------
 
 echo ""
 echo "Flash complete. Rebooting gateway..."
