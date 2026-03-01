@@ -106,14 +106,15 @@ fi
 
 echo ""
 echo "Flashing..."
-FLASH_OUTPUT=$("$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE" 2>&1) && FLASH_RC=0 || FLASH_RC=$?
+FLASH_LOG=$(mktemp)
+trap 'rm -f "$FLASH_LOG"' EXIT
+"$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE" 2>&1 | tee "$FLASH_LOG" && FLASH_RC=0 || FLASH_RC=$?
 
 if [ $FLASH_RC -ne 0 ]; then
     # When flashing a bootloader, USF tries to run_firmware() after the upload.
     # This fails with NoFirmwareError because the application slot is empty —
     # the flash itself succeeded (100% progress bar completed).
-    if [ "$FIRMWARE" = "$FW_BTL" ] && echo "$FLASH_OUTPUT" | grep -q "NoFirmwareError"; then
-        echo "$FLASH_OUTPUT" | sed '/Traceback/,$d'
+    if [ "$FIRMWARE" = "$FW_BTL" ] && grep -q "NoFirmwareError" "$FLASH_LOG"; then
         echo ""
         echo "Bootloader flashed successfully."
         echo "The application slot is now empty — select a firmware to flash now:"
@@ -136,7 +137,6 @@ if [ $FLASH_RC -ne 0 ]; then
         echo "Flashing $(basename "$FIRMWARE")..."
         "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"
     else
-        echo "$FLASH_OUTPUT"
         echo ""
         echo "Flash failed."
         echo ""
@@ -145,8 +145,6 @@ if [ $FLASH_RC -ne 0 ]; then
         $SSH "reboot" 2>/dev/null || true
         exit 1
     fi
-else
-    echo "$FLASH_OUTPUT"
 fi
 
 # --- 4. Reboot -------------------------------------------------------------
