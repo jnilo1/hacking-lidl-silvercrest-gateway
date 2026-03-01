@@ -952,7 +952,7 @@ int32 rtl865x_initAsicL2(rtl8651_tblAsic_InitPara_t *para)
 		set mode 0x0
 		swwb 0xbb804300 21-20 0x2 19-18 $mode 17-16 $mode 15-14 $mode 13-12 $mode 11-10 $mode 9-8 $mode
 	*/
-	REG32(PIN_MUX_SEL) &= ~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15));							   // let P0 to mii mode
+	REG32(PIN_MUX_SEL) = (REG32(PIN_MUX_SEL) & ~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15))) | (1 << 3); // MII mode + UART1 TXD
 	REG32(PIN_MUX_SEL2) &= ~((3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) | (3 << 12) | (7 << 15));	   // S0-S3, P0-P1
 	REG32(LEDCREG) = (2 << 20) | (0 << 18) | (0 << 16) | (0 << 14) | (0 << 12) | (0 << 10) | (0 << 8); // P0-P5
 
