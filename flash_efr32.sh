@@ -22,8 +22,9 @@ GW_IP="${1:-192.168.1.88}"
 GW_PORT=8888
 VENV_DIR="${SCRIPT_DIR}/silabs-flasher"
 
-SSH_OPTS="-o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new"
+SSH_OPTS="-o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new"
 SSH="ssh $SSH_OPTS root@${GW_IP}"
+SSH_RETRIES=3
 
 FW_DIR="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32"
 
@@ -91,7 +92,16 @@ echo ""
 # XON/XOFF (software flow control) for Xmodem transfers.
 
 echo "Connecting to ${GW_IP} — restarting serialgateway in flash mode..."
-$SSH "killall serialgateway 2>/dev/null || true; serialgateway -f"
+for i in $(seq 1 "$SSH_RETRIES"); do
+    if $SSH "killall serialgateway 2>/dev/null || true; serialgateway -f"; then
+        break
+    fi
+    if [ "$i" -eq "$SSH_RETRIES" ]; then
+        echo "Error: cannot reach gateway after $SSH_RETRIES attempts." >&2
+        exit 1
+    fi
+    echo "SSH timeout — retrying ($((i+1))/$SSH_RETRIES)..."
+done
 echo "serialgateway -f running on port ${GW_PORT}."
 echo ""
 
@@ -106,15 +116,16 @@ fi
 
 echo ""
 echo "Flashing..."
-FLASH_LOG=$(mktemp)
-trap 'rm -f "$FLASH_LOG"' EXIT
-"$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE" 2>&1 | tee "$FLASH_LOG" && FLASH_RC=0 || FLASH_RC=$?
 
-if [ $FLASH_RC -ne 0 ]; then
-    # When flashing a bootloader, USF tries to run_firmware() after the upload.
-    # This fails with NoFirmwareError because the application slot is empty —
-    # the flash itself succeeded (100% progress bar completed).
-    if [ "$FIRMWARE" = "$FW_BTL" ] && grep -q "NoFirmwareError" "$FLASH_LOG"; then
+if [ "$FIRMWARE" = "$FW_BTL" ]; then
+    # Bootloader flash: capture output to detect NoFirmwareError.
+    # USF tries run_firmware() after upload, which fails because the
+    # application slot is empty — the flash itself succeeded.
+    FLASH_LOG=$(mktemp)
+    trap 'rm -f "$FLASH_LOG"' EXIT
+    "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE" 2>&1 | tee "$FLASH_LOG" && FLASH_RC=0 || FLASH_RC=$?
+
+    if [ $FLASH_RC -ne 0 ] && grep -q "NoFirmwareError" "$FLASH_LOG"; then
         echo ""
         echo "Bootloader flashed successfully."
         echo "The application slot is now empty — select a firmware to flash now:"
@@ -136,7 +147,18 @@ if [ $FLASH_RC -ne 0 ]; then
         echo ""
         echo "Flashing $(basename "$FIRMWARE")..."
         "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"
-    else
+    elif [ $FLASH_RC -ne 0 ]; then
+        echo ""
+        echo "Flash failed."
+        echo ""
+        echo "Check that serialgateway is running in flash mode and the gateway is"
+        echo "reachable on ${GW_IP}:${GW_PORT}."
+        $SSH "reboot" 2>/dev/null || true
+        exit 1
+    fi
+else
+    # Normal firmware flash: run USF directly so the progress bar works.
+    if ! "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"; then
         echo ""
         echo "Flash failed."
         echo ""
