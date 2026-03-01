@@ -7,9 +7,8 @@
 # 4. Flashes the selected firmware
 # 5. Reboots the gateway (serialgateway restarts normally via init script)
 #
-# Note: OT-RCP (Spinel) firmware cannot enter the Gecko Bootloader via serial.
-# If the EFR32 is running OT-RCP, you must flash a different firmware first
-# (via SWD/JTAG or by power-cycling and catching the bootloader window).
+# Note: The Gecko Bootloader (stage 2) is rarely reflashed — only use [1] if
+# you need to update the bootloader itself (e.g., after an SDK upgrade).
 #
 # Usage: ./flash_efr32.sh [GATEWAY_IP]
 #   GATEWAY_IP - Gateway IP address (default: 192.168.1.88)
@@ -30,6 +29,7 @@ FW_DIR="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32"
 
 # --- Firmware table --------------------------------------------------------
 
+FW_BTL="${FW_DIR}/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-2.4.2.gbl"
 FW_NCP="${FW_DIR}/24-NCP-UART-HW/firmware/ncp-uart-hw-7.5.1.gbl"
 FW_RCP="${FW_DIR}/25-RCP-UART-HW/firmware/rcp-uart-802154.gbl"
 FW_OT_RCP="${FW_DIR}/26-OT-RCP/firmware/ot-rcp.gbl"
@@ -39,19 +39,21 @@ FW_ROUTER="${FW_DIR}/27-Router/firmware/z3-router-7.5.1.gbl"
 
 echo "EFR32 Firmware Flasher"
 echo ""
-echo "  [1] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA  ($(basename "$FW_NCP"))"
-echo "  [2] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt     ($(basename "$FW_RCP"))"
-echo "  [3] OT-RCP         — OpenThread RCP for otbr-agent      ($(basename "$FW_OT_RCP"))"
-echo "  [4] Z3-Router      — Zigbee 3.0 standalone router       ($(basename "$FW_ROUTER"))"
+echo "  [1] Bootloader    — Gecko Bootloader stage 2 (UART/Xmodem)   ($(basename "$FW_BTL"))"
+echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
+echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
+echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
+echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
 echo ""
-read -r -p "Firmware to flash [1]: " fw_choice
-fw_choice="${fw_choice:-1}"
+read -r -p "Firmware to flash [2]: " fw_choice
+fw_choice="${fw_choice:-2}"
 
 case "$fw_choice" in
-    1) FIRMWARE="$FW_NCP" ;;
-    2) FIRMWARE="$FW_RCP" ;;
-    3) FIRMWARE="$FW_OT_RCP" ;;
-    4) FIRMWARE="$FW_ROUTER" ;;
+    1) FIRMWARE="$FW_BTL" ;;
+    2) FIRMWARE="$FW_NCP" ;;
+    3) FIRMWARE="$FW_RCP" ;;
+    4) FIRMWARE="$FW_OT_RCP" ;;
+    5) FIRMWARE="$FW_ROUTER" ;;
     *) echo "Invalid choice."; exit 1 ;;
 esac
 
@@ -104,18 +106,47 @@ fi
 
 echo ""
 echo "Flashing..."
-if ! "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"; then
-    echo ""
-    echo "Flash failed."
-    echo ""
-    echo "If the EFR32 is running OT-RCP (Spinel) firmware, it cannot enter the"
-    echo "Gecko Bootloader via serial — this is a known Spinel protocol limitation."
-    echo ""
-    echo "Workaround: power-cycle the gateway, then re-run this script within a"
-    echo "few seconds of boot (before the OT-RCP application fully starts)."
-    echo "Or flash a different firmware (NCP, RCP) via SWD/JTAG debugger first."
-    $SSH "reboot" 2>/dev/null || true
-    exit 1
+FLASH_OUTPUT=$("$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE" 2>&1) && FLASH_RC=0 || FLASH_RC=$?
+
+if [ $FLASH_RC -ne 0 ]; then
+    # When flashing a bootloader, USF tries to run_firmware() after the upload.
+    # This fails with NoFirmwareError because the application slot is empty —
+    # the flash itself succeeded (100% progress bar completed).
+    if [ "$FIRMWARE" = "$FW_BTL" ] && echo "$FLASH_OUTPUT" | grep -q "NoFirmwareError"; then
+        echo "$FLASH_OUTPUT" | sed '/Traceback/,$d'
+        echo ""
+        echo "Bootloader flashed successfully."
+        echo "The application slot is now empty — select a firmware to flash now:"
+        echo ""
+        echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
+        echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
+        echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
+        echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
+        echo ""
+        read -r -p "Firmware to flash [2]: " fw_choice2
+        fw_choice2="${fw_choice2:-2}"
+        case "$fw_choice2" in
+            2) FIRMWARE="$FW_NCP" ;;
+            3) FIRMWARE="$FW_RCP" ;;
+            4) FIRMWARE="$FW_OT_RCP" ;;
+            5) FIRMWARE="$FW_ROUTER" ;;
+            *) echo "Invalid choice."; $SSH "reboot" 2>/dev/null || true; exit 1 ;;
+        esac
+        echo ""
+        echo "Flashing $(basename "$FIRMWARE")..."
+        "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" flash --firmware "$FIRMWARE"
+    else
+        echo "$FLASH_OUTPUT"
+        echo ""
+        echo "Flash failed."
+        echo ""
+        echo "Check that serialgateway is running in flash mode and the gateway is"
+        echo "reachable on ${GW_IP}:${GW_PORT}."
+        $SSH "reboot" 2>/dev/null || true
+        exit 1
+    fi
+else
+    echo "$FLASH_OUTPUT"
 fi
 
 # --- 4. Reboot -------------------------------------------------------------
