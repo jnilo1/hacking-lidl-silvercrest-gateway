@@ -173,13 +173,16 @@ if [ -f "${MAKEFILE}" ]; then
     if ! grep -q 'subst -Os,-Oz' "${MAKEFILE}"; then
         echo "  - Adding -Oz optimization"
         echo "  - Disabling unused-label warning (SDK bug workaround)"
+        echo "  - Enabling Spinel bootloader reset (PLATFORM_BOOTLOADER_MODE)"
         sed -i "/-include ${PROJECT_NAME}.project.mak/a\\
 \\
 # Override optimization flags for maximum size reduction\\
 C_FLAGS := \$(subst -Os,-Oz,\$(C_FLAGS))\\
 CXX_FLAGS := \$(subst -Os,-Oz,\$(CXX_FLAGS))\\
 # Disable unused-label warning (SDK iostream_uart.c bug)\\
-C_FLAGS := \$(subst -Werror=unused-label,,\$(C_FLAGS))" "${MAKEFILE}"
+C_FLAGS := \$(subst -Werror=unused-label,,\$(C_FLAGS))\\
+# Enable Spinel bootloader reset (SL_CATALOG macro not visible to OT sources)\\
+C_DEFS += '-DOPENTHREAD_CONFIG_PLATFORM_BOOTLOADER_MODE_ENABLE=1'" "${MAKEFILE}"
     fi
 fi
 

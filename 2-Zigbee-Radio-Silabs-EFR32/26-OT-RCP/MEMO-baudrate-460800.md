@@ -227,56 +227,41 @@ And launch serialgateway normally (115200 is the default, no `-b` flag needed).
 
 ---
 
-## 8. Spinel bootloader entry limitation
+## 8. Spinel bootloader entry — FIXED (2026-03-01)
 
-### Symptom
+### Symptom (before fix)
 
-When OT-RCP firmware is running on the EFR32, `universal-silabs-flasher` cannot
-flash a different firmware. It detects `SPINEL` successfully but then fails with
-`FailedToEnterBootloaderError`.
+When OT-RCP firmware was running on the EFR32, `universal-silabs-flasher` could
+not flash a different firmware. It detected `SPINEL` successfully but then failed
+with `FailedToEnterBootloaderError`.
 
 ### Root cause
 
-USF enters the Gecko Bootloader differently for each protocol:
+The Spinel `CMD_RESET(BOOTLOADER)` handler in `ncp_base.cpp` (line 1322) is
+behind `#if OPENTHREAD_CONFIG_PLATFORM_BOOTLOADER_MODE_ENABLE`. This config is
+set in `openthread-core-efr32-config.h` based on whether
+`SL_CATALOG_GECKO_BOOTLOADER_INTERFACE_PRESENT` is defined. However,
+`sl_component_catalog.h` (which defines that macro) is only `#include`d from
+`main.c` — it is **never included** when compiling `ncp_base.cpp`. So the macro
+was undefined, the config evaluated to **0**, and the bootloader reset code was
+compiled out.
 
-| Protocol | Bootloader entry method | Works? |
-|----------|------------------------|--------|
-| EZSP (NCP) | `launchStandaloneBootloader(mode=0x01)` | Yes |
-| CPC (RCP) | `PROP_VALUE_SET BOOTLOADER_REBOOT_MODE` + `RESET` | Yes |
-| Spinel (OT-RCP) | `CMD_RESET(RESET_BOOTLOADER)`, `tid=0`, no response | **No** |
+Evidence from the linker map before the fix:
+- `otPlatResetToBootloader` (misc.o) — garbage-collected (no linked address)
+- `bootloader_rebootAndInstall` (btl_interface.o) — garbage-collected
+- `CommandHandler_RESET` — linked, but the bootloader branch was compiled out
 
-The Spinel protocol sends `CMD_RESET` with `ResetReason.BOOTLOADER` and
-`wait_response=False`. The OT-RCP firmware on the EFR32MG1B does not enter the
-Gecko Bootloader — it either performs a normal reset (application restarts) or
-ignores the bootloader reason. After a 3-second delay, USF probes for the Gecko
-Bootloader, finds the application running instead, and raises the error.
+### Fix
 
-### Impact
+Added `-DOPENTHREAD_CONFIG_PLATFORM_BOOTLOADER_MODE_ENABLE=1` to `C_DEFS` in
+`build_ot_rcp.sh`. This directly enables the config flag at compile time,
+bypassing the broken `SL_CATALOG` check. This is safe because
+`bootloader_interface` IS in the `.slcp` component list and `btl_interface.o`
+IS compiled — only the config gate was broken.
 
-Once OT-RCP firmware is running, **no firmware can be flashed via serialgateway**
-until the EFR32 is running a different firmware type (NCP/EZSP or RCP/CPC).
-The limitation is not specific to the target firmware — it's about the currently
-running firmware's inability to enter the Gecko Bootloader.
+### Verification
 
-### Workarounds
-
-1. **SWD/JTAG debugger**: Flash NCP or any other firmware directly via the
-   EFR32's debug port, bypassing the serial interface entirely.
-
-2. **Power-cycle timing**: Power-cycle the gateway and immediately run
-   `flash_efr32.sh`. The Gecko Bootloader runs briefly at startup before
-   launching the application. If serialgateway is ready fast enough and the
-   bootloader has a non-zero timeout, USF may catch the bootloader window.
-   This is unreliable — the bootloader typically launches the application
-   within ~200 ms, while serialgateway takes seconds to start.
-
-3. **Fix the OT-RCP firmware**: Implement `otPlatResetToBootloader()` in the
-   Silicon Labs EFR32 platform layer so that Spinel `CMD_RESET(BOOTLOADER)`
-   calls `bootloader_rebootAndInstall()` before resetting. This would make the
-   Spinel bootloader entry work like CPC's `PROP_VALUE_SET BOOTLOADER_REBOOT_MODE`.
-
-### Recommendation
-
-Avoid flashing OT-RCP unless you have SWD/JTAG access for recovery.
-`flash_efr32.sh` prints a diagnostic message if the flash fails due to
-this limitation.
+After rebuild, `otPlatResetToBootloader` and `bootloader_rebootAndInstall`
+should have non-zero linked addresses in the `.map` file (not garbage-collected).
+`universal-silabs-flasher` should be able to enter the Gecko Bootloader from
+OT-RCP via Spinel `CMD_RESET(RESET_BOOTLOADER)`.
