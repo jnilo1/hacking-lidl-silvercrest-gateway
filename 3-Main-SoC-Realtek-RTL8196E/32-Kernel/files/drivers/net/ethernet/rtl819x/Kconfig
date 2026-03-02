@@ -3,7 +3,7 @@
 #
 
 config RTL819X
-	tristate "Realtek RTL819x Ethernet support"
+	tristate "Realtek RTL819x Ethernet support (legacy)"
 	depends on REALTEK || COMPILE_TEST
 	select PHYLIB
 	select NET_CORE

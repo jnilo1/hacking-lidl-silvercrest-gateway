@@ -93,51 +93,23 @@ commander gbl flash --device EFR32MG1B232F256GM48 firmware.gbl
 
 ---
 
-## Method 2: Software-Based Flash via UART (universal-silabs-flasher)
+## Method 2: Software-Based Flash via UART
 
 This method uses `serialgateway` on the Lidl gateway to expose the EFR32 serial port over TCP, allowing remote firmware updates via the Gecko Bootloader.
 
 > **Limitation**: This method only supports `.gbl` files. For full backup/restore, use Method 1 (SWD).
 
-### Prerequisites
-
-| Requirement | Why |
-|-------------|-----|
-| `serialgateway -f` | Bootloader needs SW flow control |
-| No Z2M/ZHA attached | Serial port must be free |
-| No other SSH sessions | Avoid port conflicts |
-| Wired Ethernet | TCP reliability |
-
-### Installation
+Use the `flash_efr32.sh` script at the repository root:
 
 ```bash
-python3 -m venv silabs-flasher
-source silabs-flasher/bin/activate
-pip install universal-silabs-flasher
+./flash_efr32.sh <GATEWAY_IP>
 ```
 
-### Usage
+The script handles everything automatically: installs `universal-silabs-flasher`
+in a venv, restarts serialgateway in flash mode via SSH, flashes the selected
+firmware, and reboots the gateway.
 
-**Prepare the gateway** (via SSH):
-```bash
-killall serialgateway && serialgateway -f
-```
-
-**Probe** (check connectivity and current firmware):
-```bash
-universal-silabs-flasher --device socket://GATEWAY_IP:8888 probe
-```
-
-**Flash** a new firmware:
-```bash
-universal-silabs-flasher --device socket://GATEWAY_IP:8888 flash --firmware firmware.gbl
-```
-
-**After flashing**, restore normal operation:
-```bash
-# On gateway: reboot, or:
-killall serialgateway && serialgateway
-```
+See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details on the script.
 
 ---
 
@@ -301,14 +273,7 @@ Terminal 2: universal-silabs-flasher ...     (works!)
 ### Flash via UART (most common)
 
 ```bash
-# 1. On gateway (SSH):
-killall serialgateway && serialgateway -f
-
-# 2. On your PC:
-universal-silabs-flasher --device socket://192.168.1.X:8888 flash --firmware firmware.gbl
-
-# 3. On gateway (SSH):
-reboot
+./flash_efr32.sh <GATEWAY_IP>
 ```
 
 ### Full backup via SWD

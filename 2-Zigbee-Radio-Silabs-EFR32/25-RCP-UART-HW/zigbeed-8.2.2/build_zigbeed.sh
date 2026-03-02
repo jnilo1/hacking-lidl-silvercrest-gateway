@@ -121,6 +121,7 @@ fi
 # Check slc
 if [ -d "${SILABS_TOOLS}/slc_cli" ]; then
     export PATH="${SILABS_TOOLS}/slc_cli:$PATH"
+    export JAVA_TOOL_OPTIONS="-Duser.home=${SILABS_TOOLS}"
 fi
 
 if ! command -v slc >/dev/null 2>&1; then

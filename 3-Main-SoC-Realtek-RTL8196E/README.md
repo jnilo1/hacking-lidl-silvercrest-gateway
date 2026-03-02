@@ -69,16 +69,19 @@ cd lidl-gateway-linux/3-Main-SoC-Realtek-RTL8196E
 
 1. Connect to the gateway via serial (38400 8N1)
 2. Enter bootloader mode (press ESC during boot to get `<RealTek>` prompt)
-3. Run the flash script:
+3. Run the flash script **from the repository root**:
 
 ```bash
 ./flash_rtl8196e.sh              # Flash all partitions
-./flash_rtl8196e.sh kernel       # Flash kernel only
-./flash_rtl8196e.sh rootfs       # Flash rootfs only
-./flash_rtl8196e.sh userdata     # Flash userdata only
 ```
 
-Flashing order: rootfs → userdata → kernel (kernel triggers automatic reboot).
+To flash individual partitions, use the scripts in each subdirectory:
+
+```bash
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh
+3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh
+```
 
 ### After Flashing
 
@@ -99,19 +102,21 @@ After flashing, tune the configuration to fit your needs. Use `nano` to edit con
 passwd
 ```
 
-#### 2. Static IP Address
+#### 2. Network Configuration
 
-By default, the gateway uses DHCP. To set a static IP:
+`flash_userdata.sh` asks for network configuration (static IP or DHCP) at flash time.
+The IP is baked into `userdata.bin` before flashing — no manual step needed.
+
+To change the IP after flashing:
 
 ```bash
-nano /etc/eth0.bak              # Edit IP, netmask, gateway
-mv /etc/eth0.bak /etc/eth0.conf
-reboot
+nano /etc/eth0.conf    # Edit IP, netmask, gateway
+/userdata/etc/init.d/S10network restart
 ```
 
-Example `eth0.conf`:
+Format:
 ```
-IPADDR=192.168.1.100
+IPADDR=192.168.1.88
 NETMASK=255.255.255.0
 GATEWAY=192.168.1.1
 ```

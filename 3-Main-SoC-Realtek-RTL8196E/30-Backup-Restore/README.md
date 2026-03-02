@@ -10,11 +10,27 @@ The Lidl Silvercrest gateway includes a GD25Q127C  flash chip (recognized as GD2
 
 This guide explains how to **back up and restore** the embedded flash memory using three distinct methods, depending on your level of access to the system:
 
+### Which method to choose?
+
+| | Method 1 (SSH) | Method 2 (Bootloader FLR/FLW) | Method 3 (SPI programmer) |
+|---|---|---|---|
+| Gateway boots | ✅ required | ✅ required | ❌ not needed |
+| UART access | ❌ not needed | ✅ required | ❌ not needed |
+| No service interruption | ✅ | ❌ (reboot into bootloader) | ❌ (desolder chip) |
+| Works if Linux is broken | ❌ | ✅ | ✅ |
+| Full flash image | ✅ (concatenate) | ✅ (single FLR command) | ✅ |
+| Firmware layout | **Original only** (5 partitions) | Any | Any |
+| Simplest procedure | ➖ | ✅ **recommended for full backup** | ❌ (requires hardware) |
+
+**Method 2 (FLR/FLW) is the most practical for a full flash backup/restore**: two commands, no SSH, no password, no dependency on the running OS. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
+
+> **Note for custom firmware users:** The SSH scripts only support the original Lidl/Tuya firmware (5 partitions). If your gateway runs the custom firmware (4 partitions), use Method 2 (FLR/FLW) for backup and restore.
+
 ---
 
 ## 🔧 Method 1 – Linux Access via SSH
 
-✅ Use this method if the gateway is bootable and reachable over SSH.
+✅ Use this method if the gateway runs the **original Lidl/Tuya firmware** (5 partitions, port 2333), is bootable, and reachable over SSH.
 
 ### 🔄 Backup
 
@@ -74,16 +90,16 @@ ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<GATEWAY_IP> "dd if=/tmp/rootfs-n
 
 🟠 Use this method if Linux no longer boots, but the Realtek bootloader is still accessible via UART.
 
-⚠️ Note: If Linux fails to boot, it may be due to a corrupted partition.  
-- In that case, backup via the bootloader might be **unreliable or incomplete**,  
-- but restore can be useful **if you have previously created a valid backup using Method 1**.
+💡 FLR/FLW reads raw flash regardless of filesystem state — it is the **recommended method for a preventive full backup** (before any modification).
+
+⚠️ However, if Linux fails to boot due to a corrupted partition, a backup taken at that point will faithfully capture the corrupted data. In that situation, restoring a **previously saved healthy backup** is the right approach.
 
 
 ### 🛠 Setup
 
-This second method will use Realtek bootloader's `FLR` and `FLW` commands to transfer files via TFTP. Therefore, a TFTP client must be available on your host.**
+This second method uses the Realtek bootloader's `FLR` and `FLW` commands to transfer data via TFTP.
 
-#### Install a tftp client & server on your linux host
+#### Install a TFTP client on your Linux host
 ```sh
 sudo apt install tftp-hpa
 ```
@@ -95,87 +111,153 @@ sudo apt install tftp-hpa
 
 ---
 
-### 🔄 Backup (via `FLR`)
+### 🔄 Full Flash Backup (recommended)
 
-This procedure allows you to **extract the content of a specific MTD partition** from flash memory to RAM, and then download it to your host using `tftp`.
+**This is the safest approach.** It captures the entire 16 MiB flash chip as a single image, regardless of the partition layout. Use this before any modification.
 
-The command `FLR` (Flash Load to RAM) instructs the bootloader to:
-- Read data from the SPI flash starting at the given offset
-- Load it into a specified address in RAM
-
-Then, the bootloader automatically exposes the RAM content via `tftp`, allowing the host to download it.
-
-#### Example: Backup of the `rootfs` (mtd2)
+#### Step 1 — Load the entire flash into RAM
 
 On the bootloader:
 ```plaintext
-RealTek>FLR 80500000 00200000 00200000
+RealTek>FLR 80500000 00000000 01000000
+Flash read from 0 to 80500000 with 1000000 bytes        ?
+(Y)es , (N)o ? --> Y
+Flash Read Succeeded!
 ```
 - `80500000` → RAM address where data will be loaded
-- `00200000` → flash offset of mtd2
-- `00200000` → size of the partition in bytes (here: 2 MiB)
+- `00000000` → start of flash (offset 0)
+- `01000000` → full flash size: 16 MiB
 
-From the host upload the file:
+Confirm with `Y` when prompted and wait for `Flash Read Succeeded!` before proceeding.
+
+#### Step 2 — Download the image to your host
+
+```sh
+tftp -m binary 192.168.1.6 -c get flash_full.bin
+```
+
+The resulting `flash_full.bin` is exactly **16,777,216 bytes** and can be restored at any time using Method 3 (SPI programmer) or the procedure below.
+
+💡 Use a direct Ethernet cable for best reliability. You can verify the transfer with `md5sum flash_full.bin`.
+
+---
+
+### ♻️ Full Flash Restore
+
+Use this to restore a previously saved full image.
+
+#### Step 1 — Upload the image to the gateway
+
+On the bootloader:
+```plaintext
+RealTek>LOADADDR 80500000
+```
+
+From the host:
+```sh
+tftp -m binary 192.168.1.6 -c put flash_full.bin
+```
+
+#### Step 2 — Write the full flash
+
+Back on the bootloader:
+```plaintext
+RealTek>FLW 00000000 80500000 01000000 0
+```
+
+⚠️ This overwrites the **entire flash chip**. Double-check the image before proceeding.
+⚠️ All values are in hexadecimal.
+
+---
+
+### 🗂 Flash Partition Maps
+
+#### Original Lidl/Tuya firmware (5 partitions)
+
+| MTD  | Description         | Offset       | Size         |
+|------|---------------------|--------------|--------------|
+| mtd0 | Bootloader + Config | `0x00000000` | `0x00020000` (128 KiB) |
+| mtd1 | Kernel              | `0x00020000` | `0x001E0000` (1.875 MiB) |
+| mtd2 | Rootfs              | `0x00200000` | `0x00200000` (2 MiB) |
+| mtd3 | Tuya Label          | `0x00400000` | `0x00020000` (128 KiB) |
+| mtd4 | JFFS2 Overlay       | `0x00420000` | `0x00BE0000` (~11.875 MiB) |
+
+#### Custom firmware (4 partitions)
+
+| MTD  | Description         | Offset       | Size         |
+|------|---------------------|--------------|--------------|
+| mtd0 | Bootloader + Config | `0x00000000` | `0x00020000` (128 KiB) |
+| mtd1 | Kernel              | `0x00020000` | `0x001E0000` (1.875 MiB) |
+| mtd2 | Rootfs              | `0x00200000` | `0x00200000` (2 MiB) |
+| mtd3 | JFFS2 Userdata      | `0x00400000` | `0x00C00000` (12 MiB) |
+
+The custom firmware removes the Tuya Label partition and allocates the full remaining space (12 MiB) to JFFS2 userdata.
+
+---
+
+### 📎 Appendix: Per-Partition Backup and Restore
+
+Use this only when you need to back up or restore a **specific partition** rather than the full flash.
+
+#### Backup a partition (FLR)
+
+`FLR` (Flash Load to RAM) reads a flash region into RAM, then the bootloader exposes it via TFTP for download.
+
+```plaintext
+FLR <ram_addr> <flash_offset> <size>
+```
+
+Example — backup rootfs (mtd2):
+```plaintext
+RealTek>FLR 80500000 00200000 00200000
+(Y)es , (N)o ? --> Y
+Flash Read Succeeded!
+```
 ```sh
 tftp -m binary 192.168.1.6 -c get mtd2.bin
 ```
-This command uploads the content from the RAM gateway to your host, storing it as `mtd2.bin`.
 
-💡 You can repeat this process for each MTD partition (see reference table below).
-⚠️ tftp is not a secure protocol. Repeat the process 2 or 3 times and make sure md5sum are equals
-⚠️ A direct ethernet cable connection is always better :-)
+#### Restore a partition (FLW)
 
----
+`FLW` (Flash Write from RAM) writes RAM content to flash.
 
-### ♻️ Restore (via `FLW`)
-
-The `FLW` (Flash Write from RAM) command allows you to **write binary data stored in RAM** into a specific region of the SPI flash.
-
-This is typically used after a file has been transferred to the gateway via TFTP and loaded into RAM at a known address.
-
-The command format is:
 ```plaintext
-FLW <flash_offset> <ram_address> <length>
+FLW <flash_offset> <ram_addr> <size> 0
 ```
 
-- `flash_offset`: destination in SPI flash (in hex)
-- `ram_address`: where the data is stored in RAM (in hex, e.g. `80500000`)
-- `length`: number of bytes to write (in hex)
-
-#### Example: Restore of the `rootfs` (mtd2)
-
-1. On the bootloader:
+Example — restore rootfs (mtd2):
 ```plaintext
-LOADADDR 80500000
+RealTek>LOADADDR 80500000
 ```
-
-2. From the host, download the file to the gateway:
 ```sh
 tftp -m binary 192.168.1.6 -c put mtd2.bin
 ```
-
-3. Back on the bootloader, write to flash:
 ```plaintext
-FLW 00200000 80500000 00200000 0
+RealTek>FLW 00200000 80500000 00200000 0
 ```
 
-This writes the file `mtd2.bin` (2 MiB) to SPI flash at offset `0x00200000`.
+⚠️ Always double-check offset and size before writing. This operation is destructive.
 
-⚠️ Always double-check offset and size before writing to flash. This process is destructive.
+#### FLR / FLW quick reference (original Lidl/Tuya layout — 5 partitions)
 
-⚠️ All values must be in **hexadecimal**. `AUTOBURN` should be **disabled** (default).
+| MTD  | Description         | FLR Command                        | FLW Command                        |
+|------|---------------------|------------------------------------|------------------------------------|
+| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000`   | `FLW 00000000 80500000 00020000 0` |
+| mtd1 | Kernel              | `FLR 80500000 00020000 001E0000`   | `FLW 00020000 80500000 001E0000 0` |
+| mtd2 | Rootfs              | `FLR 80500000 00200000 00200000`   | `FLW 00200000 80500000 00200000 0` |
+| mtd3 | Tuya Label          | `FLR 80500000 00400000 00020000`   | `FLW 00400000 80500000 00020000 0` |
+| mtd4 | JFFS2 Overlay       | `FLR 80500000 00420000 00BE0000`   | `FLW 00420000 80500000 00BE0000 0` |
 
----
+#### FLR / FLW quick reference (custom firmware layout — 4 partitions)
 
-### 🧾 Quick Reference: FLR / FLW Commands by Partition
+| MTD  | Description         | FLR Command                        | FLW Command                        |
+|------|---------------------|------------------------------------|------------------------------------|
+| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000`   | `FLW 00000000 80500000 00020000 0` |
+| mtd1 | Kernel              | `FLR 80500000 00020000 001E0000`   | `FLW 00020000 80500000 001E0000 0` |
+| mtd2 | Rootfs              | `FLR 80500000 00200000 00200000`   | `FLW 00200000 80500000 00200000 0` |
+| mtd3 | JFFS2 Userdata      | `FLR 80500000 00400000 00C00000`   | `FLW 00400000 80500000 00C00000 0` |
 
-| MTD     | Description        | Offset     | Size       | FLR Command                                       | FLW Command                                       |
-|---------|--------------------|------------|------------|--------------------------------------------------|--------------------------------------------------|
-| mtd0    | Bootloader + Config| 0x00000000 | 0x00020000 | `FLR 80500000 00000000 00020000`                | `FLW 00000000 80500000 00020000`               |
-| mtd1    | Kernel             | 0x00020000 | 0x001E0000 | `FLR 80500000 00020000 001E0000`                | `FLW 00020000 80500000 001E0000`               |
-| mtd2    | Rootfs             | 0x00200000 | 0x00200000 | `FLR 80500000 00200000 00200000`                | `FLW 00200000 80500000 00200000`               |
-| mtd3    | Tuya Label         | 0x00400000 | 0x00020000 | `FLR 80500000 00400000 00020000`                | `FLW 00400000 80500000 00020000`               |
-| mtd4    | JFFS2 Overlay      | 0x00420000 | 0x00BE0000 | `FLR 80500000 00420000 00BE0000`                | `FLW 00420000 80500000 00BE0000`               |
+The custom firmware removes the Tuya Label partition and allocates the remaining 12 MiB to JFFS2 userdata.
 
 ---
 
@@ -241,9 +323,35 @@ jnilo@HP-ZBook:
 
 ## 📁 Included Scripts
 
-| Script                        | Method    | Description                                 |
-|------------------------------|-----------|---------------------------------------------|
-| `backup_mtd_via_ssh.sh`      | Method 1  | Bakup one or all partitions via SSH + dd |
-| `restore_mtd_via_ssh.sh`     | Method 1  | Restore one or all partitions via SSH + dd             |
+| Script                                | Method   | Description                                                        |
+|---------------------------------------|----------|--------------------------------------------------------------------|
+| `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH (original firmware only)      |
+| `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH (original firmware only)     |
+
+### Usage
+
+Both scripts connect to the gateway, detect the partition layout from `/proc/mtd`, and abort with FLR/FLW instructions if the custom firmware (4-partition) layout is detected.
+
+The default port is `2333` (original Lidl/Tuya firmware). The `-o HostKeyAlgorithms=+ssh-rsa` option is added automatically for compatibility with the old Dropbear daemon.
+
+```sh
+# Backup all partitions
+./scripts/backup_mtd_via_ssh.sh all <gateway_ip>
+
+# Restore all partitions
+./scripts/restore_mtd_via_ssh.sh all <gateway_ip>
+
+# Single partition
+./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip>
+./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip>
+```
+
+If the gateway runs the custom firmware, the scripts will print:
+```
+Error: 4-partition layout detected — this is the custom firmware.
+SSH backup/restore is not supported for this layout.
+
+Use the bootloader FLR/FLW commands instead: ...
+```
 
 

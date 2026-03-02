@@ -57,6 +57,7 @@ if [ -d "${SILABS_TOOLS_DIR}/slc_cli" ]; then
     export PATH="${SILABS_TOOLS_DIR}/arm-gnu-toolchain/bin:$PATH"
     export PATH="${SILABS_TOOLS_DIR}/commander:$PATH"
     export GECKO_SDK="${SILABS_TOOLS_DIR}/gecko_sdk"
+    export JAVA_TOOL_OPTIONS="-Duser.home=${SILABS_TOOLS_DIR}"
 fi
 
 # =========================================
@@ -152,6 +153,14 @@ if [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
     echo "  - Copied UARTDRV config (115200 baud, HW flow control, PA0/PA1/PA4/PA5)"
 fi
 
+# Copy PTI config: PTI is disabled on this gateway (no debug probe connected).
+# The SDK-generated file emits an unconditional #warning even when disabled;
+# our patched version guards it with #if MODE != DISABLED.
+if [ -f "${PATCHES_DIR}/sl_rail_util_pti_config.h" ]; then
+    cp "${PATCHES_DIR}/sl_rail_util_pti_config.h" config/
+    echo "  - Copied PTI config (disabled, suppressed spurious warning)"
+fi
+
 # Patch Makefile
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))
 echo "  - Setting ARM_GCC_DIR to ${ARM_GCC_DIR}"
@@ -164,13 +173,16 @@ if [ -f "${MAKEFILE}" ]; then
     if ! grep -q 'subst -Os,-Oz' "${MAKEFILE}"; then
         echo "  - Adding -Oz optimization"
         echo "  - Disabling unused-label warning (SDK bug workaround)"
+        echo "  - Enabling Spinel bootloader reset (PLATFORM_BOOTLOADER_MODE)"
         sed -i "/-include ${PROJECT_NAME}.project.mak/a\\
 \\
 # Override optimization flags for maximum size reduction\\
 C_FLAGS := \$(subst -Os,-Oz,\$(C_FLAGS))\\
 CXX_FLAGS := \$(subst -Os,-Oz,\$(CXX_FLAGS))\\
 # Disable unused-label warning (SDK iostream_uart.c bug)\\
-C_FLAGS := \$(subst -Werror=unused-label,,\$(C_FLAGS))" "${MAKEFILE}"
+C_FLAGS := \$(subst -Werror=unused-label,,\$(C_FLAGS))\\
+# Enable Spinel bootloader reset (SL_CATALOG macro not visible to OT sources)\\
+C_DEFS += '-DOPENTHREAD_CONFIG_PLATFORM_BOOTLOADER_MODE_ENABLE=1'" "${MAKEFILE}"
     fi
 fi
 

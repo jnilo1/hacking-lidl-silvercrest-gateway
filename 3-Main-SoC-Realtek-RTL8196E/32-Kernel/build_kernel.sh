@@ -1,354 +1,298 @@
 #!/bin/bash
 # build_kernel.sh — Build Linux 5.10.246 for Realtek RTL8196E (Lexra MIPS)
 #
-# Usage: ./build_kernel.sh [clean|menuconfig]
+# Uses arch/mips/boot/compressed/ (zboot) — no external lzma or lzma-loader.
 #
-# Options:
-#   (none)      Normal build (download if needed, patch, compile)
-#   clean       Remove kernel source directory and rebuild from scratch
-#   menuconfig  Run kernel menuconfig, optionally save config to files/
+# Supports two Ethernet drivers selectable at build time:
+#   - rtl8196e-eth  (new, recommended) — default
+#   - rtl819x       (legacy SDK port)  — pass 'legacy' argument
 #
-# This script:
-#   - Downloads Linux 5.10.246 kernel sources
-#   - Applies Realtek RTL8196E patches
-#   - Copies new Realtek-specific files
-#   - Compiles the kernel with Lexra toolchain
-#   - Creates compressed kernel image with lzma-loader
-#   - Packages final image with cvimg
+# Usage:
+#   ./build_kernel.sh              # new driver → kernel.img
+#   ./build_kernel.sh legacy       # legacy driver → kernel-legacy.img
+#   ./build_kernel.sh clean        # remove build tree, rebuild from scratch
+#   ./build_kernel.sh menuconfig   # open menuconfig
+#   ./build_kernel.sh olddefconfig # update .config non-interactively
+#   ./build_kernel.sh vmlinux      # build vmlinux only (no packaging)
+#   ./build_kernel.sh --help
 #
-# Output: kernel.img (ready to flash via TFTP)
+# Both drivers use the same patches/ and files/ tree.
+# The skbuff.c patch is guarded with #ifdef CONFIG_RTL819X so it is safe
+# to apply unconditionally regardless of which driver is selected.
 #
-# J. Nilo - November 2025
+# J. Nilo — February 2026
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Project root is 3 levels up: 32-Kernel -> 3-Main-SoC -> project root
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# Parse command line options
-DO_CLEAN=false
-DO_MENUCONFIG=false
-
-case "${1:-}" in
-    clean)
-        DO_CLEAN=true
-        ;;
-    menuconfig)
-        DO_MENUCONFIG=true
-        ;;
-    "")
-        # No option, normal build
-        ;;
-    *)
-        echo "Usage: $0 [clean|menuconfig]"
-        echo ""
-        echo "Options:"
-        echo "  clean       Remove kernel source directory and rebuild from scratch"
-        echo "  menuconfig  Run kernel menuconfig for configuration"
-        echo ""
-        exit 1
-        ;;
-esac
-
-# Kernel configuration
 KERNEL_VERSION="5.10.246"
 KERNEL_MAJOR="5.x"
 KERNEL_TARBALL="linux-${KERNEL_VERSION}.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}/${KERNEL_TARBALL}"
 VANILLA_DIR="linux-${KERNEL_VERSION}"
-KERNEL_DIR="linux-${KERNEL_VERSION}-rtl8196e"
-KERNEL_CMDLINE="console=ttyS0,115200"
 
-# Toolchain
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
 export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
 export ARCH=mips
 export CROSS_COMPILE=mips-lexra-linux-musl-
 
-# Tools - check multiple locations (workspace mount or Docker image paths)
+# cvimg only — no lzma or lzma-loader needed (zboot uses in-tree decompressor)
 BUILD_ENV="${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools"
 DOCKER_TOOLS="/home/builder/realtek-tools"
 
-# Find cvimg
-if [ -x "${BUILD_ENV}/bin/cvimg" ]; then
-    CVIMG="${BUILD_ENV}/bin/cvimg"
-elif [ -x "${DOCKER_TOOLS}/bin/cvimg" ]; then
-    CVIMG="${DOCKER_TOOLS}/bin/cvimg"
-else
-    CVIMG=""
-fi
+CVIMG=""
+for dir in "$BUILD_ENV" "$DOCKER_TOOLS"; do
+    [ -x "${dir}/bin/cvimg" ] && CVIMG="${dir}/bin/cvimg" && break
+done
 
-# Find lzma (must use LZMA SDK, not system xz-utils - different syntax)
-if [ -x "${BUILD_ENV}/bin/lzma" ]; then
-    LZMA="${BUILD_ENV}/bin/lzma"
-elif [ -x "${DOCKER_TOOLS}/bin/lzma" ]; then
-    LZMA="${DOCKER_TOOLS}/bin/lzma"
-else
-    LZMA=""
-fi
-
-# Find lzma-loader directory
-if [ -d "${BUILD_ENV}/lzma-loader" ]; then
-    LOADER_DIR="${BUILD_ENV}/lzma-loader"
-elif [ -d "${DOCKER_TOOLS}/lzma-loader" ]; then
-    LOADER_DIR="${DOCKER_TOOLS}/lzma-loader"
-else
-    LOADER_DIR=""
-fi
-
-# RTL bootloader settings
-CVIMG_START_ADDR="0x80c00000"
 CVIMG_BURN_ADDR="0x00020000"
 SIGNATURE="cs6c"
 
-# Colors
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
+# ── Option parsing ─────────────────────────────────────────────────────────
 
-echo "==================================================================="
-echo "  Linux ${KERNEL_VERSION} for Realtek RTL8196E (Lexra MIPS)"
-echo "==================================================================="
-echo ""
+DRIVER="new"          # new | legacy
+DO_CLEAN=false
+DO_MENUCONFIG=false
+DO_OLDDEFCONFIG=false
+BUILD_VMLINUX_ONLY=false
 
-# Check toolchain
-if ! command -v ${CROSS_COMPILE}gcc >/dev/null 2>&1; then
-    echo -e "${RED}❌ Lexra toolchain not found${NC}"
-    echo ""
-    echo "Build the toolchain first:"
-    echo "  cd ../../1-Build-Environment/10-lexra-toolchain"
-    echo "  ./build_toolchain.sh"
-    echo ""
-    exit 1
-fi
-
-echo -e "${GREEN}✅ Toolchain found: $(${CROSS_COMPILE}gcc --version | head -1)${NC}"
-echo ""
-
-# Check tools
-if [ -z "$CVIMG" ] || [ -z "$LZMA" ] || [ -z "$LOADER_DIR" ]; then
-    echo -e "${RED}❌ Realtek tools not found${NC}"
-    echo ""
-    echo "Missing tools:"
-    [ -z "$CVIMG" ] && echo "  - cvimg"
-    [ -z "$LZMA" ] && echo "  - lzma (LZMA SDK)"
-    [ -z "$LOADER_DIR" ] && echo "  - lzma-loader"
-    echo ""
-    echo "Build realtek-tools first:"
-    echo "  cd ../../1-Build-Environment/11-realtek-tools && ./build_tools.sh"
-    echo ""
-    exit 1
-fi
-
-echo "Tools found:"
-echo "  • cvimg: $CVIMG"
-echo "  • lzma: $LZMA"
-echo "  • lzma-loader: $LOADER_DIR"
-echo ""
-
-# Handle clean option
-if [ "$DO_CLEAN" = true ]; then
-    if [ -d "$KERNEL_DIR" ]; then
-        echo -e "${YELLOW}Removing patched kernel directory...${NC}"
-        rm -rf "$KERNEL_DIR"
-        echo -e "${GREEN}✅ Patched kernel removed: ${KERNEL_DIR}${NC}"
-        echo ""
-    else
-        echo -e "${GREEN}✅ Patched kernel directory does not exist${NC}"
-        echo ""
-    fi
-fi
-
-# Create patched kernel directory if needed
-if [ ! -d "$KERNEL_DIR" ]; then
-    echo -e "${YELLOW}Downloading Linux ${KERNEL_VERSION}...${NC}"
-    wget -q --show-progress "$KERNEL_URL"
-    echo -e "${YELLOW}Extracting vanilla kernel...${NC}"
-    tar xf "$KERNEL_TARBALL"
-    mv "$VANILLA_DIR" "$KERNEL_DIR"
-    rm -f "$KERNEL_TARBALL"
-    echo -e "${GREEN}✅ Kernel directory ready: ${KERNEL_DIR}${NC}"
-    echo ""
-else
-    echo -e "${GREEN}✅ Patched kernel already present: ${KERNEL_DIR}${NC}"
-    echo ""
-fi
-
-cd "$KERNEL_DIR"
-
-# Apply patches
-echo -e "${YELLOW}Applying RTL8196E patches...${NC}"
-PATCH_COUNT=0
-for patch in "${SCRIPT_DIR}/patches"/*.patch; do
-    if [ -f "$patch" ]; then
-        echo "  • $(basename $patch)"
-        patch -p1 -N < "$patch" 2>/dev/null || echo "    (already applied)"
-        PATCH_COUNT=$((PATCH_COUNT + 1))
-    fi
+for arg in "$@"; do
+    case "$arg" in
+        legacy)       DRIVER="legacy" ;;
+        clean)        DO_CLEAN=true ;;
+        menuconfig)   DO_MENUCONFIG=true ;;
+        olddefconfig) DO_OLDDEFCONFIG=true ;;
+        vmlinux|no-package) BUILD_VMLINUX_ONLY=true ;;
+        --help|-h)
+            echo "Usage: $0 [legacy] [clean|menuconfig|olddefconfig|vmlinux]"
+            echo ""
+            echo "  (none)        New driver (rtl8196e-eth) — default"
+            echo "  legacy        Legacy driver (rtl819x)"
+            echo "  clean         Remove build tree and rebuild from scratch"
+            echo "  menuconfig    Run kernel menuconfig"
+            echo "  olddefconfig  Update .config non-interactively"
+            echo "  vmlinux       Build vmlinux only (no packaging)"
+            echo ""
+            echo "Output:"
+            echo "  new driver  → kernel.img"
+            echo "  legacy      → kernel-legacy.img"
+            exit 0
+            ;;
+        *) echo "Unknown option: $arg (use --help)"; exit 1 ;;
+    esac
 done
-echo -e "${GREEN}✅ ${PATCH_COUNT} patches processed${NC}"
-echo ""
 
-# Copy new Realtek files
-echo -e "${YELLOW}Copying Realtek-specific files...${NC}"
-cp -rv "${SCRIPT_DIR}/files/arch" .
-cp -rv "${SCRIPT_DIR}/files/drivers" .
-echo -e "${GREEN}✅ Realtek files copied${NC}"
-echo ""
-
-# Setup kernel configuration
-if [ ! -f .config ]; then
-    echo -e "${YELLOW}Setting up kernel configuration...${NC}"
-    if [ -f "${SCRIPT_DIR}/config-5.10.246-realtek.txt" ]; then
-        cp "${SCRIPT_DIR}/config-5.10.246-realtek.txt" .config
-        make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
-        echo -e "${GREEN}✅ Configuration ready${NC}"
-    else
-        echo -e "${RED}❌ Configuration file not found${NC}"
-        exit 1
-    fi
+# Driver-specific settings
+if [ "$DRIVER" = "new" ]; then
+    export LOCALVERSION="-rtl8196e-eth"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-eth"
+    IMAGE="${SCRIPT_DIR}/kernel.img"
+    DRIVER_LABEL="rtl8196e-eth (new, recommended)"
 else
-    echo -e "${GREEN}✅ Configuration already present${NC}"
+    export LOCALVERSION="-rtl8196e"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-legacy"
+    IMAGE="${SCRIPT_DIR}/kernel-legacy.img"
+    DRIVER_LABEL="rtl819x (legacy)"
 fi
+
+echo "==================================================================="
+echo "  Linux ${KERNEL_VERSION} — RTL8196E — driver: ${DRIVER_LABEL}"
+echo "  Compression: arch/mips/boot/compressed/ (zboot)"
+echo "==================================================================="
 echo ""
 
-# Handle menuconfig option
-if [ "$DO_MENUCONFIG" = true ]; then
-    echo -e "${YELLOW}Running menuconfig...${NC}"
-    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE menuconfig
+# ── Preflight ──────────────────────────────────────────────────────────────
 
-    echo ""
-    echo -e "${YELLOW}Configuration modified. Save to config-5.10.246-realtek.txt?${NC}"
-    read -p "(y/n) " -n 1 -r
-    echo ""
+if ! command -v ${CROSS_COMPILE}gcc >/dev/null 2>&1; then
+    echo "ERROR: Lexra toolchain not found: ${CROSS_COMPILE}gcc"
+    echo "  Build it: cd ../../1-Build-Environment/10-lexra-toolchain && ./build_toolchain.sh"
+    exit 1
+fi
+echo "Toolchain: $(${CROSS_COMPILE}gcc --version | head -1)"
 
-    if [[ $REPLY =~ ^[Yy]$ ]]; then
-        cp .config "${SCRIPT_DIR}/config-5.10.246-realtek.txt"
-        echo -e "${GREEN}✅ Configuration saved to config-5.10.246-realtek.txt${NC}"
-    else
-        echo -e "${YELLOW}Configuration NOT saved (changes remain in ${KERNEL_DIR}/.config)${NC}"
-    fi
-    echo ""
+echo "Build dir: $BUILD_DIR"
+echo ""
 
-    read -p "Continue with kernel build? (y/n) " -n 1 -r
-    echo ""
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Build cancelled."
-        exit 0
-    fi
+# ── Clean ──────────────────────────────────────────────────────────────────
+
+if [ "$DO_CLEAN" = true ] && [ -d "$BUILD_DIR" ]; then
+    echo "Removing build tree: $BUILD_DIR"
+    rm -rf "$BUILD_DIR"
+    echo "Done."
     echo ""
 fi
 
-# Build kernel
+# ── Prepare tree ───────────────────────────────────────────────────────────
+
+if [ ! -f "$BUILD_DIR/Makefile" ]; then
+    echo "--- Preparing kernel tree ---"
+    echo ""
+    cd "$SCRIPT_DIR"
+
+    if [ ! -f "$KERNEL_TARBALL" ]; then
+        echo "Downloading Linux ${KERNEL_VERSION}..."
+        wget -q --show-progress "$KERNEL_URL"
+    fi
+
+    echo "Extracting..."
+    tar xf "$KERNEL_TARBALL"
+    mv "$VANILLA_DIR" "$BUILD_DIR"
+    rm -f "$KERNEL_TARBALL"
+
+    cd "$BUILD_DIR"
+
+    # Apply ALL patches — skbuff.c is guarded with #ifdef CONFIG_RTL819X
+    echo "Applying patches..."
+    for patch in "${SCRIPT_DIR}/patches"/*.patch; do
+        [ -f "$patch" ] || continue
+        echo "  $(basename "$patch")"
+        patch -p1 -N < "$patch" 2>/dev/null || echo "    (already applied)"
+    done
+    echo ""
+
+    # Copy platform files (arch, drivers: gpio, spi, serial, leds, etc.)
+    echo "Copying platform files (files/)..."
+    cp -r "${SCRIPT_DIR}/files/arch" .
+    cp -r "${SCRIPT_DIR}/files/drivers" .
+    echo ""
+else
+    echo "Build tree already present: $BUILD_DIR"
+    echo ""
+fi
+
+cd "$BUILD_DIR"
+
+# ── Config ─────────────────────────────────────────────────────────────────
+
+if [ ! -f .config ]; then
+    echo "Setting up .config (driver: ${DRIVER_LABEL})..."
+    if [ "$DRIVER" = "new" ]; then
+        sed \
+            -e 's/^CONFIG_RTL819X=y$/# CONFIG_RTL819X is not set/' \
+            -e '/^# CONFIG_RTL819X is not set$/a CONFIG_RTL8196E_ETH=y' \
+            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
+        echo "CONFIG_KERNEL_LZMA=y" >> .config
+    else
+        # Legacy: ensure RTL8196E_ETH is not set
+        sed \
+            -e 's/^CONFIG_RTL8196E_ETH=y$/# CONFIG_RTL8196E_ETH is not set/' \
+            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
+        echo "CONFIG_KERNEL_LZMA=y" >> .config
+    fi
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+    echo ""
+else
+    NEED_OLDDEFCONFIG=false
+
+    if [ "$DRIVER" = "new" ]; then
+        if ! grep -q '^CONFIG_RTL8196E_ETH=y' .config; then
+            echo "Fixing .config: enabling RTL8196E_ETH..."
+            sed -i 's/^# CONFIG_RTL8196E_ETH is not set$/CONFIG_RTL8196E_ETH=y/' .config
+            grep -q '^CONFIG_RTL8196E_ETH=y' .config || echo "CONFIG_RTL8196E_ETH=y" >> .config
+            NEED_OLDDEFCONFIG=true
+        fi
+    else
+        if ! grep -q '^CONFIG_RTL819X=y' .config; then
+            echo "Fixing .config: enabling RTL819X..."
+            sed -i 's/^# CONFIG_RTL819X is not set$/CONFIG_RTL819X=y/' .config
+            grep -q '^CONFIG_RTL819X=y' .config || echo "CONFIG_RTL819X=y" >> .config
+            NEED_OLDDEFCONFIG=true
+        fi
+    fi
+
+    if ! grep -q '^CONFIG_KERNEL_LZMA=y' .config; then
+        echo "Fixing .config: enabling KERNEL_LZMA..."
+        sed -i 's/^# CONFIG_KERNEL_LZMA is not set/CONFIG_KERNEL_LZMA=y/' .config
+        grep -q '^CONFIG_KERNEL_LZMA=y' .config || echo "CONFIG_KERNEL_LZMA=y" >> .config
+        NEED_OLDDEFCONFIG=true
+    fi
+
+    [ "$NEED_OLDDEFCONFIG" = true ] && make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig && echo ""
+fi
+
+# ── Special modes ──────────────────────────────────────────────────────────
+
+if [ "$DO_OLDDEFCONFIG" = true ]; then
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+    exit 0
+fi
+
+if [ "$DO_MENUCONFIG" = true ]; then
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE menuconfig
+    exit 0
+fi
+
+# ── Build ──────────────────────────────────────────────────────────────────
+
 JOBS=$(nproc)
-echo -e "${YELLOW}Building kernel with $JOBS parallel jobs...${NC}"
+echo "Building with $JOBS parallel jobs..."
 echo ""
 
 if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j$JOBS; then
     echo ""
-    echo "==================================================================="
-    echo -e "${RED}❌ KERNEL BUILD FAILED${NC}"
-    echo "==================================================================="
+    echo "=== BUILD FAILED ==="
     exit 1
 fi
 
 echo ""
-echo "==================================================================="
-echo -e "${GREEN}✅ KERNEL COMPILATION SUCCESSFUL${NC}"
-echo "==================================================================="
+echo "=== COMPILATION OK ==="
 echo ""
 
-# Show compiled kernel info
-if [ -f vmlinux ]; then
-    echo "vmlinux: $(ls -lh vmlinux | awk '{print $5}')"
+if [ "$BUILD_VMLINUX_ONLY" = true ]; then
+    ls -lh vmlinux
+    exit 0
 fi
 
-echo ""
-echo "==================================================================="
-echo "  PACKAGING KERNEL IMAGE"
-echo "==================================================================="
-echo ""
+# ── Packaging (zboot) ──────────────────────────────────────────────────────
 
-# Clean old images
-rm -f "${SCRIPT_DIR}/kernel.img"
+if [ -z "$CVIMG" ]; then
+    echo "WARNING: cvimg not found; skipping image creation."
+    echo "  Build cvimg in: ${BUILD_ENV}/"
+    exit 0
+fi
 
-# Step 1: Convert ELF to raw binary
-echo -e "${YELLOW}Step 1/4: Converting vmlinux to raw binary...${NC}"
+rm -f "$IMAGE"
+echo "Packaging (zboot)..."
+
+VMLINUZ_ELF="vmlinuz"
+
+if [ ! -f "$VMLINUZ_ELF" ]; then
+    echo "ERROR: vmlinuz not found — is CONFIG_SYS_SUPPORTS_ZBOOT active?"
+    exit 1
+fi
+
+# Extract entry point; normalize to 32 bits (readelf may sign-extend on x86-64)
+VMLINUZ_ENTRY_RAW=$(${CROSS_COMPILE}readelf -h "$VMLINUZ_ELF" \
+    | awk '/Entry point address/ {print $NF}')
+VMLINUZ_ENTRY=$(printf "0x%08x" $(( ${VMLINUZ_ENTRY_RAW} & 0xffffffff )) 2>/dev/null \
+    || python3 -c "print(hex(int('${VMLINUZ_ENTRY_RAW}',16)&0xffffffff))")
+
+echo "  vmlinuz ELF  : $VMLINUZ_ELF"
+echo "  vmlinuz entry: $VMLINUZ_ENTRY"
+
 ${CROSS_COMPILE}objcopy -O binary \
-    -R .reginfo -R .note -R .comment \
-    -R .mdebug -R .MIPS.abiflags -S \
-    vmlinux vmlinux.bin
+    -R .reginfo -R .note -R .comment -R .mdebug -S \
+    "$VMLINUZ_ELF" vmlinuz.bin
 
-elf_size=$(stat -c%s vmlinux)
-raw_size=$(stat -c%s vmlinux.bin)
-echo "  • ELF size: $(numfmt --to=iec-i --suffix=B $elf_size)"
-echo "  • Raw size: $(numfmt --to=iec-i --suffix=B $raw_size)"
-echo "  • Stripped: $(numfmt --to=iec-i --suffix=B $((elf_size - raw_size)))"
-echo ""
-
-# Step 2: Compress with LZMA
-echo -e "${YELLOW}Step 2/4: Compressing with LZMA...${NC}"
-$LZMA e vmlinux.bin vmlinux.bin.lzma -lc1 -lp2 -pb2 >/dev/null 2>&1
-
-compressed_size=$(stat -c%s vmlinux.bin.lzma)
-compression_ratio=$(awk "BEGIN {printf \"%.1f:1\", $raw_size*1.0/$compressed_size}")
-echo "  • Compressed size: $(numfmt --to=iec-i --suffix=B $compressed_size)"
-echo "  • Compression ratio: $compression_ratio"
-echo ""
-
-# Step 3: Build lzma-loader (standalone)
-echo -e "${YELLOW}Step 3/4: Building lzma-loader...${NC}"
-
-if [ ! -d "$LOADER_DIR" ]; then
-    echo -e "${RED}❌ lzma-loader not found in $LOADER_DIR${NC}"
-    exit 1
-fi
-
-PATH="${TOOLCHAIN_DIR}/bin:$PATH" make -C "$LOADER_DIR" \
-    CROSS_COMPILE=$CROSS_COMPILE \
-    LOADER_DATA="${SCRIPT_DIR}/${KERNEL_DIR}/vmlinux.bin.lzma" \
-    KERNEL_DIR="${SCRIPT_DIR}/${KERNEL_DIR}" \
-    KERNEL_CMDLINE="$KERNEL_CMDLINE" \
-    clean all
-
-if [ ! -f "$LOADER_DIR/loader.bin" ]; then
-    echo -e "${RED}❌ lzma-loader build failed${NC}"
-    exit 1
-fi
-
-loader_size=$(stat -c%s "$LOADER_DIR/loader.bin")
-echo "  • Loader+kernel: $(numfmt --to=iec-i --suffix=B $loader_size)"
-echo ""
-
-# Step 4: Create final image with cvimg
-echo -e "${YELLOW}Step 4/4: Creating bootable image with cvimg...${NC}"
+vmlinuz_size=$(stat -c%s vmlinuz.bin)
+vmlinux_size=$(stat -c%s vmlinux)
 
 $CVIMG \
-    -i "$LOADER_DIR/loader.bin" \
-    -o "${SCRIPT_DIR}/kernel.img" \
+    -i vmlinuz.bin \
+    -o "$IMAGE" \
     -s "$SIGNATURE" \
-    -e "$CVIMG_START_ADDR" \
+    -e "$VMLINUZ_ENTRY" \
     -b "$CVIMG_BURN_ADDR" \
     -a 4k >/dev/null
 
-image_size=$(stat -c%s "${SCRIPT_DIR}/kernel.img")
+img_size=$(stat -c%s "$IMAGE")
 
 echo ""
-echo "==================================================================="
-echo "  BUILD SUMMARY"
-echo "==================================================================="
+echo "  vmlinux      : $(numfmt --to=iec-i --suffix=B $vmlinux_size)"
+echo "  vmlinuz.bin  : $(numfmt --to=iec-i --suffix=B $vmlinuz_size)  (decompressor + LZMA kernel)"
+echo "  Final image  : $(numfmt --to=iec-i --suffix=B $img_size)"
 echo ""
-compression_pct=$(LC_NUMERIC=C awk "BEGIN {printf \"%.1f\", ($compressed_size*100.0/$raw_size)}")
-printf "  %-25s : %s\n" "Kernel (raw)" "$(numfmt --to=iec-i --suffix=B $raw_size)"
-printf "  %-25s : %s (${compression_pct}%%)\n" "Kernel (LZMA)" "$(numfmt --to=iec-i --suffix=B $compressed_size)"
-printf "  %-25s : %s\n" "Loader + kernel" "$(numfmt --to=iec-i --suffix=B $loader_size)"
-printf "  %-25s : %s\n" "Final image (cvimg)" "$(numfmt --to=iec-i --suffix=B $image_size)"
-echo ""
-printf "  %-25s : %s\n" "Compression ratio" "$compression_ratio"
-printf "  %-25s : %s\n" "Output file" "${SCRIPT_DIR}/kernel.img"
-echo ""
-echo "✅ Kernel image ready: kernel.img"
-echo ""
-echo "To flash: ./flash_kernel.sh"
+echo "Image ready: $IMAGE"
+echo "Flash with:  tftp -m binary 192.168.1.6 -c put $(basename "$IMAGE")"

@@ -4,7 +4,7 @@ mqtt:
   base_topic: zigbee2mqtt
   server: mqtt://mosquitto:1883
 serial:
-  port: socket://cpcd-zigbeed:9999
+  port: tcp://cpcd-zigbeed:9999
   adapter: ember
 frontend:
   enabled: true

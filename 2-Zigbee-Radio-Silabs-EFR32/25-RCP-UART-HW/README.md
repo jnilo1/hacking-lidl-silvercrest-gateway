@@ -47,39 +47,14 @@ Unlike standalone firmware (like the Router), an RCP delegates the entire Zigbee
 
 ## Option 1: Flash Pre-built Firmware (Recommended)
 
-A pre-built firmware is available in the `firmware/` directory. This is the quickest way to get started.
-
-### Prerequisites
-
-1. **Install universal-silabs-flasher** (see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for details)
-
-2. **Restart serialgateway with `-f` flag:**
-
-   By default, `serialgateway` runs with hardware flow control enabled. The flasher requires flow control to be **disabled** to communicate with the bootloader.
-
-   On the gateway via SSH:
-   ```bash
-   killall serialgateway && serialgateway -f
-   ```
-
-   The `-f` flag disables hardware flow control, allowing the flasher to reset the EFR32 into bootloader mode.
-
-   **Important:** Close all SSH sessions connected to the gateway before flashing. Active sessions with open connections to port 8888 (e.g., `nc`, previous flasher runs) can interfere with `universal-silabs-flasher`.
-
-### Flash
+Pre-built firmware is available in the `firmware/` directory. From the repository root:
 
 ```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/rcp-uart-802154.gbl
+./flash_efr32.sh <GATEWAY_IP>
+# Select [3] RCP-UART-HW
 ```
 
-### After flashing
-
-Re-enable hardware flow control for normal operation:
-```bash
-killall serialgateway && serialgateway
-```
+The script handles everything (serialgateway restart, flash, reboot).
 
 Then continue to [Host Software Setup](#host-software-setup) to configure cpcd and zigbeed on your host machine.
 
@@ -126,12 +101,8 @@ Edit `patches/rcp-uart-802154.slcp` for SDK configuration, or `patches/sl_cpc_dr
 
 **Via network (same as Option 1):**
 ```bash
-# On gateway: killall serialgateway && serialgateway -f
-# Important: close all SSH sessions before flashing!
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/rcp-uart-802154.gbl
-# Then: killall serialgateway && serialgateway
+./flash_efr32.sh <GATEWAY_IP>
+# Select [3] RCP-UART-HW
 ```
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):

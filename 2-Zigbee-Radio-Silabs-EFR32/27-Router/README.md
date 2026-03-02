@@ -28,41 +28,16 @@ This firmware transforms the gateway into an autonomous Zigbee router that exten
 
 ## Option 1: Flash Pre-built Firmware (Recommended)
 
-A pre-built firmware is available in the `firmware/` directory. This is the quickest way to get started.
-
-### Prerequisites
-
-1. **Install universal-silabs-flasher** (see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for details)
-
-2. **Restart serialgateway with `-f` flag:**
-
-   By default, `serialgateway` runs with hardware flow control enabled. The flasher requires flow control to be **disabled** to communicate with the bootloader.
-
-   On the gateway via SSH:
-   ```bash
-   killall serialgateway && serialgateway -f
-   ```
-
-   The `-f` flag disables hardware flow control, allowing the flasher to reset the EFR32 into bootloader mode.
-
-   **Important:** Close all SSH sessions connected to the gateway before flashing. Active sessions with open connections to port 8888 (e.g., `nc`, previous flasher runs) can interfere with `universal-silabs-flasher`.
-
-### Flash
+Pre-built firmware is available in the `firmware/` directory. From the repository root:
 
 ```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/z3-router-7.5.1.gbl
+./flash_efr32.sh <GATEWAY_IP>
+# Select [5] Z3-Router
 ```
 
-### After flashing
+The script handles everything (serialgateway restart, flash, reboot).
 
-Reboot the gateway to restore normal serialgateway operation:
-```bash
-reboot
-```
-
-The router firmware runs autonomously — no host application needed. You can leave serialgateway running normally or stop it entirely.
+The router firmware runs autonomously — no host application needed.
 
 ---
 
@@ -122,12 +97,8 @@ configuration:
 
 **Via network (same as Option 1):**
 ```bash
-# On gateway: killall serialgateway && serialgateway -f
-# Important: close all SSH sessions before flashing !
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/z3-router-7.5.1.gbl
-# Then reboot gateway
+./flash_efr32.sh <GATEWAY_IP>
+# Select [5] Z3-Router
 ```
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):
@@ -305,17 +276,9 @@ Commands:
 
 **Note:** When using microcom on the gateway, there is no local echo of typed characters (commands `help`, `info`, `network status`, `version` were typed above). Commands still work - just type and press Enter.
 
-#### Usage with `universal-silabs-flasher`
+#### Reflashing over the network
 
-The flasher automatically detects the Router firmware and uses `bootloader reboot` to enter bootloader mode:
-```bash
-# On gateway: killall serialgateway && serialgateway -f
-# Important: close all SSH sessions before flashing !
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware new-firmware.gbl
-```
-This allows you to reflash the router without physical access. Unlike NCP firmware (which uses EZSP commands), the Router firmware uses CLI commands for bootloader entry.
+The router can be reflashed without physical access using `flash_efr32.sh` from the repository root. The flasher automatically detects the Router firmware and uses the `bootloader reboot` CLI command to enter bootloader mode (unlike NCP firmware which uses EZSP commands for bootloader entry).
 
 ### ZCL Configuration
 

@@ -1,113 +1,133 @@
 #!/bin/bash
 #
-# backup_mtd_via_ssh.sh (Production version with selective backup)
+# backup_mtd_via_ssh.sh — Backup MTD partitions via SSH + cat
+#
+# Supports the original Lidl/Tuya firmware only (5 partitions, port 2333).
+# For custom firmware (4 partitions), use the bootloader FLR command instead.
 #
 # Usage:
-#   ./backup_mtd_via_ssh.sh all <gateway_ip>
-#   ./backup_mtd_via_ssh.sh mtd2 <gateway_ip>
+#   ./backup_mtd_via_ssh.sh all   <gateway_ip> [port]
+#   ./backup_mtd_via_ssh.sh mtdX  <gateway_ip> [port]
 #
+#   port defaults to 2333 (Lidl/Tuya gateway default SSH port)
+#
+# J. Nilo - December 2025
 
 set -e
 
 PART="$1"
 GATEWAY_IP="$2"
-SSH_PORT=22
+SSH_PORT="${3:-2333}"
 SSH_USER="root"
+# Port 2333: original Lidl/Tuya firmware (old Dropbear, needs legacy RSA key algorithm)
+if [ "${SSH_PORT}" = "2333" ]; then
+    SSH_OPTS="-p ${SSH_PORT} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+else
+    SSH_OPTS="-p ${SSH_PORT} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+fi
 
 if [ -z "$PART" ] || [ -z "$GATEWAY_IP" ]; then
-    echo "Usage: $0 <all|mtdX> <gateway_ip>"
+    echo "Usage: $0 <all|mtdX> <gateway_ip> [port]"
     exit 1
 fi
 
-if [ "$PART" == "all" ]; then
-    MTDS=(mtd0 mtd1 mtd2 mtd3 mtd4)
+# Detect partition layout from /proc/mtd
+echo "[*] Detecting partition layout on ${GATEWAY_IP}:${SSH_PORT}..."
+GATEWAY_MTD=$(ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} "cat /proc/mtd" 2>/dev/null) || {
+    echo "Error: cannot connect to ${GATEWAY_IP} on port ${SSH_PORT}." >&2
+    if [ "${SSH_PORT}" = "2333" ]; then
+        echo "Hint: custom firmware uses port 22 — retry with: $0 ${PART} ${GATEWAY_IP} 22" >&2
+    else
+        echo "Hint: original Lidl/Tuya firmware uses port 2333 — retry with: $0 ${PART} ${GATEWAY_IP} 2333" >&2
+    fi
+    exit 1
+}
+
+declare -A EXPECTED_SIZES
+ALL_MTDS=()
+while read -r dev size_hex _erase _name; do
+    dev="${dev%:}"
+    ALL_MTDS+=("$dev")
+    EXPECTED_SIZES["$dev"]=$(printf '%d' "0x${size_hex}")
+done < <(echo "$GATEWAY_MTD" | tail -n +2)
+
+echo "    Found ${#ALL_MTDS[@]} partitions: ${ALL_MTDS[*]}"
+
+# Only the original Lidl/Tuya firmware (5 partitions) is supported
+if [ "${#ALL_MTDS[@]}" -ne 5 ]; then
+    echo "" >&2
+    echo "Error: ${#ALL_MTDS[@]}-partition layout detected — this is the custom firmware." >&2
+    echo "SSH backup is not supported for this layout." >&2
+    echo "" >&2
+    echo "Use the bootloader FLR command to back up the full flash instead:" >&2
+    echo "  1. Enter boot mode and interrupt the bootloader (ESC on serial console)" >&2
+    echo "  2. Run: FLR 80500000 00000000 01000000" >&2
+    echo "  3. Save the TFTP-transferred file as fullmtd.bin" >&2
+    exit 1
+fi
+
+# Remove any stale mtdX.bin / fullmtd.bin from a previous (possibly different) backup
+STALE=()
+for f in mtd*.bin fullmtd.bin; do
+    [ -f "$f" ] || continue
+    # Keep only files that belong to the current layout
+    base="${f%.bin}"
+    if [ "$base" = "fullmtd" ]; then
+        STALE+=("$f")
+    else
+        found=0
+        for m in "${ALL_MTDS[@]}"; do [ "$m" = "$base" ] && found=1 && break; done
+        [ "$found" -eq 0 ] && STALE+=("$f")
+    fi
+done
+if [ ${#STALE[@]} -gt 0 ]; then
+    echo "    Removing stale files from previous backup: ${STALE[*]}"
+    rm -f "${STALE[@]}"
+fi
+rm -f fullmtd.bin
+
+if [ "$PART" = "all" ]; then
+    MTDS=("${ALL_MTDS[@]}")
 else
     MTDS=("$PART")
 fi
 
-echo "[*] Starting MTD backup over SSH..."
+echo "[*] Starting backup over SSH..."
 
 for mtd in "${MTDS[@]}"; do
-    echo "  - Dumping and retrieving $mtd..."
-    if [ "$mtd" == "mtd4" ]; then
-        ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
-            mtd='$mtd'
-            MOUNT_POINT=\$(grep mtdblock\${mtd:3} /proc/mounts | awk '{print \$2}')
-            if [ -n "\$MOUNT_POINT" ]; then
-                echo "Detected mount point: \$MOUNT_POINT" >&2
-                echo "Killing serialgateway..." >&2
-                killall -q serialgateway
-                echo "Unmounting \$mtd from \$MOUNT_POINT" >&2
-                umount \$MOUNT_POINT
-                echo "Backing up partition \$mtd to /tmp/\$mtd.bin..." >&2
-                dd if=/dev/\$mtd of=/tmp/\$mtd.bin bs=1024k
-                echo "Remounting \$mtd to \$MOUNT_POINT" >&2
-                mount -t jffs2 /dev/mtdblock\${mtd:3} \$MOUNT_POINT
-                echo "Restarting serialgateway..." >&2
-                /tuya/serialgateway &
-            else
-                echo "\$mtd is not mounted. Proceeding with backup..." >&2
-                dd if=/dev/\$mtd of=/tmp/\$mtd.bin bs=1024k
-            fi
-            echo "Reading dump for \$mtd..." >&2
-            cat /tmp/\$mtd.bin
-            echo "Cleaning up temporary file /tmp/\$mtd.bin" >&2
-            rm /tmp/\$mtd.bin" > "$mtd.bin" 2> "$mtd.bin.log"
-    else
-        ssh -p "$SSH_PORT" ${SSH_USER}@${GATEWAY_IP} "
-            echo "Backing up partition $mtd to /tmp/$mtd.bin..." >&2
-            dd if=/dev/$mtd of=/tmp/$mtd.bin bs=1024k
-            echo "Reading dump for $mtd..." >&2
-            cat /tmp/$mtd.bin
-            echo "Cleaning up /tmp/$mtd.bin" >&2
-            rm /tmp/$mtd.bin" > "$mtd.bin" 2> "$mtd.bin.log"
-    fi
+    echo "  - Dumping ${mtd}..."
+    # cat streams the raw character device — no block size or mount issues
+    ssh ${SSH_OPTS} ${SSH_USER}@${GATEWAY_IP} \
+        "cat /dev/${mtd}" > "${mtd}.bin" 2>"${mtd}.bin.log"
 done
 
-if [ "$PART" == "all" ]; then
+if [ "$PART" = "all" ]; then
     echo "[*] Creating fullmtd.bin..."
-    cat mtd0.bin mtd1.bin mtd2.bin mtd3.bin mtd4.bin > fullmtd.bin
+    cat "${ALL_MTDS[@]/%/.bin}" > fullmtd.bin
 fi
 
-for mtd in "${MTDS[@]}"; do
-    if [ -f "$mtd.bin" ]; then
-        size=$(stat -c %s "$mtd.bin")
-    fi
-done
-
-if [ "$PART" == "all" ] && [ -f fullmtd.bin ]; then
-    size=$(stat -c %s fullmtd.bin)
-fi
-
-echo
-
-declare -A EXPECTED_SIZES
-EXPECTED_SIZES["mtd0"]=131072
-EXPECTED_SIZES["mtd1"]=1966080
-EXPECTED_SIZES["mtd2"]=2097152
-EXPECTED_SIZES["mtd3"]=131072
-EXPECTED_SIZES["mtd4"]=12451840
+echo ""
 
 for mtd in "${MTDS[@]}"; do
-    if [ -f "$mtd.bin" ]; then
-        size=$(stat -c %s "$mtd.bin")
-        expected=${EXPECTED_SIZES[$mtd]}
+    if [ -f "${mtd}.bin" ]; then
+        size=$(stat -c %s "${mtd}.bin")
+        expected=${EXPECTED_SIZES[$mtd]:-0}
         if [ "$size" -eq "$expected" ]; then
-            echo "  - $mtd.bin: $size bytes [OK]"
+            echo "  - ${mtd}.bin: ${size} bytes [OK]"
         else
-            echo "  - $mtd.bin: $size bytes [EXPECTED: $expected] [MISMATCH]"
+            echo "  - ${mtd}.bin: ${size} bytes [EXPECTED: ${expected}] [MISMATCH]"
         fi
     fi
 done
 
-if [ "$PART" == "all" ] && [ -f fullmtd.bin ]; then
+if [ "$PART" = "all" ] && [ -f fullmtd.bin ]; then
     size=$(stat -c %s fullmtd.bin)
     if [ "$size" -eq 16777216 ]; then
-        echo "  - fullmtd.bin: $size bytes [OK]"
+        echo "  - fullmtd.bin: ${size} bytes [OK]"
     else
-        echo "  - fullmtd.bin: $size bytes [EXPECTED: 16777216] [MISMATCH]"
+        echo "  - fullmtd.bin: ${size} bytes [EXPECTED: 16777216] [MISMATCH]"
     fi
 fi
 
-echo
-echo "[✔] Backup completed successfully!"
+echo ""
+echo "[*] Backup completed."

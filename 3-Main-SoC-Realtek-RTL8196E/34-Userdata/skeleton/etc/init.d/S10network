@@ -57,7 +57,7 @@ start)
     fi
     ;;
 stop)
-    echo "🛑 Stopping network"
+    echo "🔴 Stopping network"
 
     if [ -f /var/run/udhcpc0.pid ]; then
         kill "$(cat /var/run/udhcpc0.pid)"

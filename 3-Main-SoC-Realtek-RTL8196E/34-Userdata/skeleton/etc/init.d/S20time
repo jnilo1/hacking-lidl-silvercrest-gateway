@@ -26,18 +26,24 @@ ENABLE_NTPD_DAEMON="N"      # "Y" = run ntpd continuously, "N" = run once with -
 CONNECTIVITY_TEST="8.8.8.8" # IP to ping for connectivity check
 PING_COUNT="1"              # Number of ping attempts
 PING_TIMEOUT="2"            # Timeout in seconds
+RETRIES="3"                 # Retry count if first ping fails
+RETRY_DELAY="2"             # Seconds between retries
 ######################
 
 NTPCONF="/etc/ntp.conf"
 TZFILE="/etc/TZ"
 
-# Function to check for internet connectivity
+# Function to check for internet connectivity (with retries for early boot)
 check_connectivity() {
-    if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" "$CONNECTIVITY_TEST" >/dev/null 2>&1; then
-        return 0 # Success - we have connectivity
-    else
-        return 1 # Failure - no connectivity
-    fi
+    i=0
+    while [ "$i" -lt "$RETRIES" ]; do
+        if ping -c "$PING_COUNT" -W "$PING_TIMEOUT" "$CONNECTIVITY_TEST" >/dev/null 2>&1; then
+            return 0
+        fi
+        i=$((i + 1))
+        [ "$i" -lt "$RETRIES" ] && sleep "$RETRY_DELAY"
+    done
+    return 1
 }
 
 case "$1" in
@@ -72,7 +78,7 @@ start)
     ;;
 stop)
     if [ "$ENABLE_NTPD_DAEMON" = "Y" ]; then
-        echo "🛑 Stopping ntpd"
+        echo "🔴 Stopping ntpd"
         killall ntpd 2>/dev/null
     else
         echo "ℹ️ ntpd -q was used; nothing to stop"

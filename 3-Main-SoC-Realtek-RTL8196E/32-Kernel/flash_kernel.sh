@@ -1,56 +1,87 @@
 #!/bin/bash
 # flash_kernel.sh — Flash kernel partition via TFTP
 #
-# Prerequisites:
-#   - Gateway in bootloader mode (192.168.1.6)
-#   - kernel.img built (run ./build_kernel.sh first)
+# The device must be in download mode (<RealTek> prompt) before running.
+# WARNING: Flashing the kernel triggers an automatic reboot.
 #
-# WARNING: Flashing kernel triggers automatic reboot!
+# Usage: ./flash_kernel.sh [IP]
+#   IP - Target IP (default: 192.168.1.6)
 #
 # J. Nilo - December 2025
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-GATEWAY_IP="${1:-192.168.1.6}"
+TARGET_IP="${1:-192.168.1.6}"
+IMAGE="${SCRIPT_DIR}/kernel.img"
 
-cd "${SCRIPT_DIR}"
-
-# Check that image exists
-if [ ! -f "kernel.img" ]; then
-    echo "❌ kernel.img not found. Build it first:"
-    echo "   ./build_kernel.sh"
+if [ ! -f "$IMAGE" ]; then
+    echo "Error: kernel.img not found"
+    echo "Run ./build_kernel.sh first"
     exit 1
 fi
 
-echo "========================================="
-echo "  FLASH KERNEL PARTITION"
-echo "========================================="
-echo ""
-echo "Image: kernel.img ($(ls -lh kernel.img | awk '{print $5}'))"
-echo "Target: ${GATEWAY_IP}"
-echo ""
-echo "⚠️  WARNING: Flashing kernel will trigger automatic reboot!"
-echo ""
+SIZE=$(stat -c%s "$IMAGE" 2>/dev/null || stat -f%z "$IMAGE")
 
-echo -n "Upload kernel.img via TFTP to ${GATEWAY_IP}? [y/N] "
-read -r UPLOAD
+echo "Checking if gateway is in boot mode..."
 
-if [ "$UPLOAD" = "y" ] || [ "$UPLOAD" = "Y" ]; then
-    echo ""
-    echo "📤 Uploading kernel.img via TFTP..."
-    if tftp -m binary "${GATEWAY_IP}" -c put kernel.img 2>&1; then
-        echo ""
-        echo "✅ Kernel uploaded successfully!"
-        echo ""
-        echo "🔄 Gateway will reboot automatically with new kernel"
-    else
-        echo ""
-        echo "❌ TFTP upload failed"
-        exit 1
-    fi
-else
-    echo ""
-    echo "⏭️  Upload cancelled. To flash manually:"
-    echo "   tftp -m binary ${GATEWAY_IP} -c put kernel.img"
+# Determine the local outgoing interface toward the target
+IFACE="$(ip route get "$TARGET_IP" 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
+if [ -z "${IFACE:-}" ]; then
+    echo "Error: cannot determine outgoing interface to ${TARGET_IP} (ip route get failed)." >&2
+    exit 1
 fi
+
+# Reject if routed — ARP would resolve the gateway, not the target
+if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
+    echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be same L2 segment." >&2
+    exit 1
+fi
+
+TRIES="${TRIES:-10}"
+PORT="${PORT:-69}"
+SLEEP_BETWEEN="${SLEEP_BETWEEN:-0.2}"
+
+ok=0
+for _ in $(seq 1 "$TRIES"); do
+    # Trigger kernel ARP resolution via a UDP send (no root required)
+    bash -c 'echo -n X > /dev/udp/'"$TARGET_IP"'/'"$PORT"'' >/dev/null 2>&1 || true
+    sleep 0.2
+
+    LINE="$(ip neigh show "$TARGET_IP" dev "$IFACE" 2>/dev/null || true)"
+
+    # Bootloader detected only if a MAC address was resolved (lladdr)
+    if echo "$LINE" | grep -qiE 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
+        ok=1
+        break
+    fi
+
+    sleep "$SLEEP_BETWEEN"
+done
+
+if [ "$ok" -ne 1 ]; then
+    echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
+    exit 1
+fi
+
+echo "Flashing kernel.img (${SIZE} bytes) to ${TARGET_IP}..."
+echo "Warning: gateway will reboot automatically after flashing."
+echo ""
+read -r -p "Proceed? [y/N] " confirm
+if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+    echo "Aborted."
+    echo "To flash manually: tftp -m binary ${TARGET_IP} -c put kernel.img"
+    exit 0
+fi
+
+echo "Uploading..."
+cd "$SCRIPT_DIR"
+out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1) || true
+if echo "$out" | grep -qiE \
+    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    echo "Error: transfer failed: $out" >&2
+    exit 1
+fi
+echo ""
+echo "Done."
+echo "Gateway is rebooting with the new kernel."

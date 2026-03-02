@@ -15,7 +15,7 @@ start)
 
 stop)
 
-    echo "🛑 Stopping serialgateway..."
+    echo "🔴 Stopping serialgateway..."
     killall serialgateway
     ;;
 
