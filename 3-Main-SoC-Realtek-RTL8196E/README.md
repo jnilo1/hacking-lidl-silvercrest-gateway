@@ -69,16 +69,19 @@ cd lidl-gateway-linux/3-Main-SoC-Realtek-RTL8196E
 
 1. Connect to the gateway via serial (38400 8N1)
 2. Enter bootloader mode (press ESC during boot to get `<RealTek>` prompt)
-3. Run the flash script:
+3. Run the flash script **from the repository root**:
 
 ```bash
 ./flash_rtl8196e.sh              # Flash all partitions
-./flash_rtl8196e.sh kernel       # Flash kernel only
-./flash_rtl8196e.sh rootfs       # Flash rootfs only
-./flash_rtl8196e.sh userdata     # Flash userdata only
 ```
 
-Flashing order: rootfs → userdata → kernel (kernel triggers automatic reboot).
+To flash individual partitions, use the scripts in each subdirectory:
+
+```bash
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh
+3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh
+```
 
 ### After Flashing
 
