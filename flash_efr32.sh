@@ -17,6 +17,18 @@
 
 set -euo pipefail
 
+# Check that python3 and venv are available (needed for universal-silabs-flasher)
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "Error: python3 not found." >&2
+    echo "Install it with: sudo apt install python3" >&2
+    exit 1
+fi
+if ! python3 -c "import venv" 2>/dev/null; then
+    echo "Error: python3-venv not found." >&2
+    echo "Install it with: sudo apt install python3-venv" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 GW_IP="${1:-192.168.1.88}"
 GW_PORT=8888

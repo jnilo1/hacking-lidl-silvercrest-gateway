@@ -141,62 +141,22 @@ commander flash firmware/first_stage.s37 --device EFR32MG1B232F256GM48
 commander flash firmware/bootloader-uart-xmodem-2.4.2-crc.s37 --device EFR32MG1B232F256GM48
 ```
 
-### Option 2: Flash via universal-silabs-flasher (Remote, Stage 2 only)
+### Option 2: Flash via `flash_efr32.sh` (Remote, Stage 2 only)
 
-You can update the **Stage 2 bootloader** remotely using `universal-silabs-flasher` if you already have a working bootloader installed.
+You can update the **Stage 2 bootloader** remotely if you already have a working bootloader installed.
 
 > **Note**: This only updates Stage 2. Stage 1 cannot be updated via UART.
 
-#### Prerequisites
-
-1. **Install universal-silabs-flasher** (see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for details)
-
-2. **Restart serialgateway with `-f` flag:**
-
-   On the gateway via SSH:
-   ```bash
-   killall serialgateway && serialgateway -f
-   ```
-
-   The `-f` flag disables hardware flow control, allowing the flasher to communicate with the bootloader.
-
-   **Important:** Close all SSH sessions connected to the gateway before flashing.
-
-#### Flash the bootloader
+From the repository root:
 
 ```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/bootloader-uart-xmodem-2.4.2.gbl
+./flash_efr32.sh <GATEWAY_IP>
+# Select [1] Bootloader
 ```
 
-#### Expected error at the end
-
-After flashing the bootloader, `universal-silabs-flasher` will show an **error** because it cannot find a valid application:
-
-```
-...
-Firmware uploaded successfully
-Running firmware...
-Error: Failed to detect firmware type
-```
-
-**This error is expected and can be ignored.** The bootloader was flashed successfully, but there is no application yet. The bootloader will now display its menu waiting for a firmware upload.
-
-#### After flashing: upload an application
-
-Immediately after updating the bootloader, upload an application (NCP, RCP, or Router):
-
-```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware ../24-NCP-UART-HW/firmware/ncp-uart-hw-7.5.1.gbl
-```
-
-Then reboot the gateway:
-```bash
-reboot
-```
+The script handles serialgateway restart, flashing, and the expected `NoFirmwareError`
+(the application slot is empty after a bootloader update). It then prompts you to
+select an application firmware (NCP, RCP, etc.) and flashes it immediately.
 
 ______________________________________________________________________
 

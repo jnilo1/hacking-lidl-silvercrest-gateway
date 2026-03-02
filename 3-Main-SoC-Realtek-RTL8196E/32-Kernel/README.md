@@ -61,17 +61,18 @@ The script will:
 
 ## Output
 
-- `kernel.img` — Flashable kernel image with Realtek header (~1.7 MB)
+- `kernel.img` — Flashable kernel image with Realtek header (~1 MB)
 
 ## Technical Details
 
-### Build Process
+### Build Process (zboot)
+
+The kernel uses the in-tree `arch/mips/boot/compressed/` (zboot) decompressor — no external LZMA tool or loader is needed.
 
 1. Compile kernel → `vmlinux`
-2. Strip to raw binary → `vmlinux.bin`
-3. Compress with LZMA → `vmlinux.bin.lzma`
-4. Prepend LZMA loader → `loader.bin + vmlinux.bin.lzma`
-5. Add Realtek header → `kernel.img`
+2. zboot compresses the kernel with LZMA and prepends a small decompressor → `vmlinuz` (ELF)
+3. Strip to raw binary → `vmlinuz.bin`
+4. Add Realtek header (cvimg) → `kernel.img`
 
 ### Key Patches
 

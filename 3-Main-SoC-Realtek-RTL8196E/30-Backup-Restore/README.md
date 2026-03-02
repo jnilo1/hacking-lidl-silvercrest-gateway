@@ -170,11 +170,9 @@ RealTek>FLW 00000000 80500000 01000000 0
 
 ---
 
-### 🗂 Original Lidl/Tuya Flash Partition Map
+### 🗂 Flash Partition Maps
 
-> ⚠️ The table below reflects the **original Lidl/Tuya firmware** partition layout.
-> The custom firmware described in this repository uses a **different layout with one fewer partition** (the Tuya Label partition is removed and the remaining space reallocated).
-> When working with the custom firmware, refer to the partition map in `32-Kernel/`.
+#### Original Lidl/Tuya firmware (5 partitions)
 
 | MTD  | Description         | Offset       | Size         |
 |------|---------------------|--------------|--------------|
@@ -183,6 +181,17 @@ RealTek>FLW 00000000 80500000 01000000 0
 | mtd2 | Rootfs              | `0x00200000` | `0x00200000` (2 MiB) |
 | mtd3 | Tuya Label          | `0x00400000` | `0x00020000` (128 KiB) |
 | mtd4 | JFFS2 Overlay       | `0x00420000` | `0x00BE0000` (~11.875 MiB) |
+
+#### Custom firmware (4 partitions)
+
+| MTD  | Description         | Offset       | Size         |
+|------|---------------------|--------------|--------------|
+| mtd0 | Bootloader + Config | `0x00000000` | `0x00020000` (128 KiB) |
+| mtd1 | Kernel              | `0x00020000` | `0x001E0000` (1.875 MiB) |
+| mtd2 | Rootfs              | `0x00200000` | `0x00200000` (2 MiB) |
+| mtd3 | JFFS2 Userdata      | `0x00400000` | `0x00C00000` (12 MiB) |
+
+The custom firmware removes the Tuya Label partition and allocates the full remaining space (12 MiB) to JFFS2 userdata.
 
 ---
 
@@ -229,7 +238,7 @@ RealTek>FLW 00200000 80500000 00200000 0
 
 ⚠️ Always double-check offset and size before writing. This operation is destructive.
 
-#### FLR / FLW quick reference (original Lidl/Tuya layout)
+#### FLR / FLW quick reference (original Lidl/Tuya layout — 5 partitions)
 
 | MTD  | Description         | FLR Command                        | FLW Command                        |
 |------|---------------------|------------------------------------|------------------------------------|
@@ -238,6 +247,17 @@ RealTek>FLW 00200000 80500000 00200000 0
 | mtd2 | Rootfs              | `FLR 80500000 00200000 00200000`   | `FLW 00200000 80500000 00200000 0` |
 | mtd3 | Tuya Label          | `FLR 80500000 00400000 00020000`   | `FLW 00400000 80500000 00020000 0` |
 | mtd4 | JFFS2 Overlay       | `FLR 80500000 00420000 00BE0000`   | `FLW 00420000 80500000 00BE0000 0` |
+
+#### FLR / FLW quick reference (custom firmware layout — 4 partitions)
+
+| MTD  | Description         | FLR Command                        | FLW Command                        |
+|------|---------------------|------------------------------------|------------------------------------|
+| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000`   | `FLW 00000000 80500000 00020000 0` |
+| mtd1 | Kernel              | `FLR 80500000 00020000 001E0000`   | `FLW 00020000 80500000 001E0000 0` |
+| mtd2 | Rootfs              | `FLR 80500000 00200000 00200000`   | `FLW 00200000 80500000 00200000 0` |
+| mtd3 | JFFS2 Userdata      | `FLR 80500000 00400000 00C00000`   | `FLW 00400000 80500000 00C00000 0` |
+
+The custom firmware removes the Tuya Label partition and allocates the remaining 12 MiB to JFFS2 userdata.
 
 ---
 

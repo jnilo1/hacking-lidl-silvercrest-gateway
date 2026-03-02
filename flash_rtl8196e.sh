@@ -17,6 +17,13 @@
 
 set -e
 
+# Check that tftp-hpa client is installed (the script uses its "-c put" syntax)
+if ! command -v tftp >/dev/null 2>&1 || ! tftp --version 2>&1 | grep -q '\-c'; then
+    echo "Error: tftp-hpa client not found (need the -c flag)." >&2
+    echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 TARGET_IP="192.168.1.6"

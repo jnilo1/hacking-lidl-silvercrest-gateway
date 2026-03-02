@@ -113,7 +113,7 @@ The file `z2m/configuration.yaml` contains:
 
 ```yaml
 serial:
-  port: socket://cpcd-zigbeed:9999
+  port: tcp://cpcd-zigbeed:9999
   adapter: ember
 
 mqtt:

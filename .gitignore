@@ -71,6 +71,12 @@ system.map
 # Extracted kernel sources
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-*/
 
+# Kernel local notes and test scripts
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/COMPRESSION.md
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/IRAM-DMEM-MIPS16.md
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/OPUS_REVIEW_PROMPT.md
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/test_rtl8196e_eth.sh
+
 # Compiled binaries in skeleton
 3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/bin/busybox
 3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/bin/dropbearmulti

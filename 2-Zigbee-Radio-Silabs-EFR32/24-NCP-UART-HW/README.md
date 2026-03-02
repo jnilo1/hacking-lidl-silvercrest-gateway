@@ -27,43 +27,16 @@ This firmware enables communication with Zigbee coordinators like **Zigbee2MQTT*
 
 ## Option 1: Flash Pre-built Firmware (Recommended)
 
-Pre-built firmware files are available in the `firmware/` directory. This is the quickest way to get started.
+Pre-built firmware is available in the `firmware/` directory. From the repository root:
 
-### Available Firmware Files
+```bash
+./flash_efr32.sh <GATEWAY_IP>
+# Select [2] NCP-UART-HW
+```
 
-| File | Description |
-|------|-------------|
-| `ncp-uart-hw-7.5.1.gbl` | For UART/TCP flashing via universal-silabs-flasher |
+The script handles everything (serialgateway restart, flash, reboot).
 
 > **Need other formats (.s37, .hex, .bin)?** Build from source (Option 2), they will be in `build/debug/`.
-
-### Prerequisites
-
-1. **Install universal-silabs-flasher** (see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for details)
-
-2. **Restart serialgateway with `-f` flag:**
-
-   On the gateway via SSH:
-   ```bash
-   killall serialgateway && serialgateway -f
-   ```
-
-   **Important:** Close all SSH sessions connected to the gateway before flashing.
-
-### Flash
-
-```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/ncp-uart-hw-7.5.1.gbl
-```
-
-### After flashing
-
-Reboot the gateway to restore normal serialgateway operation:
-```bash
-reboot
-```
 
 ---
 
@@ -113,12 +86,8 @@ firmware/
 
 **Via network (same as Option 1):**
 ```bash
-# On gateway: killall serialgateway && serialgateway -f
-# Important: close all SSH sessions before flashing!
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/ncp-uart-hw.gbl
-# Then reboot gateway
+./flash_efr32.sh <GATEWAY_IP>
+# Select [2] NCP-UART-HW
 ```
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):

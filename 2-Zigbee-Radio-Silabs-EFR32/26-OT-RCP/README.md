@@ -39,35 +39,14 @@ Unlike proprietary solutions like Silicon Labs' zigbeed, zigbee-on-host is:
 
 ## Option 1: Flash Pre-built Firmware (Recommended)
 
-A pre-built firmware is available in the `firmware/` directory. This is the quickest way to get started.
-
-### Prerequisites
-
-1. **Install universal-silabs-flasher** (see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for details)
-
-2. **Restart serialgateway with `-f` flag:**
-
-   On the gateway via SSH:
-   ```bash
-   killall serialgateway && serialgateway -f
-   ```
-
-   **Important:** Close all SSH sessions connected to the gateway before flashing.
-
-### Flash
+Pre-built firmware is available in the `firmware/` directory. From the repository root:
 
 ```bash
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/ot-rcp.gbl
+./flash_efr32.sh <GATEWAY_IP>
+# Select [4] OT-RCP
 ```
 
-### After flashing
-
-Reboot the gateway to restore normal serialgateway operation:
-```bash
-reboot
-```
+The script handles everything (serialgateway restart, flash, reboot).
 
 ---
 
@@ -109,12 +88,8 @@ firmware/
 
 **Via network (same as Option 1):**
 ```bash
-# On gateway: killall serialgateway && serialgateway -f
-# Important: close all SSH sessions before flashing!
-universal-silabs-flasher \
-    --device socket://192.168.1.X:8888 \
-    flash --firmware firmware/ot-rcp.gbl
-# Then reboot gateway
+./flash_efr32.sh <GATEWAY_IP>
+# Select [4] OT-RCP
 ```
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):

@@ -13,6 +13,7 @@ This project replaces the firmware and turns it into a **fully local, open Zigbe
 - **Home Assistant** — use it as your Zigbee coordinator, connected over the network
 - **OpenThread** — use the radio as a Thread Border Router (with otbr-agent)
 - **SSH access** — full Linux shell on the gateway (BusyBox + Dropbear)
+- **Zigbee router** — turn the gateway into a standalone Zigbee 3.0 router to extend your mesh
 - **OTA firmware updates** — flash the Zigbee radio over the network, no SWD needed
 
 The gateway has two chips: a **Realtek RTL8196E** running Linux, and a **Silabs EFR32MG1B**
@@ -64,7 +65,7 @@ In your zigbee2mqtt `configuration.yaml`:
 
 ```yaml
 serial:
-  port: socket://<GATEWAY_IP>:8888
+  port: tcp://<GATEWAY_IP>:8888
   adapter: ember
 ```
 
@@ -92,11 +93,23 @@ Root-level scripts:
 
 Pre-built images are included in the repository. If you want to customize:
 
-```bash
-# Set up the toolchain
-cd 1-Build-Environment && sudo ./install_deps.sh
+**Native (Ubuntu 22.04 / WSL2):**
 
-# Build and flash the Linux system
+```bash
+cd 1-Build-Environment && sudo ./install_deps.sh
+```
+
+**Docker (any OS):**
+
+```bash
+cd 1-Build-Environment && docker build -t lidl-gateway-builder .
+docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
+```
+
+Then build and flash:
+
+```bash
+# Build the Linux system
 cd 3-Main-SoC-Realtek-RTL8196E/32-Kernel && ./build_kernel.sh
 cd ../33-Rootfs && ./build_rootfs.sh
 cd ../.. && ./flash_rtl8196e.sh
@@ -106,7 +119,7 @@ cd 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW && ./build_ncp.sh
 cd ../.. && ./flash_efr32.sh <GATEWAY_IP>
 ```
 
-See [1-Build-Environment](./1-Build-Environment/) for Docker and WSL2 setup.
+See [1-Build-Environment](./1-Build-Environment/) for details.
 
 ______________________________________________________________________
 
