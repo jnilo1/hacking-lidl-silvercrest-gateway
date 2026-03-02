@@ -6,6 +6,44 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [1.2.0] - 2026-03-02
+
+### 30-Backup-Restore
+- Added custom firmware partition map (4 partitions) alongside the original Lidl/Tuya map
+- Added FLR/FLW quick reference table for the custom layout (mtd3 = 12 MiB JFFS2 userdata)
+
+### 32-Kernel
+- Updated README: build process now describes zboot (in-tree `arch/mips/boot/compressed/`), corrected image size (~1 MB)
+- PIN_MUX_SEL fix: UART1 TX/RX pins correctly muxed in both `rtl8196e-eth` and legacy `rtl819x` drivers — fixes EFR32 communication after Ethernet init
+- PIN_MUX_SEL2: nRST clearing preserved for EFR32 reset control
+
+### 33-Rootfs
+- Fixed Dropbear pubkey auth by correcting `/root` permissions at startup
+
+### 34-Userdata
+- NTP: retry connectivity check in `S20time` for reliable time sync
+- Dropbear: unified stop emoji, fixed restart logic
+- `flash_userdata.sh`: network configuration (static IP or DHCP) asked at flash time
+
+### Flash scripts (root level)
+- New `flash_rtl8196e.sh` at repository root — flashes all RTL8196E partitions in one command
+- New `flash_efr32.sh` at repository root — OTA flash of EFR32 via SSH + universal-silabs-flasher
+  - Firmware selection menu (bootloader, NCP, RCP, OT-RCP, Z3-Router)
+  - SSH retry (3 attempts, ConnectTimeout=10) for unreliable networks
+  - Progress bar visible for normal firmware flash
+  - Bootloader flash chains application firmware automatically
+- Prerequisite checks: tftp-hpa (flash_rtl8196e.sh), python3 + venv (flash_efr32.sh)
+- Deleted unused `clean_part1.sh`, `clean_part2.sh`, `clean_part3.sh`
+
+### Documentation
+- All EFR32 firmware READMEs (23-Bootloader, 24-NCP, 25-RCP, 26-OT-RCP, 27-Router) updated to reference `flash_efr32.sh`
+- Root README rewritten: user-oriented intro, single quick start flow, firmware selection table
+- `35-Migration` README rewritten to describe the two root-level flash scripts
+- Fixed Z2M port syntax to `tcp://` across all READMEs
+- `3-Main-SoC-Realtek-RTL8196E/README.md`: clarified flash script paths (root vs subdirectory)
+
+---
+
 ## [1.1.0] - 2026-02-24
 
 ### 30-Backup-Restore (new)
