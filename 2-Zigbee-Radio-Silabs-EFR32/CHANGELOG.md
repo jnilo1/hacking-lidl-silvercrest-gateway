@@ -4,6 +4,18 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [1.2.1] - 2026-03-03
+
+### 26-OT-RCP
+- Docker Compose stack for Thread/Matter: OTBR + Matter Server + Home Assistant
+- Docker Compose stack for Zigbee: Zigbee2MQTT with zigbee-on-host (`zoh`) adapter
+- Tested Matter commissioning via chip-tool over BLE (IKEA TIMMERFLOTTE sensor)
+- Documented chip-tool workflow: Thread dataset, BLE pairing, attestation bypass
+- Removed erroneous 460800 baud memo (actual root cause: PCB signal integrity)
+- README updated with dual-mode architecture diagrams and quick start
+
+---
+
 ## [1.2.0] - 2026-03-02
 
 ### flash_efr32.sh (new — repository root)
