@@ -1,0 +1,78 @@
+# Docker Compose for Thread/Matter testing with Lidl Silvercrest Gateway
+#
+# Stack: OTBR + Matter Server + Home Assistant
+# See also: docker-compose-zoh.yml for Zigbee2MQTT + zigbee-on-host setup.
+#
+# Usage:
+#   1. Flash ot-rcp.gbl to the EFR32
+#   2. Ensure serialgateway is running on the gateway (port 8888, 115200 baud)
+#   3. docker compose up -d
+#   4. Open Home Assistant at http://localhost:8123
+#   5. Add integrations: OTBR (localhost:8081) + Matter (localhost:5580)
+#   6. Commission Matter devices via Settings → Devices → Add Device → Matter
+#
+# References:
+#   https://github.com/bnutzer/docker-otbr-tcp
+#   https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47
+
+services:
+  # OpenThread Border Router — connects to OT-RCP via serialgateway
+  otbr:
+    container_name: otbr
+    image: bnutzer/otbr-tcp
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    devices:
+      - /dev/net/tun
+    environment:
+      # ============================================================
+      # REQUIRED: Set this to your Lidl gateway's IP address
+      # The gateway must be running serialgateway on port 8888
+      # ============================================================
+      - RCP_HOST=192.168.1.126
+      - RCP_PORT=8888
+      # ============================================================
+      # Thread/OTBR configuration
+      - OTBR_LOG_LEVEL_INT=6
+      - OTBR_WEB_ENABLE=1
+      - OTBR_WEB_PORT=8080
+      - OTBR_REST_LISTEN_PORT=8081
+      - OTBR_BACKBONE_IF=enp2s0
+    volumes:
+      - otbr_data:/var/lib/thread
+
+  # Python Matter Server — Matter fabric controller
+  # Needs D-Bus for BLE commissioning
+  matter-server:
+    container_name: matter-server
+    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - matter_data:/data
+      - /run/dbus:/run/dbus:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    environment:
+      - TZ=Europe/Paris
+
+  # Home Assistant — UI for commissioning and device management
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - ha_config:/config
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=Europe/Paris
+
+volumes:
+  otbr_data:
+  matter_data:
+  ha_config:

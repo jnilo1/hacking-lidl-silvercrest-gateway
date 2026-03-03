@@ -104,34 +104,83 @@ commander flash firmware/ot-rcp.s37 \
 
 ### Architecture
 
+The OT-RCP firmware supports two modes via separate Docker stacks:
+
+**Zigbee** — Zigbee2MQTT with zigbee-on-host adapter:
+
 ```
-+-------------------+    UART     +-------------------+   Ethernet   +---------------------+
-|  EFR32MG1B (RCP)  |   115200    |  RTL8196E         |    TCP/IP    |  Host (x86/ARM)     |
-|                   |    baud     |  (Gateway SoC)    |              |                     |
-|  802.15.4 PHY/MAC |<----------->|                   |<------------>|  Zigbee2MQTT        |
-|  + Spinel/HDLC    |   ttyS1     |  serialgateway    |   port 8888  |    + zoh adapter    |
-|                   |             |  (serial->TCP)    |              |                     |
-|  OpenThread 2.4.7 |             |                   |              |  zigbee-on-host     |
-|  HW Flow Control  |             |                   |              |  (Zigbee stack)     |
-+-------------------+             +-------------------+              +---------------------+
+Zigbee Devices                        Docker Host
+       │  802.15.4                   ┌──────────────────────────┐
+       ▼                             │  Zigbee2MQTT (zoh)       │
+┌─────────────┐  UART   ┌────────┐  │  + zigbee-on-host stack  │
+│  EFR32 RCP  │◄──────►│ serial  │◄─┤  Web UI :8080            │
+│  Spinel/    │ 115200  │ gateway │  └──────────────────────────┘
+│  HDLC       │         │ :8888   │
+└─────────────┘         └────────┘
+```
+
+**Thread/Matter** — OTBR + chip-tool commissioning:
+
+```
+Matter Devices                        Docker Host
+       │  Thread 802.15.4            ┌──────────────────────────┐
+       ▼                             │  OTBR (border router)    │
+┌─────────────┐  UART   ┌────────┐  │  REST API :8081          │
+│  EFR32 RCP  │◄──────►│ serial  │◄─┤  Matter Server :5580     │
+│  Spinel/    │ 115200  │ gateway │  │  Home Assistant :8123    │
+│  HDLC       │         │ :8888   │  │  chip-tool (commission)  │
+└─────────────┘         └────────┘  └──────────────────────────┘
 ```
 
 The RTL8196E runs `serialgateway` to bridge the EFR32's UART to TCP port 8888.
 See [34-Userdata](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/) for gateway setup.
 
-### Zigbee2MQTT Configuration
+### Docker Stacks
 
-Edit `configuration.yaml`:
+Pre-configured Docker Compose files are in `docker/`. See [`docker/README.md`](docker/README.md) for full setup instructions.
 
-```yaml
-serial:
-  port: tcp://192.168.1.X:8888
-  adapter: zoh
+| Stack | Command | Use case |
+|-------|---------|----------|
+| Zigbee (zoh) | `docker compose -f docker-compose-zoh.yml up -d` | Zigbee2MQTT |
+| Thread/Matter | `docker compose up -d` | OTBR + Matter commissioning |
+
+### Zigbee Quick Start
+
+Edit `docker/z2m/configuration.yaml` with your gateway IP, then:
+
+```bash
+cd docker
+docker compose -f docker-compose-zoh.yml up -d
+# Open http://localhost:8080
 ```
 
-> **Note:** Baudrate and flow control are handled by `serialgateway` on the gateway side.
+### Thread/Matter Quick Start
 
-**Tested devices:** Xiaomi LYWSD03MMC (temperature/humidity sensor)
+Edit `docker/docker-compose.yml` (`RCP_HOST`, `OTBR_BACKBONE_IF`), then:
+
+```bash
+cd docker
+docker compose up -d
+
+# Get Thread dataset
+docker exec otbr ot-ctl dataset active -x
+
+# Commission a Matter device via BLE
+mkdir -p /tmp/chip-tool-storage
+docker run --rm --network host --privileged \
+  -v /run/dbus:/run/dbus:ro -v /sys:/sys \
+  -v /tmp/chip-tool-storage:/tmp \
+  atios/chip-tool:latest \
+  pairing code-thread 1 hex:<DATASET> <SETUP_CODE> \
+  --bypass-attestation-verifier true
+```
+
+### Tested Devices
+
+| Device | Protocol | Stack | Status |
+|--------|----------|-------|--------|
+| Xiaomi LYWSD03MMC | Zigbee | zoh | OK |
+| IKEA TIMMERFLOTTE | Matter/Thread | OTBR + chip-tool | OK (24.08 C read) |
 
 ---
 
@@ -199,6 +248,12 @@ The distinction matters:
 │   ├── app.c / app.h            # OT instance init + hardware watchdog
 │   ├── sl_uartdrv_usart_vcom_config.h  # UART: 115200, HW flow control
 │   └── sl_rail_util_pti_config.h       # PTI disabled (suppresses SDK warning)
+├── docker/                      # Docker Compose stacks
+│   ├── README.md                # Setup guide (Zigbee + Thread/Matter)
+│   ├── docker-compose.yml       # Thread/Matter: OTBR + Matter Server + HA
+│   ├── docker-compose-zoh.yml   # Zigbee: Mosquitto + Zigbee2MQTT (zoh)
+│   ├── z2m/configuration.yaml   # Zigbee2MQTT config
+│   └── mosquitto/mosquitto.conf # MQTT broker config
 └── firmware/                    # Output (generated)
     ├── ot-rcp.gbl               # For UART flashing
     └── ot-rcp.s37               # For SWD flashing
@@ -217,6 +272,9 @@ The distinction matters:
 - [zigbee-on-host](https://github.com/Nerivec/zigbee-on-host) - Open-source Zigbee stack by Nerivec
 - [Zigbee2MQTT](https://www.zigbee2mqtt.io/)
 - [OpenThread RCP](https://openthread.io/platforms/co-processor)
+- [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) - OTBR Docker image for TCP-based RCPs
+- [chip-tool guide](https://project-chip.github.io/connectedhomeip-doc/development_controllers/chip-tool/chip_tool_guide.html) - Matter commissioning
+- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) - Thread/Matter on the Lidl gateway
 
 ## License
 
