@@ -10,6 +10,7 @@
 # Usage:
 #   ./build_rtl8196e.sh                  # Build all (default)
 #   ./build_rtl8196e.sh all              # Build all
+#   ./build_rtl8196e.sh bootloader       # Build bootloader only
 #   ./build_rtl8196e.sh kernel           # Build kernel only
 #   ./build_rtl8196e.sh rootfs           # Build rootfs only
 #   ./build_rtl8196e.sh userdata         # Build userdata only
@@ -30,17 +31,22 @@ if [ -d "${TOOLCHAIN_DIR}/bin" ]; then
 fi
 
 # Parse arguments
+BUILD_BOOTLOADER=0
 BUILD_KERNEL=0
 BUILD_ROOTFS=0
 BUILD_USERDATA=0
 
 if [ $# -eq 0 ] || [ "$1" = "all" ]; then
+    BUILD_BOOTLOADER=1
     BUILD_KERNEL=1
     BUILD_ROOTFS=1
     BUILD_USERDATA=1
 else
     for arg in "$@"; do
         case "$arg" in
+            bootloader)
+                BUILD_BOOTLOADER=1
+                ;;
             kernel)
                 BUILD_KERNEL=1
                 ;;
@@ -55,6 +61,7 @@ else
                 echo ""
                 echo "Targets:"
                 echo "  all        Build everything (default)"
+                echo "  bootloader Build bootloader"
                 echo "  kernel     Build Linux kernel"
                 echo "  rootfs     Build root filesystem (BusyBox, Dropbear)"
                 echo "  userdata   Build user partition (nano, serialgateway)"
@@ -81,6 +88,7 @@ echo ""
 
 # Show what will be built
 echo "Targets:"
+[ $BUILD_BOOTLOADER -eq 1 ] && echo "  • bootloader"
 [ $BUILD_KERNEL -eq 1 ] && echo "  • kernel"
 [ $BUILD_ROOTFS -eq 1 ] && echo "  • rootfs"
 [ $BUILD_USERDATA -eq 1 ] && echo "  • userdata"
@@ -102,9 +110,18 @@ echo ""
 
 # Track step number
 STEP=0
-TOTAL=$((BUILD_KERNEL + BUILD_ROOTFS + BUILD_USERDATA))
+TOTAL=$((BUILD_BOOTLOADER + BUILD_KERNEL + BUILD_ROOTFS + BUILD_USERDATA))
 # Rootfs has 2 sub-steps (busybox + dropbear)
 [ $BUILD_ROOTFS -eq 1 ] && TOTAL=$((TOTAL + 2))
+
+# Build bootloader
+if [ $BUILD_BOOTLOADER -eq 1 ]; then
+    STEP=$((STEP + 1))
+    echo "========================================="
+    echo "  ${STEP}/${TOTAL} BUILDING BOOTLOADER"
+    echo "========================================="
+    cd "${SCRIPT_DIR}/31-Bootloader" && ./build_bootloader.sh
+fi
 
 # Build rootfs components
 if [ $BUILD_ROOTFS -eq 1 ]; then
@@ -155,6 +172,7 @@ echo "  ✅ BUILD COMPLETE"
 echo "========================================="
 echo ""
 echo "Generated images:"
+[ $BUILD_BOOTLOADER -eq 1 ] && ls -lh "${SCRIPT_DIR}/31-Bootloader/boot.bin" 2>/dev/null || true
 [ $BUILD_ROOTFS -eq 1 ] && ls -lh "${SCRIPT_DIR}/33-Rootfs/rootfs.bin" 2>/dev/null || true
 [ $BUILD_USERDATA -eq 1 ] && ls -lh "${SCRIPT_DIR}/34-Userdata/userdata.bin" 2>/dev/null || true
 [ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel.img" 2>/dev/null || true

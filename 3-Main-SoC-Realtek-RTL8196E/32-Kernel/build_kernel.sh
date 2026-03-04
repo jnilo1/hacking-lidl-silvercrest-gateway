@@ -230,7 +230,21 @@ JOBS=$(nproc)
 echo "Building with $JOBS parallel jobs..."
 echo ""
 
-if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j$JOBS; then
+# zboot needs xz-utils lzma, not Realtek SDK lzma (incompatible CLI)
+SYS_LZMA=$(command -v lzma 2>/dev/null || true)
+if [ -n "$SYS_LZMA" ] && ! "$SYS_LZMA" --help 2>&1 | grep -q "XZ Utils"; then
+    SYS_LZMA=""
+fi
+if [ -z "$SYS_LZMA" ] && [ -x /usr/bin/lzma ]; then
+    SYS_LZMA="/usr/bin/lzma"
+fi
+if [ -z "$SYS_LZMA" ]; then
+    echo "ERROR: xz-utils not found (provides lzma for kernel compression)"
+    echo "  Install: sudo apt-get install xz-utils"
+    exit 1
+fi
+
+if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LZMA="$SYS_LZMA" -j$JOBS; then
     echo ""
     echo "=== BUILD FAILED ==="
     exit 1
