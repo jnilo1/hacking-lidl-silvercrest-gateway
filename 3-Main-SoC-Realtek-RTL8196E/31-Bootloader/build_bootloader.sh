@@ -51,7 +51,8 @@ find_toolchain() {
 
 TOOLCHAIN_DIR="$(find_toolchain || true)"
 
-if [ -n "$TOOLCHAIN_DIR" ]; then
+# Add toolchain to PATH only if not already available (avoids GLIBC mismatch in Docker)
+if ! command -v ${CROSS_PREFIX}gcc >/dev/null 2>&1 && [ -n "$TOOLCHAIN_DIR" ]; then
     export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
 fi
 export CROSS="${CROSS_PREFIX}"

@@ -40,7 +40,9 @@ fi
 
 # Lexra toolchain (musl 1.2.5)
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
-export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+if ! command -v mips-lexra-linux-musl-gcc >/dev/null 2>&1; then
+    export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+fi
 export CROSS_COMPILE="mips-lexra-linux-musl-"
 
 # Compiler settings

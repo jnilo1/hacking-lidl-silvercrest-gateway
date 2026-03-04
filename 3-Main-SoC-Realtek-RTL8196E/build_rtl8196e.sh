@@ -25,9 +25,11 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
 
-# Add toolchain to PATH if it exists in project directory
-if [ -d "${TOOLCHAIN_DIR}/bin" ]; then
-    export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+# Add toolchain to PATH only if not already available (avoids GLIBC mismatch in Docker)
+if ! command -v mips-lexra-linux-musl-gcc >/dev/null 2>&1; then
+    if [ -d "${TOOLCHAIN_DIR}/bin" ]; then
+        export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+    fi
 fi
 
 # Parse arguments

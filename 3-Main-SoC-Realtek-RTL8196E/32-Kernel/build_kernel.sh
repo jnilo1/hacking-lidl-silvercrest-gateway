@@ -34,7 +34,10 @@ KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}/${KERNEL_TA
 VANILLA_DIR="linux-${KERNEL_VERSION}"
 
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
-export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+# Add toolchain to PATH only if not already available (avoids GLIBC mismatch in Docker)
+if ! command -v mips-lexra-linux-musl-gcc >/dev/null 2>&1; then
+    export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+fi
 export ARCH=mips
 export CROSS_COMPILE=mips-lexra-linux-musl-
 

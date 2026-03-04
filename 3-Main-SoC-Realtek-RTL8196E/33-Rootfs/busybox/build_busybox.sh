@@ -58,7 +58,9 @@ echo "📦 BusyBox version: ${BB_VER}"
 
 # Toolchain
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
-export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+if ! command -v mips-lexra-linux-musl-gcc >/dev/null 2>&1; then
+    export PATH="${TOOLCHAIN_DIR}/bin:$PATH"
+fi
 CROSS_COMPILE=mips-lexra-linux-musl-
 
 # Download and extract if needed
