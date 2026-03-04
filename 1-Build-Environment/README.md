@@ -39,13 +39,13 @@ From the `1-Build-Environment` directory:
 # Interactive shell
 docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
 
-# Build Main SoC images
+# Build Main SoC (bootloader + kernel + rootfs + userdata)
 docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
     /workspace/3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
 
-# Build Zigbee firmware
+# Build all EFR32 firmware (bootloader + NCP + RCP + OT-RCP + Router)
 docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
-    /workspace/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/build_ncp.sh
+    /workspace/2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
 ```
 
 ### Docker Options Explained
@@ -154,7 +154,7 @@ The Lexra architecture is a MIPS variant without unaligned access instructions (
 |------|-------------|
 | `cvimg` | Create Realtek flash images |
 | `lzma` | LZMA compressor |
-| `lzma-loader` | Boot-time LZMA decompressor |
+| `lzma-loader` | LZMA decompressor (legacy, replaced by zboot) |
 
 ---
 
@@ -186,5 +186,7 @@ If you installed elsewhere, set the PATH manually or use the `env.sh` script gen
 
 After setting up the build environment:
 
-1. **Build Main SoC images:** See [3-Main-SoC-Realtek-RTL8196E](../3-Main-SoC-Realtek-RTL8196E/)
-2. **Build Zigbee firmware:** See [2-Zigbee-Radio-Silabs-EFR32](../2-Zigbee-Radio-Silabs-EFR32/)
+1. **Build Main SoC:** `./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh` — See [3-Main-SoC-Realtek-RTL8196E](../3-Main-SoC-Realtek-RTL8196E/)
+2. **Build EFR32 firmware:** `./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh` — See [2-Zigbee-Radio-Silabs-EFR32](../2-Zigbee-Radio-Silabs-EFR32/)
+
+Both scripts accept individual targets (e.g., `build_rtl8196e.sh kernel`, `build_efr32.sh ncp rcp`). Run with `--help` for details.

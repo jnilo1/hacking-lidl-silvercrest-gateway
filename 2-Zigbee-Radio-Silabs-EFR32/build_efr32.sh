@@ -84,6 +84,16 @@ echo "Targets:"
 [ $BUILD_ROUTER -eq 1 ]     && echo "  • router"
 echo ""
 
+# Auto-detect silabs-tools in project directory
+SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
+if [ -d "${SILABS_TOOLS_DIR}/slc_cli" ]; then
+    export PATH="${SILABS_TOOLS_DIR}/slc_cli:$PATH"
+    export PATH="${SILABS_TOOLS_DIR}/arm-gnu-toolchain/bin:$PATH"
+    export PATH="${SILABS_TOOLS_DIR}/commander:$PATH"
+    export GECKO_SDK="${SILABS_TOOLS_DIR}/gecko_sdk"
+    export JAVA_TOOL_OPTIONS="-Duser.home=${SILABS_TOOLS_DIR}"
+fi
+
 # Check slc-cli
 if ! command -v slc >/dev/null 2>&1; then
     echo "ERROR: slc-cli not found"
