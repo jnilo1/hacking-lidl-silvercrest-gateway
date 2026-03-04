@@ -6,7 +6,7 @@
 #
 # Usage:
 #   # Build the image (first time ~45 min)
-#   docker build -t lidl-gateway-builder .
+#   docker buildx build --load -t lidl-gateway-builder .
 #
 #   # Run interactive shell
 #   docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
