@@ -119,7 +119,7 @@ Zigbee Devices                        Docker Host
 └─────────────┘         └────────┘
 ```
 
-**Thread/Matter** — OTBR + chip-tool commissioning:
+**Thread/Matter** — OTBR + Home Assistant + Companion App:
 
 ```
 Matter Devices                        Docker Host
@@ -128,7 +128,7 @@ Matter Devices                        Docker Host
 ┌─────────────┐  UART   ┌────────┐  │  REST API :8081          │
 │  EFR32 RCP  │◄──────►│ serial  │◄─┤  Matter Server :5580     │
 │  Spinel/    │ 115200  │ gateway │  │  Home Assistant :8123    │
-│  HDLC       │         │ :8888   │  │  chip-tool (commission)  │
+│  HDLC       │         │ :8888   │  │  ← Companion App (BLE)  │
 └─────────────┘         └────────┘  └──────────────────────────┘
 ```
 
@@ -137,50 +137,22 @@ See [34-Userdata](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/) for gateway se
 
 ### Docker Stacks
 
-Pre-configured Docker Compose files are in `docker/`. See [`docker/README.md`](docker/README.md) for full setup instructions.
+Pre-configured Docker Compose files are in [`docker/`](docker/README.md):
 
 | Stack | Command | Use case |
 |-------|---------|----------|
 | Zigbee (zoh) | `docker compose -f docker-compose-zoh.yml up -d` | Zigbee2MQTT |
-| Thread/Matter | `docker compose up -d` | OTBR + Matter commissioning |
+| Thread/Matter | `docker compose up -d` | OTBR + Home Assistant + Matter |
 
-### Zigbee Quick Start
-
-Edit `docker/z2m/configuration.yaml` with your gateway IP, then:
-
-```bash
-cd docker
-docker compose -f docker-compose-zoh.yml up -d
-# Open http://localhost:8080
-```
-
-### Thread/Matter Quick Start
-
-Edit `docker/docker-compose.yml` (`RCP_HOST`, `OTBR_BACKBONE_IF`), then:
-
-```bash
-cd docker
-docker compose up -d
-
-# Get Thread dataset
-docker exec otbr ot-ctl dataset active -x
-
-# Commission a Matter device via BLE
-mkdir -p /tmp/chip-tool-storage
-docker run --rm --network host --privileged \
-  -v /run/dbus:/run/dbus:ro -v /sys:/sys \
-  -v /tmp/chip-tool-storage:/tmp \
-  atios/chip-tool:latest \
-  pairing code-thread 1 hex:<DATASET> <SETUP_CODE> \
-  --bypass-attestation-verifier true
-```
+See [`docker/README.md`](docker/README.md) for full setup instructions
+(IPv6 forwarding, HA integrations, Companion App commissioning, chip-tool alternative).
 
 ### Tested Devices
 
 | Device | Protocol | Stack | Status |
 |--------|----------|-------|--------|
 | Xiaomi LYWSD03MMC | Zigbee | zoh | OK |
-| IKEA TIMMERFLOTTE | Matter/Thread | OTBR + chip-tool | OK (24.08 C read) |
+| IKEA TIMMERFLOTTE | Matter/Thread | OTBR + HA Companion App | OK (22.8 °C, 54.69 %) |
 
 ---
 
@@ -273,7 +245,7 @@ The distinction matters:
 - [Zigbee2MQTT](https://www.zigbee2mqtt.io/)
 - [OpenThread RCP](https://openthread.io/platforms/co-processor)
 - [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) - OTBR Docker image for TCP-based RCPs
-- [chip-tool guide](https://project-chip.github.io/connectedhomeip-doc/development_controllers/chip-tool/chip_tool_guide.html) - Matter commissioning
+- [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/) - Official Matter documentation
 - [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) - Thread/Matter on the Lidl gateway
 
 ## License
