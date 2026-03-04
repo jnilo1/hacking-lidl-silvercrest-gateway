@@ -180,7 +180,7 @@ First, set up the build environment. See [1-Build-Environment](../1-Build-Enviro
 ```bash
 # Using Docker (any OS)
 cd ../1-Build-Environment
-docker buildx build --load -t lidl-gateway-builder .
+docker build -t lidl-gateway-builder .
 
 # Or native Ubuntu 22.04 / WSL2
 cd ../1-Build-Environment

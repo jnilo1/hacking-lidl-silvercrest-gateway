@@ -102,7 +102,7 @@ cd 1-Build-Environment && sudo ./install_deps.sh
 **Docker (any OS):**
 
 ```bash
-cd 1-Build-Environment && docker buildx build --load -t lidl-gateway-builder .
+cd 1-Build-Environment && docker build -t lidl-gateway-builder .
 docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
 ```
 

@@ -26,7 +26,7 @@ Build the Docker image once, then use it for all builds.
 
 ```bash
 cd 1-Build-Environment
-docker buildx build --load -t lidl-gateway-builder .
+docker build -t lidl-gateway-builder .
 ```
 
 This takes ~45 minutes (downloads and compiles toolchains).
@@ -164,7 +164,7 @@ The Lexra architecture is a MIPS variant without unaligned access instructions (
 
 If the toolchain build fails with network errors, retry:
 ```bash
-docker buildx build --load --no-cache -t lidl-gateway-builder .
+docker build --no-cache -t lidl-gateway-builder .
 ```
 
 ### slc-cli download fails
