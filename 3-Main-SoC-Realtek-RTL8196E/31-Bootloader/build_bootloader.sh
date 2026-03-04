@@ -61,8 +61,8 @@ export CROSS="${CROSS_PREFIX}"
 
 REALTEK_TOOLS=""
 for dir in \
-    "${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools/bin" \
-    "/home/builder/realtek-tools/bin"; do
+    "/home/builder/realtek-tools/bin" \
+    "${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools/bin"; do
     if [ -x "${dir}/cvimg" ] && [ -x "${dir}/lzma" ]; then
         REALTEK_TOOLS="$dir"
         break

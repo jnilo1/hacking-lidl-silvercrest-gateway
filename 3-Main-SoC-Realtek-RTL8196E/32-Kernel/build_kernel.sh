@@ -46,7 +46,7 @@ BUILD_ENV="${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools"
 DOCKER_TOOLS="/home/builder/realtek-tools"
 
 CVIMG=""
-for dir in "$BUILD_ENV" "$DOCKER_TOOLS"; do
+for dir in "$DOCKER_TOOLS" "$BUILD_ENV"; do
     [ -x "${dir}/bin/cvimg" ] && CVIMG="${dir}/bin/cvimg" && break
 done
 
