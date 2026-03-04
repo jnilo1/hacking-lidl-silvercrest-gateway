@@ -57,6 +57,18 @@ if ! command -v ${CROSS_PREFIX}gcc >/dev/null 2>&1 && [ -n "$TOOLCHAIN_DIR" ]; t
 fi
 export CROSS="${CROSS_PREFIX}"
 
+# --- Locate Realtek tools (cvimg, lzma) ------------------------------------
+
+REALTEK_TOOLS=""
+for dir in \
+    "${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools/bin" \
+    "/home/builder/realtek-tools/bin"; do
+    if [ -x "${dir}/cvimg" ] && [ -x "${dir}/lzma" ]; then
+        REALTEK_TOOLS="$dir"
+        break
+    fi
+done
+
 # --- Checks ----------------------------------------------------------------
 
 if [ -z "$TOOLCHAIN_DIR" ]; then
@@ -97,7 +109,17 @@ echo ""
 echo "Toolchain: $TOOLCHAIN_DIR"
 echo "Compiler:  $(${CROSS_PREFIX}gcc --version | head -1)"
 echo "Jump addr: $JUMP_ADDR"
+if [ -n "$REALTEK_TOOLS" ]; then
+    echo "Realtek:   $REALTEK_TOOLS"
+else
+    echo "ERROR: Realtek tools (cvimg, lzma) not found"
+    echo "  Build them: cd ${PROJECT_ROOT}/1-Build-Environment/11-realtek-tools && ./build_tools.sh"
+    exit 1
+fi
 echo ""
+
+# Pass tool paths to btcode Makefile (overrides hardcoded defaults)
+BTCODE_VARS="CROSS=${CROSS_PREFIX} CVIMG=${REALTEK_TOOLS}/cvimg LZMA=${REALTEK_TOOLS}/lzma"
 
 # boot/ must be cleaned between variants because the Makefiles do not
 # track CFLAGS changes.
@@ -106,8 +128,8 @@ echo ""
 echo "--- Building boot image ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR"
-make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX"
+make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
+make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS
 cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot.bin"
 
 # --- ramtest variant (btcode CFLAGS change -> clean btcode too) ---
@@ -115,8 +137,8 @@ echo ""
 echo "--- Building ramtest variant ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" RAMTEST_TRACE=1
-make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" RAMTEST_TRACE=1
+make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
+make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS RAMTEST_TRACE=1
 
 # --- Summary ----------------------------------------------------------------
 
