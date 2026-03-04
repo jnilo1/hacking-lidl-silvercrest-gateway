@@ -198,6 +198,15 @@ fi
 # =========================================
 echo ""
 echo "[4/5] Compiling bootloader..."
+
+# Set STUDIO_ADAPTER_PACK_PATH for post-build if commander is available
+if command -v commander >/dev/null 2>&1; then
+    COMMANDER_DIR=$(dirname $(which commander))
+    export STUDIO_ADAPTER_PACK_PATH="${COMMANDER_DIR}"
+    export POST_BUILD_EXE="${COMMANDER_DIR}/commander"
+    echo "  Using commander for post-build: ${COMMANDER_DIR}"
+fi
+
 make -f bootloader-uart-xmodem.Makefile -j$(nproc)
 
 # =========================================

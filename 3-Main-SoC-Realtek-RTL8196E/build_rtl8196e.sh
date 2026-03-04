@@ -178,6 +178,7 @@ echo "Generated images:"
 [ $BUILD_ROOTFS -eq 1 ] && ls -lh "${SCRIPT_DIR}/33-Rootfs/rootfs.bin" 2>/dev/null || true
 [ $BUILD_USERDATA -eq 1 ] && ls -lh "${SCRIPT_DIR}/34-Userdata/userdata.bin" 2>/dev/null || true
 [ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel.img" 2>/dev/null || true
+cd "$PROJECT_ROOT"
 echo ""
 echo "To flash: ./flash_rtl8196e.sh"
 echo ""

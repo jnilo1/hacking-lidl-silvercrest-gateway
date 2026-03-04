@@ -6,6 +6,19 @@ This section covers the **Zigbee coprocessor** embedded in the gateway: a Silabs
 
 The EFR32MG1B handles all Zigbee radio communication. The stock firmware uses the Tuya protocol, but it can be replaced with open-source alternatives to work with **Zigbee2MQTT**, **ZHA**, or **Matter/Thread**.
 
+## Build All Firmware
+
+```bash
+# Using Docker (from 1-Build-Environment/)
+docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
+    /workspace/2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
+
+# Or native
+./build_efr32.sh              # Build all 5 firmware variants
+./build_efr32.sh ncp rcp      # Build specific targets
+./build_efr32.sh --help       # Show available targets
+```
+
 ## Contents
 
 | Directory | Description |
