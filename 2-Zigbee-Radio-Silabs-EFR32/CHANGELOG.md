@@ -4,15 +4,22 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
-## [1.2.1] - 2026-03-03
+## [1.2.1] - 2026-03-05
 
 ### 26-OT-RCP
 - Docker Compose stack for Thread/Matter: OTBR + Matter Server + Home Assistant
 - Docker Compose stack for Zigbee: Zigbee2MQTT with zigbee-on-host (`zoh`) adapter
-- Tested Matter commissioning via chip-tool over BLE (IKEA TIMMERFLOTTE sensor)
-- Documented chip-tool workflow: Thread dataset, BLE pairing, attestation bypass
+- Matter commissioning via HA Companion App (replaces chip-tool)
+- Documented full setup: IPv6 forwarding, OTBR integration, Thread credentials sync
+- Thread/Matter primer for Zigbee users (`THREAD-MATTER-PRIMER.md`)
+- Tested: IKEA TIMMERFLOTTE (22.8 °C, 54.69 %, battery 100 %)
 - Removed erroneous 460800 baud memo (actual root cause: PCB signal integrity)
-- README updated with dual-mode architecture diagrams and quick start
+
+### Build environment
+- Unified build scripts: `build_rtl8196e.sh` (bootloader + kernel + rootfs + userdata), `build_efr32.sh` (all 5 firmware)
+- Fixed Docker builds: GLIBC mismatch, lzma conflict, tool path detection
+- All 9 build scripts work both in Docker and natively
+- `nano` and `serialgateway` binaries now committed to skeleton for fresh clones
 
 ---
 
@@ -41,6 +48,13 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ## [1.1.0] - 2026-01-25
 
+### Build environment
+- Updated Silabs toolchain: slc-cli 5.11, GSDK 4.5.0
+- Silabs tools installed in project directory (like x-tools)
+
+### 23-Bootloader-UART-Xmodem
+- Aligned with Simplicity Studio standard project structure
+
 ### 25-RCP-UART-HW (new)
 - Pre-built RCP firmware (CPC Protocol v5, GSDK 4.5.0)
 - `rcp-stack` systemd service manager for cpcd + zigbeed chain
@@ -57,16 +71,6 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 - Zigbee 3.0 Router SoC firmware with auto-join and network steering
 - Mini-CLI: `bootloader reboot`, `network status/leave/steer`, `version`, `info`, `help`
 - ZCL Basic Cluster: LidlRouter model, Silvercrest manufacturer, SW Build ID 1.0.0
-
-### 23-Bootloader-UART-Xmodem
-- Aligned with Simplicity Studio standard project structure
-
-### Build environment
-- Updated Silabs toolchain: slc-cli 5.11, GSDK 4.5.0
-- Silabs tools installed in project directory (like x-tools)
-
-### Community contributions
-- PR #55 (stream2me): static-linked serialgateway binary
 
 ---
 
