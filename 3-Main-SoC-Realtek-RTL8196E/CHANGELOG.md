@@ -1,8 +1,49 @@
-# Changelog — RTL8196E Platform (Lidl Silvercrest Zigbee Gateway)
+# Changelog — RTL8196E Platform (Lidl Silvercrest Gateway)
 
 All notable changes to the RTL8196E firmware distribution are documented here.
 A version covers the complete set of components: bootloader (31-), kernel (32-),
 rootfs (33-), and userdata (34-).
+
+---
+
+## [2.0.0] - 2026-03-06
+
+### Thread Border Router — OTBR on-device
+- OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
+- otbr-agent 0.3.0 (Thread 1.4) cross-compiled for MIPS Lexra, static binary (4.3 MB)
+- ot-ctl CLI for Thread network management (57 KB)
+- REST API on port 8081 — compatible with Home Assistant OTBR integration
+- mDNS/DNS-SD (OpenThread built-in), SRP Advertising Proxy, Border Routing
+- Tested: IKEA TIMMERFLOTTE commissioned via HA Companion App, 20 MB RAM free
+
+### Unified Zigbee/Thread distribution
+- Single kernel, rootfs, and userdata image for both Zigbee and Thread modes
+- `flash_userdata.sh`: new "Radio mode" prompt selects Zigbee or Thread at flash time
+- `/userdata/etc/radio.conf` (MODE=otbr) gates init scripts at boot
+- S60serialgateway: skips when radio mode is OTBR
+- S70otbr: starts only when radio mode is OTBR
+
+### 32-Kernel
+- IPv6 stack integrated into base config (+135 KB kernel, zero overhead when unused)
+- CONFIG_FILE_LOCKING=y (required by otbr-agent daemon lock)
+- CONFIG_TUN=y (required for wpan0 Thread interface)
+- CONFIG_IEEE802154=y (802.15.4 radio subsystem)
+- Kernel size: 1.0 MB -> 1.1 MB
+
+### 33-Rootfs
+- BusyBox: IPv6 support (ping6, traceroute6, ip route)
+- Migrated all scripts from ifconfig/route to ip commands
+- Removed ifconfig, route, microcom applets (replaced by ip, no longer needed)
+
+### 34-Userdata
+- otbr-agent and ot-ctl binaries in /userdata/usr/local/bin/
+- S70otbr init script: IPv6 forwarding, UART 115200, REST on :8081
+- Build script: `ot-br-posix/build_otbr.sh` for cross-compilation
+
+### Build fixes (ot-br-posix)
+- `-Wno-error=maybe-uninitialized` for GCC 8.5 false positive
+- Socket path redirected to /tmp (rootfs is read-only, no /run)
+- `--vendor-name` / `--model-name` required by latest ot-br-posix
 
 ---
 

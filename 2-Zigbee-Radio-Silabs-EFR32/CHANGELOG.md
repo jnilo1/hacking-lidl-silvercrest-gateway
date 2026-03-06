@@ -4,6 +4,12 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.0.0] - 2026-03-06
+
+No change (see RTL8196E CHANGELOG for v2.0.0 details).
+
+---
+
 ## [1.2.1] - 2026-03-05
 
 ### 26-OT-RCP
