@@ -199,6 +199,85 @@ On restart, `otbr-agent` automatically re-attaches to the saved network (`--auto
 
 Note: reflashing userdata erases the Thread dataset — devices will need to be re-commissioned.
 
+## Home Assistant Integration
+
+### Prerequisites
+
+- Home Assistant running on your network (standalone install, Docker, HAOS, etc.)
+- **Home Assistant Companion App** installed on your Android phone
+- The gateway reachable from both HA and your phone
+
+### 1. Add the OTBR integration
+
+In Home Assistant: **Settings → Devices & Services → Add Integration → OpenThread Border Router**
+
+Enter the URL: `http://<GATEWAY_IP>:8081` (replace with your gateway's IP address).
+
+### 2. Set the Thread network as preferred
+
+Go to **Settings → Devices & Services → Thread → Configure**. Your network
+(named "OpenThread-XXXX" by default) should appear. Click on it and select
+**"Use as preferred network"**.
+
+This tells Home Assistant to use this Thread network when commissioning Matter devices.
+
+### 3. Sync Thread credentials on the Companion App
+
+The Companion App needs the Thread credentials to commission devices via BLE.
+Without this step, commissioning fails with *"Your device requires a Thread border router"*.
+
+In the Companion App:
+**Settings → Companion App → Troubleshooting → Sync Thread credentials**
+
+### 4. Commission a Matter device
+
+You need the device's **Matter setup code** — either a QR code or an 11-digit
+manual pairing code, printed on the device or its packaging.
+
+In the Companion App:
+**Settings → Devices & Services → Add Device → Add Matter device**
+
+Scan the QR code (or enter the manual code). The app will:
+1. Connect to the device via **BLE** (your phone's Bluetooth)
+2. Transfer the Thread network credentials
+3. The device joins the Thread mesh via OTBR
+4. The device appears in Home Assistant with its entities
+
+### 5. Verify
+
+Check from the gateway:
+
+```bash
+# Connected Thread devices
+ot-ctl child table
+
+# OTBR state (should be "leader")
+ot-ctl state
+
+# REST API
+curl -s http://localhost:8081/node
+```
+
+The commissioned device appears in **Settings → Devices & Services → Matter**
+with its sensors and controls.
+
+### Commissioning tips
+
+- **BLE timeout**: Matter devices only advertise via BLE for 15-30 minutes after
+  factory reset. If the Companion App can't find the device, factory reset it first.
+- **Factory reset between attempts**: if commissioning fails, always factory reset
+  the device before retrying.
+- **Stay close**: BLE has limited range — keep your phone near the device during
+  commissioning.
+- **"Checking connectivity" hangs**: verify that IPv6 forwarding is enabled on the
+  gateway (`cat /proc/sys/net/ipv6/conf/all/forwarding` should return `1`).
+
+### Tested devices
+
+| Device | Type | Commissioning | Result |
+|--------|------|---------------|--------|
+| IKEA TIMMERFLOTTE | Temperature/humidity sensor | HA Companion App (BLE) | Temperature, humidity, battery OK |
+
 ## Directory Structure
 
 ```
