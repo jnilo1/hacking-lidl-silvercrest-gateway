@@ -102,6 +102,42 @@ The mode is controlled by `/userdata/etc/radio.conf`. When set to Thread mode, `
 
 See `ot-br-posix/README.md` for Thread-specific documentation.
 
+### Switching Radio Mode
+
+To switch between modes on a running gateway:
+
+**Thread → Zigbee:**
+```bash
+# 1. Stop otbr-agent
+/userdata/etc/init.d/S70otbr stop
+
+# 2. Remove radio.conf (reverts to Zigbee mode)
+rm /userdata/etc/radio.conf
+
+# 3. Reflash EFR32 with NCP firmware (from your workstation)
+./flash_efr32.sh <GATEWAY_IP>
+# Select [2] NCP-UART-HW
+
+# 4. Gateway reboots — serialgateway starts automatically
+```
+
+**Zigbee → Thread:**
+```bash
+# 1. Stop serialgateway
+/userdata/etc/init.d/S60serialgateway stop
+
+# 2. Set radio mode to Thread
+echo "MODE=otbr" > /userdata/etc/radio.conf
+
+# 3. Reflash EFR32 with OT-RCP firmware (from your workstation)
+./flash_efr32.sh <GATEWAY_IP>
+# Select [3] RCP-UART-HW
+
+# 4. Gateway reboots — otbr-agent starts automatically
+```
+
+Alternatively, reflash userdata with `flash_userdata.sh` or `flash_rtl8196e.sh` which prompt for the radio mode.
+
 ## SSH Passwordless Access
 
 The `/userdata/ssh/authorized_keys` file allows SSH access without a password. Add your public key to this file:
