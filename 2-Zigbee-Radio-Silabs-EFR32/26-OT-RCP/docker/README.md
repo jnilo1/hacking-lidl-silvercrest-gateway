@@ -1,5 +1,10 @@
 # Docker Stacks for OT-RCP Firmware
 
+> **Note:** Since v2.0.0, OTBR can run **natively on the gateway** without Docker
+> or an external host. See [`3-Main-SoC.../34-Userdata/ot-br-posix/`](../../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/).
+> The Docker stacks below remain useful for running OTBR on a more powerful host
+> or for the Zigbee (zoh) stack.
+
 Two Docker Compose stacks for the Lidl Silvercrest Gateway running OT-RCP
 firmware. Choose based on your use case:
 

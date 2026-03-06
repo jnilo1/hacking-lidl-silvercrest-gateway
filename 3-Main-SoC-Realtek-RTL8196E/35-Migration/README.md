@@ -91,7 +91,7 @@ The script:
 - **Cannot enter bootloader** — verify serial 38400 8N1, press ESC on power-on
 - **TFTP transfer fails** — check firewall (UDP 69), verify same subnet, no other TFTP server
 - **"Flash Write Successed!" doesn't appear** — wait longer (userdata takes 1-2 min)
-- **SSH refused after reboot** — wait 30s, check IP on serial console (`ifconfig`)
+- **SSH refused after reboot** — wait 30s, check IP on serial console (`ip addr`)
 
 ### EFR32 (OTA flash)
 

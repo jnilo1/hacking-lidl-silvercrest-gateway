@@ -4,9 +4,9 @@
 # Requires:
 #   - Kernel with IPv6 + CONFIG_FILE_LOCKING
 #   - EFR32 flashed with OT-RCP firmware
-#   - otbr-agent binary in /userdata/usr/local/bin/
+#   - otbr-agent binary in /userdata/usr/bin/
 
-OTBR_BIN="/userdata/usr/local/bin/otbr-agent"
+OTBR_BIN="/userdata/usr/bin/otbr-agent"
 
 # UART settings — must match EFR32 OT-RCP firmware
 RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=115200"

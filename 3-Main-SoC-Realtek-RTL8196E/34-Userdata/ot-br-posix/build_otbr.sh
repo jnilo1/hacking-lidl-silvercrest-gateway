@@ -152,6 +152,7 @@ cmake "$SOURCE_DIR" \
     -DOTBR_DNS_UPSTREAM_QUERY=OFF \
     -DOTBR_BORDER_AGENT=ON \
     -DOT_POSIX_RCP_HDLC_BUS=ON \
+    -DOT_FIREWALL=OFF \
     -DOT_POSIX_SETTINGS_PATH=\"/userdata/thread\" \
     "$@"
 
@@ -186,6 +187,6 @@ echo "    - DNS-SD Discovery Proxy"
 echo "    - Border Routing"
 echo ""
 echo "To install on gateway:"
-echo "  cat build/src/agent/otbr-agent | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/local/bin/otbr-agent && chmod +x /userdata/usr/local/bin/otbr-agent'"
-echo "  cat build/third_party/openthread/repo/src/posix/ot-ctl | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/local/bin/ot-ctl && chmod +x /userdata/usr/local/bin/ot-ctl'"
+echo "  cat build/src/agent/otbr-agent | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/bin/otbr-agent && chmod +x /userdata/usr/bin/otbr-agent'"
+echo "  cat build/third_party/openthread/repo/src/posix/ot-ctl | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/bin/ot-ctl && chmod +x /userdata/usr/bin/ot-ctl'"
 echo ""

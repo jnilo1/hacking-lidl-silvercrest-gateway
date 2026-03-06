@@ -29,7 +29,8 @@ Execute init scripts:
   S15hostname    → Set hostname, /etc/hosts
   S20time        → Sync time via NTP
   S30dropbear    → Start SSH server
-  S60serialgateway → Start Zigbee bridge
+  S60serialgateway → Start Zigbee bridge (if radio mode = zigbee)
+  S70otbr        → Start Thread border router (if radio mode = otbr)
   S90checkpasswd → Warn if default password
 ```
 
@@ -46,6 +47,7 @@ Execute init scripts:
 │   ├── TZ              # Timezone
 │   ├── ntp.conf        # NTP server configuration
 │   ├── eth0.bak        # Static IP template (for reference)
+│   ├── radio.conf      # Radio mode: MODE=otbr for Thread (absent = Zigbee)
 │   ├── dropbear/       # Dropbear SSH host keys (generated on first boot)
 │   └── init.d/         # Init scripts (executed by rootfs bootstrap)
 │       ├── S05syslog
@@ -54,19 +56,21 @@ Execute init scripts:
 │       ├── S20time
 │       ├── S30dropbear
 │       ├── S60serialgateway
+│       ├── S70otbr
 │       └── S90checkpasswd
 ├── ssh/
 │   └── authorized_keys # SSH public keys for passwordless access
+├── thread/             # Thread network credentials (created by otbr-agent)
 └── usr/
-    ├── bin/            # User applications (nano, serialgateway, boothold)
+    ├── bin/            # User applications (nano, serialgateway, otbr-agent, ot-ctl, boothold)
     └── share/
         └── terminfo/   # Terminal definitions (linux, vt100, vt102, xterm)
 ```
 
 ## Network Configuration
 
-`flash_userdata.sh` asks for network configuration at flash time — static IP or DHCP.
-The chosen IP is baked into `userdata.bin` before flashing.
+`flash_userdata.sh` asks for network configuration and radio mode at flash time.
+The settings are baked into `userdata.bin` before flashing.
 
 To change the IP after flashing, edit `/userdata/etc/eth0.conf` on the running gateway:
 
@@ -84,6 +88,19 @@ GATEWAY=192.168.1.1
 Then restart the network: `/userdata/etc/init.d/S10network restart`
 
 `/userdata/etc/eth0.bak` is provided as a reference template.
+
+## Radio Mode
+
+The gateway supports two radio modes, selected at flash time:
+
+| Mode | Config | Init script | EFR32 firmware | Use case |
+|------|--------|-------------|----------------|----------|
+| **Zigbee** (default) | no `radio.conf` | `S60serialgateway` | NCP or RCP+zigbeed | Zigbee2MQTT, ZHA |
+| **Thread** | `MODE=otbr` | `S70otbr` | OT-RCP | Matter, Home Assistant Thread |
+
+The mode is controlled by `/userdata/etc/radio.conf`. When set to Thread mode, `S60serialgateway` is skipped and `S70otbr` starts `otbr-agent` instead.
+
+See `ot-br-posix/README.md` for Thread-specific documentation.
 
 ## SSH Passwordless Access
 
@@ -106,6 +123,7 @@ Dropbear is configured to read this file, enabling secure key-based authenticati
 | `skeleton/` | Base structure for the user partition |
 | `nano/` | GNU nano text editor build |
 | `serialgateway/` | Zigbee serial gateway build |
+| `ot-br-posix/` | OpenThread Border Router build |
 | `build_userdata.sh` | Script to assemble and package the partition |
 
 ## Building
@@ -116,6 +134,9 @@ cd nano && ./build_nano.sh && cd ..
 
 # Build serialgateway
 cd serialgateway && ./build_serialgateway.sh && cd ..
+
+# Build otbr-agent (optional, for Thread mode)
+cd ot-br-posix && ./build_otbr.sh && cd ..
 
 # Assemble and package userdata
 ./build_userdata.sh

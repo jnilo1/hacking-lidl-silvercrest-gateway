@@ -1,8 +1,13 @@
-# RCP 802.15.4 Firmware with cpcd + zigbeed
+# RCP 802.15.4 Firmware
 
 Radio Co-Processor (RCP) firmware for the EFR32MG1B232F256GM48 chip found in the Lidl Silvercrest Smart Home Gateway.
 
-This firmware transforms the gateway's Zigbee chip into a **Radio Co-Processor** that runs the Zigbee stack on an external Linux host (your PC, Raspberry Pi, or server) instead of the limited RTL8196E.
+This firmware transforms the gateway's Zigbee chip into a **Radio Co-Processor** that handles only the 802.15.4 PHY/MAC layer. The protocol stack runs on the host side, enabling two usage modes:
+
+| Mode | Stack | Host | Details |
+|------|-------|------|---------|
+| **Zigbee (cpcd + zigbeed)** | EmberZNet | External PC/RPi via serialgateway | See [Host Software Setup](#host-software-setup) |
+| **Thread (OTBR)** | OpenThread | Natively on the RTL8196E gateway | See [`3-Main-SoC.../34-Userdata/ot-br-posix/`](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/) |
 
 ## About RCP Architecture
 

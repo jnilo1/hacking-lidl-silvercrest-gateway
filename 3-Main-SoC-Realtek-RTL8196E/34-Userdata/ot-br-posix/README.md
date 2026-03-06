@@ -2,124 +2,135 @@
 
 Cross-compilation of [ot-br-posix](https://github.com/openthread/ot-br-posix) for Realtek RTL8196E (Lexra MIPS) with musl libc.
 
-## Disclaimer
+## Status
 
-**This project is experimental.**
+Tested on the Lidl Silvercrest Zigbee gateway (RTL8196E + EFR32MG21) with
+an IKEA TIMMERFLOTTE Thread sensor commissioned via Home Assistant Companion App.
 
-- This build has **not been tested on actual hardware** by the author (who does not own Matter/Thread devices)
-- The RTL8196E has **limited resources** (32 MB RAM, 180 MHz CPU) which may prove insufficient for a full Thread Border Router workload
-- The `otbr-agent` binary alone is 3.2 MB and the OpenThread stack is memory-intensive
-- This is provided as a proof-of-concept for cross-compilation; real-world performance is unknown
+The gateway runs as Thread Border Router leader with ~20 MB free RAM (out of 32 MB).
 
 ## Prerequisites
 
-Before deploying `ot-br-posix`, the following system components must be updated:
+### 1. EFR32 with OT-RCP firmware
 
-### 1. Kernel with IPv6 Support
+The Silabs EFR32 radio must be flashed with the OpenThread RCP firmware
+(see `../../2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/`).
 
-The stock kernel does not include IPv6. You must rebuild the kernel with the IPv6 configuration.
+### 2. Kernel with IPv6 and IEEE 802.15.4
 
-See [`../32-Kernel/README-IPV6.md`](../32-Kernel/README-IPV6.md) for:
-- Required kernel options (IPv6, TUN, Netfilter, IEEE 802.15.4)
-- Recommended options for full functionality (ip6tables, ipset)
-- Size impact analysis
+The stock kernel does not include IPv6. You must rebuild with the unified config
+`../32-Kernel/config-5.10.246-realtek.txt` which includes:
 
-Use the provided config: `../32-Kernel/config-5.10.246-realtek-ipv6.txt`
+```
+CONFIG_IPV6=y                    # IPv6 networking stack
+CONFIG_IPV6_ROUTER_PREF=y        # Router preference
+CONFIG_IPV6_MULTIPLE_TABLES=y    # Multiple routing tables
+CONFIG_TUN=y                     # TUN/TAP device (for wpan0)
+CONFIG_IEEE802154=y              # IEEE 802.15.4 support
+CONFIG_FILE_LOCKING=y            # Required by otbr-agent settings
+```
 
-### 2. Busybox with IPv6 Support
+Note: Netfilter is **not** required — the RTL8196E ethernet driver is incompatible
+with it, and `otbr-agent` is built with `OT_FIREWALL=OFF`.
 
-The busybox build in `33-Rootfs` must be recompiled with IPv6 enabled:
+### 3. BusyBox with IPv6 and `ip` command
+
+The BusyBox build must include:
 
 ```
 CONFIG_FEATURE_IPV6=y           # Core IPv6 support
-CONFIG_FEATURE_IFUPDOWN_IPV6=y  # ifup/ifdown IPv6 support
 CONFIG_PING6=y                  # ping6 command
-CONFIG_TRACEROUTE6=y            # traceroute6 command (optional)
+CONFIG_IP=y                     # ip command
+CONFIG_IPADDR=y                 # ip addr
+CONFIG_IPLINK=y                 # ip link
+CONFIG_IPROUTE=y                # ip route
+CONFIG_IPNEIGH=y                # ip neigh
 ```
-
-Without these options, basic IPv6 tools (`ping6`, `ip -6`, etc.) will not work.
 
 ## Architecture
 
-The gateway has a single external interface (Ethernet) and communicates with Thread devices via the Silabs RCP radio chip.
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Local Network (WiFi/Ethernet)            │
-│         Matter Controllers (Google Home, Apple Home...)     │
-└─────────────────────────────┬───────────────────────────────┘
-                              │ IPv4/IPv6
-                              │
-┌─────────────────────────────┴───────────────────────────────┐
-│                      RTL8196E Gateway                       │
-│  ┌──────────┐                              ┌──────────────┐ │
-│  │   eth0   │◄─────── IPv6 routing ───────►│    wpan0     │ │
-│  │ Ethernet │                              │  (TUN/TAP)   │ │
-│  └──────────┘                              └──────┬───────┘ │
-│       │                                          │          │
-│       │            ┌──────────────┐              │          │
-│       └───────────►│  otbr-agent  │◄─────────────┘          │
-│                    │  - Border Agent                        │
-│                    │  - mDNS/DNS-SD                         │
-│                    │  - IPv6 Router                         │
-│                    └───────┬──────┘                         │
-│                            │ Spinel/HDLC (UART)             │
-│                    ┌───────┴──────┐                         │
-│                    │  Silabs RCP  │                         │
-│                    │  (EFR32)     │                         │
-│                    └───────┬──────┘                         │
-└────────────────────────────┼────────────────────────────────┘
-                             │ 802.15.4 radio
-                             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                   Thread Network (mesh)                     │
-│    ┌─────────┐    ┌─────────┐    ┌─────────┐               │
-│    │ Matter  │    │ Matter  │    │ Matter  │               │
-│    │ Device  │    │ Device  │    │ Device  │               │
-│    └─────────┘    └─────────┘    └─────────┘               │
-└─────────────────────────────────────────────────────────────┘
+                      Local Network (WiFi/Ethernet)
+              Matter Controllers (Google Home, Apple Home...)
+                              |
+                              | IPv4/IPv6
+                              |
+    +---------------------------------------------------------+
+    |                    RTL8196E Gateway                      |
+    |                                                         |
+    |  +----------+                          +-----------+    |
+    |  |   eth0   |<----- IPv6 routing ----->|   wpan0   |    |
+    |  | Ethernet |                          | (TUN/TAP) |    |
+    |  +----------+                          +-----+-----+    |
+    |       |                                      |          |
+    |       |            +--------------+          |          |
+    |       +----------->|  otbr-agent  |<---------+          |
+    |                    |  - Border Agent                    |
+    |                    |  - mDNS/DNS-SD                     |
+    |                    |  - REST API (:8081)                |
+    |                    |  - IPv6 Router                     |
+    |                    +-------+------+                     |
+    |                            | Spinel/HDLC (UART)         |
+    |                    +-------+------+                     |
+    |                    |  Silabs RCP  |                     |
+    |                    |  (EFR32)     |                     |
+    |                    +-------+------+                     |
+    +---------------------------------------------------------+
+                                 | 802.15.4 radio
+                                 v
+    +---------------------------------------------------------+
+    |                   Thread Network (mesh)                  |
+    |    +---------+    +---------+    +---------+            |
+    |    | Matter  |    | Matter  |    | Matter  |            |
+    |    | Device  |    | Device  |    | Device  |            |
+    |    +---------+    +---------+    +---------+            |
+    +---------------------------------------------------------+
 ```
 
-### Network Interfaces
+## Features
 
-| Interface | Type | Role |
-|-----------|------|------|
-| `eth0` | Physical | Connection to local network (backbone) |
-| `wpan0` | Virtual (TUN) | Represents the Thread network |
+### Enabled
 
-### Communication Flow
+| Feature | CMake Option | Description |
+|---------|--------------|-------------|
+| Border Agent | `OTBR_BORDER_AGENT=ON` | Thread commissioning (Matter/HomeKit compatible) |
+| mDNS/DNS-SD | `OTBR_MDNS=openthread` | Built-in implementation (no Avahi needed) |
+| SRP Advertising Proxy | (auto) | Service Registration Protocol proxy |
+| DNS-SD Discovery Proxy | (auto) | DNS-based service discovery |
+| Border Routing | `OTBR_BORDER_ROUTING=ON` | IPv6 routing between Thread and infrastructure |
+| REST API | `OTBR_REST=ON` | HTTP API on port 8081 (used by Home Assistant) |
+| Commissioner | `OT_COMMISSIONER=ON` | Required by REST API |
 
-1. **Thread devices → Local network**: IPv6 packets from Thread devices arrive via 802.15.4 radio → Silabs RCP → otbr-agent → wpan0 → eth0
-2. **Matter commissioning**: Controllers discover the Border Router via mDNS (`_meshcop._udp`) on eth0, then communicate with Thread devices through the Border Agent
-3. **Services on eth0**: mDNS (port 5353), Border Agent, DNS-SD Discovery Proxy
-
-## Build Status
-
-Successfully cross-compiled with Border Agent and mDNS support. Produces statically linked binaries:
-- `otbr-agent` (~3.2 MB stripped)
-- `ot-ctl` (~57 KB stripped)
-
-## Features Enabled
-
-| Feature | Description |
-|---------|-------------|
-| **Border Agent** | Thread commissioning (Matter/HomeKit compatible) |
-| **mDNS/DNS-SD** | OpenThread built-in implementation (no external deps) |
-| **SRP Advertising Proxy** | Service Registration Protocol proxy |
-| **DNS-SD Discovery Proxy** | DNS-based service discovery |
-| **Border Routing** | IPv6 routing between Thread and infrastructure |
-
-## Features Disabled
+### Disabled
 
 | Feature | CMake Option | Reason |
 |---------|--------------|--------|
+| Firewall | `OT_FIREWALL=OFF` | No netfilter/ipset on RTL8196E |
 | D-Bus | `OTBR_DBUS=OFF` | No D-Bus on embedded target |
-| Web UI | `OTBR_WEB=OFF` | Reduces complexity |
-| REST API | `OTBR_REST=OFF` | Reduces complexity |
-| Backbone Router | `OTBR_BACKBONE_ROUTER=OFF` | Advanced feature |
+| Web UI | `OTBR_WEB=OFF` | Reduces binary size |
+| Backbone Router | `OTBR_BACKBONE_ROUTER=OFF` | Advanced feature, not needed |
 | TREL | `OTBR_TREL=OFF` | Thread Radio Encapsulation Link |
 | NAT64 | `OTBR_NAT64=OFF` | Requires TAYGA |
 | DNS Upstream | `OTBR_DNS_UPSTREAM_QUERY=OFF` | Advanced feature |
+
+## Build Notes
+
+### Socket path override
+
+The rootfs is read-only (squashfs) with no `/run` directory. The build overrides
+the default socket path via compiler flag:
+
+```
+-DOPENTHREAD_POSIX_CONFIG_DAEMON_SOCKET_BASENAME='"/tmp/openthread-%s"'
+```
+
+This places the Unix socket and lock file in `/tmp/` instead of `/run/`.
+
+### Circular library dependencies
+
+Static linking requires `--start-group`/`--end-group` to resolve circular
+dependencies between `openthread-ftd` and `openthread-posix`. The CMake
+toolchain file overrides the link command to handle this automatically.
 
 ## Building
 
@@ -127,102 +138,44 @@ Successfully cross-compiled with Border Agent and mDNS support. Produces statica
 ./build_otbr.sh
 ```
 
-The build script:
-1. Clones ot-br-posix repository with submodules
-2. Generates a CMake toolchain file with link command override for circular dependencies
-3. Configures CMake with cross-compilation toolchain
-4. Compiles and links all components
-5. Strips binaries
+Produces statically linked binaries:
+- `otbr-agent` (~4.3 MB stripped)
+- `ot-ctl` (~57 KB stripped)
 
 ## Installing
 
-Copy the binaries directly to the gateway via SSH:
+The binaries are included in the userdata skeleton at `skeleton/usr/bin/`.
+They are deployed automatically when building and flashing userdata.
+
+For manual installation via SSH:
 
 ```bash
 # Replace GATEWAY_IP with your gateway's IP address
-cat build/src/agent/otbr-agent | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/local/bin/otbr-agent && chmod +x /userdata/usr/local/bin/otbr-agent'
-cat build/third_party/openthread/repo/src/posix/ot-ctl | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/local/bin/ot-ctl && chmod +x /userdata/usr/local/bin/ot-ctl'
+cat build/src/agent/otbr-agent | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/bin/otbr-agent && chmod +x /userdata/usr/bin/otbr-agent'
+cat build/third_party/openthread/repo/src/posix/ot-ctl | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/bin/ot-ctl && chmod +x /userdata/usr/bin/ot-ctl'
 ```
 
-## Build Issues & Solutions
+## Radio Mode Selection
 
-### 1. Submodule Cloning
+The gateway supports both Zigbee and Thread via `/userdata/etc/radio.conf`:
 
-**Problem:** Using `--depth 1` with recursive submodules fails because submodules reference specific commits that may not be in a shallow clone.
+- **Zigbee** (default): no `radio.conf` file, `S60serialgateway` starts
+- **Thread**: `radio.conf` contains `MODE=otbr`, `S70otbr` starts, `S60serialgateway` is skipped
 
-**Solution:** Clone without depth limit for submodules:
-```bash
-git submodule update --init --recursive  # No --depth 1
-```
-
-### 2. Deprecated CMake Option
-
-**Problem:** `OT_POSIX_CONFIG_RCP_BUS=UART` is deprecated.
-
-**Solution:** Use the new option:
-```cmake
--DOT_POSIX_RCP_HDLC_BUS=ON
-```
-
-### 3. mDNS Implementation
-
-**Problem:** External mDNS (Avahi/mDNSResponder) adds dependencies.
-
-**Solution:** Use OpenThread's built-in mDNS implementation:
-```cmake
--DOTBR_MDNS=openthread
-```
-
-This enables mDNS/DNS-SD without any external dependencies. The following features are automatically enabled:
-- `OT_MDNS=ON`
-- `OT_DNSSD_SERVER=ON`
-- `OT_DNSSD_DISCOVERY_PROXY=ON`
-- `OT_SRP_ADV_PROXY=ON`
-
-### 4. Circular Library Dependencies
-
-**Problem:** Static linking fails with undefined references to `otPlatAlarmMilli*` due to circular dependencies between static libraries (e.g., `openthread-ftd` ↔ `openthread-posix`).
-
-**Solution:** Override CMake's link command template in the toolchain file to automatically use `--start-group`/`--end-group`:
-```cmake
-set(CMAKE_CXX_LINK_EXECUTABLE
-    "<CMAKE_CXX_COMPILER> <FLAGS> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group")
-```
-
-This tells CMake to wrap all libraries in `--start-group`/`--end-group` when linking executables, allowing the linker to resolve circular references automatically.
-
-## Kernel Requirements
-
-The Linux kernel must have the following options enabled:
-
-```
-CONFIG_IPV6=y                    # IPv6 networking stack
-CONFIG_IPV6_ROUTER_PREF=y        # Router preference
-CONFIG_IPV6_MULTIPLE_TABLES=y    # Multiple routing tables
-CONFIG_TUN=y                     # TUN/TAP device (for wpan0)
-CONFIG_NETFILTER=y               # Netfilter framework
-CONFIG_NF_CONNTRACK=y            # Connection tracking
-CONFIG_NF_CONNTRACK_IPV6=y       # IPv6 connection tracking
-CONFIG_IEEE802154=y              # IEEE 802.15.4 support
-```
-
-A pre-configured kernel config with IPv6 support is available at:
-`../32-Kernel/config-5.10.246-realtek-ipv6.txt`
-
-See `../32-Kernel/README-IPV6.md` for details on kernel options.
+The mode is selected at flash time via `flash_userdata.sh`.
 
 ## Usage
 
 ### Running otbr-agent
 
-```bash
-# With UART-connected RCP (e.g., Silicon Labs EFR32)
-otbr-agent -I wpan0 -B eth0 spinel+hdlc+uart:///dev/ttyUSB0?uart-baudrate=460800
+The init script `S70otbr` starts otbr-agent automatically at boot (when in Thread mode):
 
-# Options:
-#   -I wpan0     Thread network interface name
-#   -B eth0      Backbone/infrastructure interface
-#   spinel+hdlc+uart://...  RCP connection URL
+```bash
+# UART-connected RCP on /dev/ttyS1 at 115200 baud
+otbr-agent -I wpan0 -B eth0 \
+    --rest-listen-address ::0 --rest-listen-port 8081 \
+    --vendor-name "Lidl" --model-name "Silvercrest" \
+    spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=115200
 ```
 
 ### Using ot-ctl
@@ -232,16 +185,21 @@ otbr-agent -I wpan0 -B eth0 spinel+hdlc+uart:///dev/ttyUSB0?uart-baudrate=460800
 ot-ctl
 
 # Example commands:
-> state
-> dataset active
-> ipaddr
-> srp server
-> mdns state
+> state           # leader, router, child, disabled...
+> dataset active  # Active Thread dataset
+> ipaddr          # IPv6 addresses
+> child table     # Connected Thread devices
+> srp server      # SRP server status
 ```
 
-## Directory Structure
+### Thread dataset persistence
 
-After running `build_otbr.sh`:
+Thread network credentials are stored in `/userdata/thread/` and survive reboots.
+On restart, `otbr-agent` automatically re-attaches to the saved network (`--auto-attach=1` default).
+
+Note: reflashing userdata erases the Thread dataset — devices will need to be re-commissioned.
+
+## Directory Structure
 
 ```
 ot-br-posix/
