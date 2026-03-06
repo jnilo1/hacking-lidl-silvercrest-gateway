@@ -175,13 +175,13 @@ if [ ! -f .config ]; then
         sed \
             -e 's/^CONFIG_RTL819X=y$/# CONFIG_RTL819X is not set/' \
             -e '/^# CONFIG_RTL819X is not set$/a CONFIG_RTL8196E_ETH=y' \
-            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
+            "${SCRIPT_DIR}/config-5.10.246-realtek-ipv6.txt" > .config
         echo "CONFIG_KERNEL_LZMA=y" >> .config
     else
         # Legacy: ensure RTL8196E_ETH is not set
         sed \
             -e 's/^CONFIG_RTL8196E_ETH=y$/# CONFIG_RTL8196E_ETH is not set/' \
-            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
+            "${SCRIPT_DIR}/config-5.10.246-realtek-ipv6.txt" > .config
         echo "CONFIG_KERNEL_LZMA=y" >> .config
     fi
     make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig

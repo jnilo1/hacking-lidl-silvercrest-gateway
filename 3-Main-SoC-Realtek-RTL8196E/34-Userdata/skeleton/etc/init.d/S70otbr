@@ -1,0 +1,65 @@
+#!/bin/sh
+# S70otbr — Start OpenThread Border Router agent
+#
+# Requires:
+#   - Kernel with IPv6 + CONFIG_FILE_LOCKING
+#   - EFR32 flashed with OT-RCP firmware
+#   - otbr-agent binary in /userdata/usr/local/bin/
+
+OTBR_BIN="/userdata/usr/local/bin/otbr-agent"
+
+# UART settings — must match EFR32 OT-RCP firmware
+RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=115200"
+
+# Network interfaces
+THREAD_IF="wpan0"
+BACKBONE_IF="eth0"
+
+# REST API — listen on all interfaces so HA can reach it
+REST_LISTEN="::0"
+REST_PORT="8081"
+
+case "$1" in
+start)
+    [ -x "$OTBR_BIN" ] || exit 0
+
+    echo "Starting otbr-agent..."
+
+    # Stop serialgateway if running (it holds /dev/ttyS1)
+    killall serialgateway 2>/dev/null
+
+    # Create settings directory (persistent across reboots)
+    mkdir -p /userdata/thread
+
+    # Enable IPv6 forwarding (required for border routing)
+    echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+
+    $OTBR_BIN \
+        -I "$THREAD_IF" \
+        -B "$BACKBONE_IF" \
+        --rest-listen-address "$REST_LISTEN" \
+        --rest-listen-port "$REST_PORT" \
+        --vendor-name "Lidl" \
+        --model-name "Silvercrest" \
+        -v \
+        "$RCP_URL" &
+    ;;
+
+stop)
+    echo "Stopping otbr-agent..."
+    killall otbr-agent 2>/dev/null
+    ;;
+
+restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+
+*)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0

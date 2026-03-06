@@ -70,8 +70,8 @@ export RANLIB="${CROSS_COMPILE}ranlib"
 export STRIP="${CROSS_COMPILE}strip"
 
 # Common flags for cross-compilation
-export CFLAGS="-Os -fno-stack-protector"
-export CXXFLAGS="-Os -fno-stack-protector"
+export CFLAGS="-Os -fno-stack-protector -Wno-error=maybe-uninitialized -DOPENTHREAD_POSIX_CONFIG_DAEMON_SOCKET_BASENAME='\"/tmp/openthread-%s\"'"
+export CXXFLAGS="-Os -fno-stack-protector -Wno-error=maybe-uninitialized -DOPENTHREAD_POSIX_CONFIG_DAEMON_SOCKET_BASENAME='\"/tmp/openthread-%s\"'"
 export LDFLAGS="-static -Wl,-z,noexecstack,-z,relro,-z,now"
 
 echo "==> Toolchain: ${TOOLCHAIN_DIR}"
@@ -101,8 +101,8 @@ set(CMAKE_RANLIB "${TOOLCHAIN_DIR}/bin/mips-lexra-linux-musl-ranlib")
 set(CMAKE_STRIP "${TOOLCHAIN_DIR}/bin/mips-lexra-linux-musl-strip")
 
 # Compiler flags
-set(CMAKE_C_FLAGS_INIT "-Os -fno-stack-protector")
-set(CMAKE_CXX_FLAGS_INIT "-Os -fno-stack-protector")
+set(CMAKE_C_FLAGS_INIT "-Os -fno-stack-protector -Wno-error=maybe-uninitialized -DOPENTHREAD_POSIX_CONFIG_DAEMON_SOCKET_BASENAME='\"/tmp/openthread-%s\"'")
+set(CMAKE_CXX_FLAGS_INIT "-Os -fno-stack-protector -Wno-error=maybe-uninitialized -DOPENTHREAD_POSIX_CONFIG_DAEMON_SOCKET_BASENAME='\"/tmp/openthread-%s\"'")
 set(CMAKE_EXE_LINKER_FLAGS_INIT "-static -Wl,-z,noexecstack,-z,relro,-z,now")
 
 # Override link command to handle circular dependencies between static libraries
@@ -143,7 +143,7 @@ cmake "$SOURCE_DIR" \
     -DBUILD_TESTING=OFF \
     -DOTBR_DBUS=OFF \
     -DOTBR_WEB=OFF \
-    -DOTBR_REST=OFF \
+    -DOTBR_REST=ON \
     -DOTBR_MDNS=openthread \
     -DOTBR_BACKBONE_ROUTER=OFF \
     -DOTBR_BORDER_ROUTING=ON \
@@ -152,6 +152,7 @@ cmake "$SOURCE_DIR" \
     -DOTBR_DNS_UPSTREAM_QUERY=OFF \
     -DOTBR_BORDER_AGENT=ON \
     -DOT_POSIX_RCP_HDLC_BUS=ON \
+    -DOT_POSIX_SETTINGS_PATH=\"/userdata/thread\" \
     "$@"
 
 echo ""
