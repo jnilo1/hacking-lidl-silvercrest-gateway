@@ -23,7 +23,8 @@ ip addr add 127.0.0.1/8 dev lo
 # Convert dotted netmask (255.255.255.0) to CIDR prefix length (24)
 mask2cidr() {
     local n=0 oct
-    for oct in $(echo "$1" | tr '.' ' '); do
+    local IFS='.'
+    for oct in $1; do
         while [ "$oct" -gt 0 ]; do
             n=$((n + (oct & 1)))
             oct=$((oct >> 1))
