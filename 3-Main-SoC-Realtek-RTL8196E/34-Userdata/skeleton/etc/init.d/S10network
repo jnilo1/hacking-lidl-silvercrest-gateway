@@ -17,38 +17,53 @@
 # J. Nilo - Nov 2025
 #
 
-ifconfig lo 127.0.0.1
+ip link set lo up
+ip addr add 127.0.0.1/8 dev lo
+
+# Convert dotted netmask (255.255.255.0) to CIDR prefix length (24)
+mask2cidr() {
+    local n=0 oct
+    for oct in $(echo "$1" | tr '.' ' '); do
+        while [ "$oct" -gt 0 ]; do
+            n=$((n + (oct & 1)))
+            oct=$((oct >> 1))
+        done
+    done
+    echo "$n"
+}
 
 case "$1" in
 start)
-    echo "🌐 Starting network setup"
+    echo "Starting network setup"
 
     # Reuse persisted MAC if available, else generate a stable local MAC (02:...)
     MACFILE="/userdata/etc/mac_address"
 
     if [ -f "$MACFILE" ]; then
         formatted_mac=$(cat "$MACFILE")
-        echo "🔁 Using persisted MAC address: $formatted_mac"
+        echo "Using persisted MAC address: $formatted_mac"
     else
         # Generate a locally administered MAC (U/L bit = 1, multicast bit = 0)
         octets=$(hexdump -n5 -e '/1 ":%02X"' /dev/urandom)
         formatted_mac="02${octets}"
         echo "$formatted_mac" >"$MACFILE"
-        echo "✨ Generated and saved new MAC address: $formatted_mac"
+        echo "Generated and saved new MAC address: $formatted_mac"
     fi
 
-    ifconfig eth0 hw ether "$formatted_mac"
+    ip link set eth0 address "$formatted_mac"
 
     # Bring up eth0 and configure IP
     if [ -f /userdata/etc/eth0.conf ]; then
-        echo "🌐 Loading static IP configuration from /userdata/etc/eth0.conf"
+        echo "Loading static IP configuration from /userdata/etc/eth0.conf"
         . /userdata/etc/eth0.conf
-        ifconfig eth0 "$IPADDR" netmask "$NETMASK" up
-        route add default gw "$GATEWAY"
+        CIDR=$(mask2cidr "$NETMASK")
+        ip addr add "$IPADDR/$CIDR" dev eth0
+        ip link set eth0 up
+        ip route add default via "$GATEWAY"
         echo "$IPADDR" >/var/run/current_eth0_ip
     else
-        echo "🌐 No static IP configuration found, starting DHCP client on eth0"
-        ifconfig eth0 up
+        echo "No static IP configuration found, starting DHCP client on eth0"
+        ip link set eth0 up
         sleep 1
         HOSTNAME=$(cat /etc/hostname)
         # 3 attempts (default) with a 3 sec interval (-T 3)
@@ -57,7 +72,7 @@ start)
     fi
     ;;
 stop)
-    echo "🔴 Stopping network"
+    echo "Stopping network"
 
     if [ -f /var/run/udhcpc0.pid ]; then
         kill "$(cat /var/run/udhcpc0.pid)"
@@ -66,10 +81,10 @@ stop)
         killall udhcpc
     fi
 
-    ifconfig eth0 down
+    ip link set eth0 down
     ;;
 restart)
-    echo "🔄 Restarting network"
+    echo "Restarting network"
     $0 stop
     $0 start
     ;;

@@ -16,24 +16,23 @@
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
 case "$1" in
 deconfig)
-    ifconfig "$interface" 0.0.0.0
-    echo "🌐 Interface $interface deconfigured, waiting for DHCP..."
+    ip addr flush dev "$interface"
+    echo "Interface $interface deconfigured, waiting for DHCP..."
     ;;
 renew | bound)
-    ifconfig "$interface" "$ip" broadcast "$broadcast" netmask "$subnet"
-    echo "🌐 IP assigned to $interface: $ip"
+    ip addr flush dev "$interface"
+    ip addr add "$ip/$mask" broadcast "$broadcast" dev "$interface"
+    echo "IP assigned to $interface: $ip"
     echo "$ip" >/var/run/current_eth0_ip
     if [ -n "$router" ]; then
-        echo "🔍 Checking existing default routes"
-        if route -n | grep -q "^0.0.0.0"; then
-            echo "🗑️  Removing existing default routes"
-            while route -n | grep -q "^0.0.0.0"; do
-                route del default 2>/dev/null
-            done
+        echo "Checking existing default routes"
+        if ip route show default | grep -q .; then
+            echo "Removing existing default routes"
+            ip route del default 2>/dev/null
         fi
         for i in $router; do
-            echo "🛣️  Adding default route via $i"
-            route add default gw "$i" dev "$interface"
+            echo "Adding default route via $i"
+            ip route add default via "$i" dev "$interface"
         done
     fi
     realconf=/var/resolv.conf
@@ -42,29 +41,30 @@ renew | bound)
     > "$tmpfile"
     [ -n "$domain" ] && echo "search $domain" >> "$tmpfile"
     for i in $dns ; do
-        echo "🔗 Adding DNS server $i"
+        echo "Adding DNS server $i"
         echo "nameserver $i" >> "$tmpfile"
     done
     # Add fallback DNS if DHCP provided none
     if [ ! -s "$tmpfile" ] || ! grep -q "^nameserver" "$tmpfile"; then
-        echo "⚠️  No DNS servers from DHCP, using fallback 8.8.8.8"
+        echo "No DNS servers from DHCP, using fallback 8.8.8.8"
         echo "nameserver 8.8.8.8" >> "$tmpfile"
     fi
     mv "$tmpfile" "$realconf"
     ;;
 leasefail)
     # Backup configuration in case of DHCP failure
-    echo "⚠️  DHCP failed after 3 attempts, falling back to IP 192.168.1.254"
-    ifconfig "$interface" 192.168.1.254
+    echo "DHCP failed after 3 attempts, falling back to IP 192.168.1.254"
+    ip addr flush dev "$interface"
+    ip addr add 192.168.1.254/24 dev "$interface"
     echo "192.168.1.254" >/var/run/current_eth0_ip
 
-    if ! route -n | grep -q "^0.0.0.0"; then
-        echo "🛣️  Adding fallback default route via 192.168.1.1"
-        route add -net default gw 192.168.1.1 dev "$interface"
+    if ! ip route show default | grep -q .; then
+        echo "Adding fallback default route via 192.168.1.1"
+        ip route add default via 192.168.1.1 dev "$interface"
     fi
 
     # Set fallback DNS servers
-    echo "🔗 Setting fallback DNS servers"
+    echo "Setting fallback DNS servers"
     cat >/var/resolv.conf <<EOF
 nameserver 8.8.8.8
 nameserver 1.1.1.1
