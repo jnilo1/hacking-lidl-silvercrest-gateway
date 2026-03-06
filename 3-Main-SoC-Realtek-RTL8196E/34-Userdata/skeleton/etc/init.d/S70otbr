@@ -23,10 +23,12 @@ case "$1" in
 start)
     [ -x "$OTBR_BIN" ] || exit 0
 
-    echo "Starting otbr-agent..."
+    # Only start if radio mode is set to "otbr" in /userdata/etc/radio.conf
+    if ! [ -f /userdata/etc/radio.conf ] || ! grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
+        exit 0
+    fi
 
-    # Stop serialgateway if running (it holds /dev/ttyS1)
-    killall serialgateway 2>/dev/null
+    echo "Starting otbr-agent..."
 
     # Create settings directory (persistent across reboots)
     mkdir -p /userdata/thread

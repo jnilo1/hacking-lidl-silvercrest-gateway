@@ -24,9 +24,10 @@ PORT="${PORT:-69}"
 SLEEP_BETWEEN="${SLEEP_BETWEEN:-0.2}"
 
 ETH0_CONF="${SCRIPT_DIR}/skeleton/etc/eth0.conf"
+RADIO_CONF="${SCRIPT_DIR}/skeleton/etc/radio.conf"
 
-# Remove eth0.conf on exit (success or failure) to keep skeleton clean
-cleanup() { rm -f "$ETH0_CONF"; }
+# Remove generated config files on exit (success or failure) to keep skeleton clean
+cleanup() { rm -f "$ETH0_CONF" "$RADIO_CONF"; }
 trap cleanup EXIT
 
 # --- Network configuration -------------------------------------------------
@@ -49,6 +50,23 @@ if [ "$net_choice" = "1" ]; then
 else
     rm -f "$ETH0_CONF"
     echo "→ DHCP"
+fi
+echo ""
+
+# --- Radio mode configuration ----------------------------------------------
+
+echo "Radio mode (EFR32 firmware must match):"
+echo "  [1] Zigbee — serialgateway on port 8888 (NCP or RCP+zigbeed)"
+echo "  [2] Thread — OTBR border router, REST API on port 8081 (OT-RCP)"
+read -r -p "Choice [1]: " radio_choice
+radio_choice="${radio_choice:-1}"
+
+if [ "$radio_choice" = "2" ]; then
+    echo "MODE=otbr" > "$RADIO_CONF"
+    echo "→ Thread Border Router (otbr-agent)"
+else
+    rm -f "$RADIO_CONF"
+    echo "→ Zigbee (serialgateway)"
 fi
 echo ""
 

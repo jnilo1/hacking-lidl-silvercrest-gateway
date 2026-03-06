@@ -2,14 +2,21 @@
 #
 # S60serialgateway — Init script to launch serialgateway
 #
+# Skipped when radio mode is set to "otbr" in /userdata/etc/radio.conf
 #
 # J. Nilo - Nov 2025
 #
 
 case "$1" in
 start)
+    # Skip if radio is configured for OTBR (serialgateway and otbr-agent
+    # cannot share /dev/ttyS1)
+    if [ -f /userdata/etc/radio.conf ] && grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
+        echo "Skipping serialgateway (radio mode: otbr)"
+        exit 0
+    fi
 
-    echo "🚀 Starting serialgateway..."
+    echo "Starting serialgateway..."
     serialgateway
     ;;
 
