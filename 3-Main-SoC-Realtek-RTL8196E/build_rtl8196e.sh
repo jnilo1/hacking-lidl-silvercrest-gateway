@@ -66,7 +66,7 @@ else
                 echo "  bootloader Build bootloader"
                 echo "  kernel     Build Linux kernel"
                 echo "  rootfs     Build root filesystem (BusyBox, Dropbear)"
-                echo "  userdata   Build user partition (nano, serialgateway)"
+                echo "  userdata   Build user partition (nano, serialgateway, otbr-agent)"
                 echo ""
                 echo "Examples:"
                 echo "  $0                     # Build all"
