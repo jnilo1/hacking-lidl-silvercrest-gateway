@@ -61,8 +61,6 @@ fi
 # --- Network configuration -------------------------------------------------
 
 ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
-cleanup() { rm -f "$ETH0_CONF"; }
-trap cleanup EXIT
 
 echo "Network configuration for the gateway:"
 echo "  [1] Static IP (recommended)"
@@ -82,6 +80,25 @@ if [ "$net_choice" = "1" ]; then
 else
     rm -f "$ETH0_CONF"
     echo "→ DHCP"
+fi
+# --- Radio mode ---------------------------------------------------------------
+
+RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
+cleanup() { rm -f "$ETH0_CONF" "$RADIO_CONF"; }
+trap cleanup EXIT
+
+echo "Radio mode (EFR32 firmware must match):"
+echo "  [1] Zigbee — serialgateway on port 8888 (NCP or RCP+zigbeed)"
+echo "  [2] Thread — OTBR border router, REST API on port 8081 (OT-RCP)"
+read -r -p "Choice [1]: " radio_choice
+radio_choice="${radio_choice:-1}"
+
+if [ "$radio_choice" = "2" ]; then
+    echo "MODE=otbr" > "$RADIO_CONF"
+    echo "→ Thread (OTBR)"
+else
+    rm -f "$RADIO_CONF"
+    echo "→ Zigbee"
 fi
 echo ""
 
