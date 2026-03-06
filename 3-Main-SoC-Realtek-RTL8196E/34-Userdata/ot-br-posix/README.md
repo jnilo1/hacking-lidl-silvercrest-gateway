@@ -209,11 +209,24 @@ Note: reflashing userdata erases the Thread dataset — devices will need to be 
 
 ### 1. Add the OTBR integration
 
-In Home Assistant: **Settings → Devices & Services → Add Integration → OpenThread Border Router**
+In Home Assistant: **Settings → Devices & Services → Add Integration**
 
-Enter the URL: `http://<GATEWAY_IP>:8081` (replace with your gateway's IP address).
+Search for **"Open Thread Border Router"** and add it. Enter the URL:
+`http://<GATEWAY_IP>:8081` (replace with your gateway's IP address).
 
-### 2. Set the Thread network as preferred
+> Note: HA may auto-discover a **"Thread"** integration via mDNS — this is
+> **not** the same thing. You need the **OTBR** integration which connects
+> to the REST API and gives full control over the Thread network.
+
+### 2. Add the Matter integration
+
+In Home Assistant: **Settings → Devices & Services → Add Integration**
+
+Search for **"Matter (BETA)"** and add it. This is required to commission
+Matter devices. It should auto-detect the Matter Server if running, otherwise
+enter `ws://localhost:5580/ws`.
+
+### 3. Set the Thread network as preferred
 
 Go to **Settings → Devices & Services → Thread → Configure**. Your network
 (named "OpenThread-XXXX" by default) should appear. Click on it and select
@@ -221,7 +234,7 @@ Go to **Settings → Devices & Services → Thread → Configure**. Your network
 
 This tells Home Assistant to use this Thread network when commissioning Matter devices.
 
-### 3. Sync Thread credentials on the Companion App
+### 4. Sync Thread credentials on the Companion App
 
 The Companion App needs the Thread credentials to commission devices via BLE.
 Without this step, commissioning fails with *"Your device requires a Thread border router"*.
@@ -229,7 +242,7 @@ Without this step, commissioning fails with *"Your device requires a Thread bord
 In the Companion App:
 **Settings → Companion App → Troubleshooting → Sync Thread credentials**
 
-### 4. Commission a Matter device
+### 5. Commission a Matter device
 
 You need the device's **Matter setup code** — either a QR code or an 11-digit
 manual pairing code, printed on the device or its packaging.
@@ -243,7 +256,7 @@ Scan the QR code (or enter the manual code). The app will:
 3. The device joins the Thread mesh via OTBR
 4. The device appears in Home Assistant with its entities
 
-### 5. Verify
+### 6. Verify
 
 Check from the gateway:
 
