@@ -41,7 +41,6 @@ start)
         --rest-listen-port "$REST_PORT" \
         --vendor-name "Lidl" \
         --model-name "Silvercrest" \
-        -v \
         "$RCP_URL" &
     ;;
 
