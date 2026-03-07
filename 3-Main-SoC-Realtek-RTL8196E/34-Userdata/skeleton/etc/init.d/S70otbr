@@ -44,6 +44,10 @@ start)
         --vendor-name "Lidl" \
         --model-name "Silvercrest" \
         "$RCP_URL" &
+
+    # Reduce log level from info to warn (0=none 1=crit 2=warn 3=note 4=info)
+    sleep 2
+    /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
     ;;
 
 stop)
