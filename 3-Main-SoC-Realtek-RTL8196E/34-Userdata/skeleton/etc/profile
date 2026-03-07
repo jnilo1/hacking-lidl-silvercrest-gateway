@@ -1,4 +1,8 @@
 export PS1='~ # '
+
+# Timezone (read from /etc/TZ, written by S20time)
+[ -f /etc/TZ ] && export TZ=$(cat /etc/TZ)
+
 # Set this to 0 for silent boot
 INIT_VERBOSE=0
 export INIT_VERBOSE
