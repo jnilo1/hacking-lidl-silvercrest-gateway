@@ -24,6 +24,7 @@
 #include <linux/irq.h>
 #include <linux/irqdomain.h>
 #include <linux/irqchip.h>
+#include <linux/irqchip/chained_irq.h>
 #include <linux/kernel.h>
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
@@ -193,18 +194,18 @@ static struct irq_chip realtek_soc_irq_chip = {
  */
 static void realtek_soc_irq_handler(struct irq_desc *desc)
 {
+    struct irq_chip *chip = irq_desc_get_chip(desc);
     struct irq_domain *domain = irq_desc_get_handler_data(desc);
     u32 mask, status, pending;
+
+    chained_irq_enter(chip, desc);
 
     /* Read interrupt state */
     mask = ic_r32(REALTEK_IC_REG_MASK);
     status = ic_r32(REALTEK_IC_REG_STATUS);
     pending = mask & status;
 
-    if (unlikely(!pending))
-        return;  /* Spurious: no pending bits after masking — normal for level-triggered chained handler */
-
-    /* Process all pending interrupts */
+    /* Spurious: no pending bits after masking — skip loop, still call exit */
     while (pending) {
         int bit = __ffs(pending);
         unsigned int virq = 0;
@@ -243,6 +244,8 @@ static void realtek_soc_irq_handler(struct irq_desc *desc)
 
         pending &= ~BIT(bit);
     }
+
+    chained_irq_exit(chip, desc);
 }
 
 /* ========================================================================== */
@@ -337,15 +340,6 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
     /* Configure interrupt routing */
     realtek_soc_irq_init();
 
-    /* Enable interrupts in GIMR: Timer0, UART0, UART1, Switch */
-    ic_w32(BIT(REALTEK_HW_TC0_BIT) |
-           BIT(REALTEK_HW_UART0_BIT) |
-           BIT(REALTEK_HW_UART1_BIT) |
-           BIT(REALTEK_HW_SW_CORE_BIT),
-           REALTEK_IC_REG_MASK);
-
-    pr_debug("RTL8196E INTC: Enabled interrupts - Timer, UART0, UART1, Switch\n");
-
     /* Create IRQ domain */
     domain = irq_domain_add_legacy(node, REALTEK_INTC_IRQ_COUNT,
                                   REALTEK_INTC_IRQ_BASE, 0,
@@ -363,6 +357,13 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
                                     realtek_soc_irq_handler, domain);
     irq_set_chained_handler_and_data(REALTEK_CPU_IRQ_SWITCH,
                                     realtek_soc_irq_handler, domain);
+
+    /* Enable HW interrupts only after handlers are installed */
+    ic_w32(BIT(REALTEK_HW_TC0_BIT) |
+           BIT(REALTEK_HW_UART0_BIT) |
+           BIT(REALTEK_HW_UART1_BIT) |
+           BIT(REALTEK_HW_SW_CORE_BIT),
+           REALTEK_IC_REG_MASK);
 
     pr_info("RTL8196E INTC: Initialized (Timer:IP7, Switch:IP4, UART1:IP3, UART0:IP2)\n");
 
