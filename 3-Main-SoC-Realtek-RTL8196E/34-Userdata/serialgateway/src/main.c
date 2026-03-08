@@ -61,7 +61,7 @@ int sockatmark(int fd)
 
 static void _set_status_led(bool is_on)
 {
-    int fd = open("/proc/led1", O_WRONLY);
+    int fd = open("/sys/class/leds/status/brightness", O_WRONLY);
     if (fd < 0) {
         return;
     }
