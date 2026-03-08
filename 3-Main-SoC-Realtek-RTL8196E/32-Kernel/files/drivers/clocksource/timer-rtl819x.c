@@ -39,14 +39,14 @@
 /* ========================================================================== */
 
 /* Global pointer to timer register base */
-__iomem void *_timer_membase;
+static void __iomem *rtl819x_timer_base;
 
 /*
  * Helper macros for timer register access with memory barriers
  * Use writel/readl (not __raw_*) for proper MMIO ordering
  */
-#define tc_w32(val, reg) writel(val, _timer_membase + reg)
-#define tc_r32(reg)      readl(_timer_membase + reg)
+#define tc_w32(val, reg) writel(val, rtl819x_timer_base + reg)
+#define tc_r32(reg)      readl(rtl819x_timer_base + reg)
 
 /* Timer Controller Registers */
 #define REALTEK_TC_REG_DATA0		0x00	/* Timer0 data register */
@@ -67,7 +67,7 @@ __iomem void *_timer_membase;
 
 /* Hardware counter resolution and adjustment */
 #define REALTEK_TIMER_RESOLUTION	28
-#define RTLADJ_TICK(x)			(x >> (32 - REALTEK_TIMER_RESOLUTION))
+#define RTLADJ_TICK(x)			((x) >> (32 - REALTEK_TIMER_RESOLUTION))
 
 /* ========================================================================== */
 /* Clocksource Implementation (Timer1) */
@@ -127,7 +127,7 @@ void __init rtl819x_clocksource_init(unsigned long freq)
 
 	/* Register clocksource with kernel */
 	rtl819x_clocksource.rating = 200;
-	rtl819x_clocksource.mask = CLOCKSOURCE_MASK(REALTEK_TIMER_RESOLUTION),
+	rtl819x_clocksource.mask = CLOCKSOURCE_MASK(REALTEK_TIMER_RESOLUTION);
 
 	clocksource_register_hz(&rtl819x_clocksource, freq);
 
@@ -267,8 +267,8 @@ static int __init rtl819x_timer_init(struct device_node *np)
 		panic("Failed to get resource for %s", np->name);
 
 	/* Use ioremap (not deprecated ioremap_nocache) */
-	_timer_membase = ioremap(res.start, resource_size(&res));
-	if (!_timer_membase)
+	rtl819x_timer_base = ioremap(res.start, resource_size(&res));
+	if (!rtl819x_timer_base)
 		panic("Failed to map memory for %s", np->name);
 
 	rtl819x_clockevent.name = np->name;
@@ -281,24 +281,29 @@ static int __init rtl819x_timer_init(struct device_node *np)
 
 	/* Get and validate clock */
 	clk = of_clk_get(np, 0);
-	if (IS_ERR_OR_NULL(clk)) {
-		pr_err("%s: Cannot find reference clock\n", np->name);
+	if (IS_ERR_OR_NULL(clk))
 		panic("Cannot find reference clock for timer!\n");
-	}
-
+	ret = clk_prepare_enable(clk);
+	if (ret)
+		panic("Cannot enable reference clock for timer!\n");
 	timer_rate = clk_get_rate(clk);
-	if (unlikely(timer_rate == 0)) {
-		pr_err("%s: Invalid timer rate (0 Hz)\n", np->name);
+	if (unlikely(timer_rate == 0))
 		panic("Invalid timer rate!\n");
-	}
+	/* Clock stays enabled (timer runs forever), but release the reference */
+	clk_put(clk);
 
-	/* Configure clock divider (safe: timer_rate validated above) */
+	/*
+	 * The timer input clock is the SoC LX bus clock (200 MHz on RTL8196E).
+	 * TODO: obtain this from a "busclk" in DT rather than hardcoding.
+	 * See LOT 3 item 3.5 for the proper DT-based fix.
+	 */
 	div_fac = 200000000 / timer_rate;
 	tc_w32(div_fac << 16, REALTEK_TC_REG_CLOCK_DIV);
 
 	/* Initialize clocksource and clockevent */
 	rtl819x_clocksource_init(timer_rate);
-	clockevents_config_and_register(&rtl819x_clockevent, timer_rate, 0x300, 0x7fffffff);
+	clockevents_config_and_register(&rtl819x_clockevent, timer_rate, 0x300,
+					(1 << REALTEK_TIMER_RESOLUTION) - 1);
 
 	/* Register interrupt handler (using modern request_irq API) */
 	ret = request_irq(rtl819x_clockevent.irq, rtl819x_timer_interrupt,
@@ -316,7 +321,7 @@ static int __init rtl819x_timer_init(struct device_node *np)
 	return 0;
 
 err_iounmap:
-	iounmap(_timer_membase);
+	iounmap(rtl819x_timer_base);
 	return -EINVAL;
 }
 
