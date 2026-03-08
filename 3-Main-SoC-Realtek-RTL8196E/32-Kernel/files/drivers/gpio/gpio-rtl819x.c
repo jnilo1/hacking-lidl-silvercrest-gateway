@@ -137,9 +137,12 @@ static void rtl819x_gpio_free(struct gpio_chip *gc, unsigned int offset)
 static int rtl819x_gpio_get_direction(struct gpio_chip *gc, unsigned int offset)
 {
     struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
+    unsigned long flags;
     u32 val;
 
+    spin_lock_irqsave(&rg->lock, flags);
     val = readl(rg->base + RTL819X_GPIO_REG_DIR);
+    spin_unlock_irqrestore(&rg->lock, flags);
 
     /* DIR bit: 0=input, 1=output (per RTL8196E datasheet) */
     if (val & BIT(offset))
