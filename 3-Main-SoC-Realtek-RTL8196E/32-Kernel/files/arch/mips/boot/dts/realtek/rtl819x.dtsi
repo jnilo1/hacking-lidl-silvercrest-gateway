@@ -26,6 +26,12 @@
 		clock-frequency = <25000000>;
 	};
 
+	busclk: busclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <200000000>;  /* LX bus clock: 200 MHz on RTL8196E */
+	};
+
 	soc {
 		compatible = "simple-bus";
 		#address-cells = <1>;
@@ -38,7 +44,7 @@
 		ranges = <0x00000000 0x18000000 0x04000000>;
 
 		sysc: system-controller@0 {
-			compatible = "realtek,rtl819x-sysc";
+			compatible = "realtek,rtl819x-sysc", "syscon";
 			reg = <0x00000000 0x1000>;
 		};
 
@@ -66,6 +72,7 @@
 			clock-frequency = <200000000>;
 			/* Enable hardware flow control (RTS/CTS) for EFR32 Zigbee */
 			auto-flow-control;
+			realtek,syscon = <&sysc>;
 			status = "disabled";
 		};
 
@@ -83,7 +90,8 @@
 			reg = <0x00003100 0x20>;
 			interrupt-parent = <&cpuintc>;
 			interrupts = <7>;
-			clocks = <&refclk>;
+			clocks = <&refclk>, <&busclk>;
+			clock-names = "refclk", "busclk";
 		};
 
 		gpio0: gpio-controller@3500 {
@@ -91,6 +99,7 @@
 			reg = <0x00003500 0x38>;
 			gpio-controller;
 			#gpio-cells = <2>;
+			realtek,syscon = <&sysc>;
 			status = "disabled";
 		};
 
@@ -99,6 +108,7 @@
 			reg = <0x00001200 0x10>;
 			#address-cells = <1>;
 			#size-cells = <0>;
+			clocks = <&busclk>;
 			status = "disabled";
 		};
 
@@ -107,6 +117,7 @@
 			reg = <0x00010000 0x1000>;
 			interrupt-parent = <&intc>;
 			interrupts = <15>;
+			realtek,syscon = <&sysc>;
 			status = "disabled";
 		};
 	};
