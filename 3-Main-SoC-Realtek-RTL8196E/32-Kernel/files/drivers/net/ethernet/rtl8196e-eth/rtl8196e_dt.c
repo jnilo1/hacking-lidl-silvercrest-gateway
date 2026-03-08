@@ -87,6 +87,22 @@ int rtl8196e_dt_parse(struct device *dev, struct rtl8196e_dt_iface *iface)
 	if (!of_property_read_u32(if_np, "link-poll-ms", &iface->link_poll_ms))
 		iface->link_poll_ms_set = true;
 
+	if (iface->vlan_id == 0 || iface->vlan_id >= 4096) {
+		dev_err(dev, "invalid vlan-id %u (must be 1-4095)\n", iface->vlan_id);
+		of_node_put(if_np);
+		return -EINVAL;
+	}
+	if (iface->member_ports == 0) {
+		dev_err(dev, "member-ports cannot be 0\n");
+		of_node_put(if_np);
+		return -EINVAL;
+	}
+	if (iface->mtu < 576 || iface->mtu > 1500) {
+		dev_err(dev, "invalid mtu %u (must be 576-1500)\n", iface->mtu);
+		of_node_put(if_np);
+		return -EINVAL;
+	}
+
 	of_node_put(if_np);
 	return 0;
 }
