@@ -24,6 +24,16 @@ rootfs (33-), and userdata (34-).
 - S70otbr: starts only when radio mode is OTBR
 
 ### 32-Kernel
+- Syscon/regmap: PIN_MUX_SEL/SEL2 access coordinated via shared regmap (GPIO, UART, Ethernet)
+- Interrupt controller: chained_irq_enter/exit, GIMR enabled after handler install, raw_spinlock on GIMR
+- Ethernet: IRQ_NONE on spurious, tx_dropped accounting, READ_ONCE/WRITE_ONCE on ring indices, napi_enable after HW init
+- Timer: bus clock from DT (busclk fixed-clock), max_delta_ticks capped to 28-bit, clk_prepare_enable
+- SPI: unaligned access safety (get/put_unaligned), devm_clk_get_optional, double-disable prevention
+- UART1: devm_clk_get_optional, dev_warn/err/dbg, PIN_MUX via syscon
+- GPIO: spinlock on get_direction, pinmux via syscon/regmap
+- LED: replaced custom /proc/led1 driver with standard gpio-leds DT binding (/sys/class/leds/status/)
+- DT: syscon on system-controller, busclk fixed-clock, gpio-leds node
+- Kconfig: CONFIG_MFD_SYSCON=y, CONFIG_LEDS_GPIO=y, CONFIG_LEDS_TRIGGERS=y
 - IPv6 stack integrated into base config (+135 KB kernel, zero overhead when unused)
 - CONFIG_FILE_LOCKING=y (required by otbr-agent daemon lock)
 - CONFIG_TUN=y (required for wpan0 Thread interface)
@@ -36,6 +46,7 @@ rootfs (33-), and userdata (34-).
 - Removed ifconfig, route, microcom applets (replaced by ip, no longer needed)
 
 ### 34-Userdata
+- serialgateway: LED control migrated from /proc/led1 to /sys/class/leds/status/brightness
 - otbr-agent and ot-ctl binaries in /userdata/usr/local/bin/
 - S70otbr init script: IPv6 forwarding, UART 115200, REST on :8081
 - Build script: `ot-br-posix/build_otbr.sh` for cross-compilation
