@@ -62,6 +62,7 @@ struct rtl8196e_uart_data {
 	struct clk *clk;
 	void __iomem *flow_ctrl_base;
 	bool supports_afe;
+	struct device *dev;
 };
 
 /**
@@ -77,15 +78,15 @@ static void rtl8196e_uart_enable_flow_control(struct rtl8196e_uart_data *data)
 	u32 reg_val;
 
 	if (!data->flow_ctrl_base) {
-		pr_warn("RTL8196E UART: Flow control register not mapped\n");
+		dev_warn(data->dev, "flow control register not mapped\n");
 		return;
 	}
 
 	reg_val = readl(data->flow_ctrl_base);
 
 	if (reg_val & RTL8196E_UART_FLOW_CTRL_BIT) {
-		pr_debug("RTL8196E UART: HW flow control already enabled (0x%08x)\n",
-			 reg_val);
+		dev_dbg(data->dev, "HW flow control already enabled (0x%08x)\n",
+			reg_val);
 		return;
 	}
 
@@ -96,10 +97,10 @@ static void rtl8196e_uart_enable_flow_control(struct rtl8196e_uart_data *data)
 	/* Read back to verify */
 	reg_val = readl(data->flow_ctrl_base);
 	if (reg_val & RTL8196E_UART_FLOW_CTRL_BIT) {
-		pr_debug("RTL8196E UART: HW flow control enabled (reg=0x%08x)\n",
-			 reg_val);
+		dev_dbg(data->dev, "HW flow control enabled (reg=0x%08x)\n",
+			reg_val);
 	} else {
-		pr_err("RTL8196E UART: Failed to enable HW flow control!\n");
+		dev_err(data->dev, "Failed to enable HW flow control!\n");
 	}
 }
 
@@ -115,15 +116,15 @@ static void rtl8196e_uart_disable_flow_control(struct rtl8196e_uart_data *data)
 	u32 reg_val;
 
 	if (!data->flow_ctrl_base) {
-		pr_warn("RTL8196E UART: Flow control register not mapped\n");
+		dev_warn(data->dev, "flow control register not mapped\n");
 		return;
 	}
 
 	reg_val = readl(data->flow_ctrl_base);
 
 	if (!(reg_val & RTL8196E_UART_FLOW_CTRL_BIT)) {
-		pr_debug("RTL8196E UART: HW flow control already disabled (0x%08x)\n",
-			 reg_val);
+		dev_dbg(data->dev, "HW flow control already disabled (0x%08x)\n",
+			reg_val);
 		return;
 	}
 
@@ -134,10 +135,10 @@ static void rtl8196e_uart_disable_flow_control(struct rtl8196e_uart_data *data)
 	/* Read back to verify */
 	reg_val = readl(data->flow_ctrl_base);
 	if (!(reg_val & RTL8196E_UART_FLOW_CTRL_BIT)) {
-		pr_debug("RTL8196E UART: HW flow control disabled (reg=0x%08x)\n",
-			 reg_val);
+		dev_dbg(data->dev, "HW flow control disabled (reg=0x%08x)\n",
+			reg_val);
 	} else {
-		pr_err("RTL8196E UART: Failed to disable HW flow control!\n");
+		dev_err(data->dev, "Failed to disable HW flow control!\n");
 	}
 }
 
@@ -177,10 +178,10 @@ static void rtl8196e_uart_set_termios(struct uart_port *port,
 
 	/* Synchronize SoC flow-control gate with CRTSCTS */
 	if (crtscts_new) {
-		pr_debug("RTL8196E UART: CRTSCTS enabled, activating HW flow control\n");
+		dev_dbg(data->dev, "CRTSCTS enabled, activating HW flow control\n");
 		rtl8196e_uart_enable_flow_control(data);
 	} else {
-		pr_debug("RTL8196E UART: CRTSCTS disabled, deactivating HW flow control\n");
+		dev_dbg(data->dev, "CRTSCTS disabled, deactivating HW flow control\n");
 		rtl8196e_uart_disable_flow_control(data);
 	}
 }
@@ -203,6 +204,7 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return -ENOMEM;
+	data->dev = &pdev->dev;
 
 	/* Get UART registers */
 	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -241,8 +243,10 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 	}
 
 	/* Optional: Get clock if specified in DT */
-	data->clk = devm_clk_get(&pdev->dev, NULL);
-	if (!IS_ERR(data->clk)) {
+	data->clk = devm_clk_get_optional(&pdev->dev, NULL);
+	if (IS_ERR(data->clk))
+		return PTR_ERR(data->clk);
+	if (data->clk) {
 		ret = clk_prepare_enable(data->clk);
 		if (ret) {
 			dev_err(&pdev->dev, "Failed to enable clock: %d\n", ret);
@@ -251,7 +255,6 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 	}
 
 	/* Initialize uart_8250_port structure */
-	spin_lock_init(&uart.port.lock);
 	uart.port.dev = &pdev->dev;
 	uart.port.type = PORT_16550A;
 	uart.port.iotype = UPIO_MEM;
@@ -325,7 +328,7 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 	return 0;
 
 err_clk_disable:
-	if (!IS_ERR(data->clk))
+	if (data->clk)
 		clk_disable_unprepare(data->clk);
 	return ret;
 }
@@ -342,7 +345,7 @@ static int rtl8196e_uart_remove(struct platform_device *pdev)
 
 	serial8250_unregister_port(data->line);
 
-	if (!IS_ERR(data->clk))
+	if (data->clk)
 		clk_disable_unprepare(data->clk);
 
 	return 0;
