@@ -34,6 +34,8 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/spinlock.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 
 #define RTL819X_GPIO_REG_CNR    0x00    /* Control register */
 #define RTL819X_GPIO_REG_PTYPE  0x04    /* Port type */
@@ -42,9 +44,6 @@
 #define RTL819X_GPIO_REG_ISR    0x10    /* Interrupt status */
 #define RTL819X_GPIO_REG_IMR    0x14    /* Interrupt mask */
 
-/* PIN_MUX_SEL_2 register - physical address for ioremap */
-#define RTL8196E_PIN_MUX_SEL_2  0x18000044
-
 #define RTL819X_GPIO_NUM        32      /* 4 ports x 8 bits */
 
 #define DRIVER_NAME             "gpio-rtl819x"
@@ -52,7 +51,7 @@
 struct rtl819x_gpio {
     struct gpio_chip        gc;
     void __iomem            *base;
-    void __iomem            *pinmux;    /* PIN_MUX_SEL_2 for LED/GPIO mux */
+    struct regmap           *syscon;    /* PIN_MUX_SEL_2 for LED/GPIO mux */
     spinlock_t              lock;
 };
 
@@ -72,10 +71,9 @@ static inline struct rtl819x_gpio *to_rtl819x_gpio(struct gpio_chip *gc)
  */
 static void rtl819x_gpio_configure_pinmux(struct rtl819x_gpio *rg, unsigned int offset)
 {
-    u32 val;
     u32 mask = 0, bits = 0;
 
-    if (!rg->pinmux)
+    if (!rg->syscon)
         return;
 
     switch (offset) {
@@ -103,9 +101,7 @@ static void rtl819x_gpio_configure_pinmux(struct rtl819x_gpio *rg, unsigned int 
         return; /* No pinmux needed for other GPIOs */
     }
 
-    val = readl(rg->pinmux);
-    val = (val & ~mask) | bits;
-    writel(val, rg->pinmux);
+    regmap_update_bits(rg->syscon, 0x44, mask, bits);
 }
 
 static int rtl819x_gpio_request(struct gpio_chip *gc, unsigned int offset)
@@ -239,10 +235,12 @@ static int rtl819x_gpio_probe(struct platform_device *pdev)
     if (IS_ERR(rg->base))
         return PTR_ERR(rg->base);
 
-    /* Map PIN_MUX_SEL_2 for GPIO B2-B6 pinmux configuration */
-    rg->pinmux = devm_ioremap(dev, RTL8196E_PIN_MUX_SEL_2, 4);
-    if (!rg->pinmux)
-        dev_warn(dev, "failed to map PIN_MUX_SEL_2, LED GPIOs may not work\n");
+    /* Get syscon regmap for PIN_MUX_SEL_2 pinmux configuration */
+    rg->syscon = syscon_regmap_lookup_by_phandle(dev->of_node, "realtek,syscon");
+    if (IS_ERR(rg->syscon)) {
+        dev_warn(dev, "no syscon, LED GPIOs may not work\n");
+        rg->syscon = NULL;
+    }
 
     spin_lock_init(&rg->lock);
 
