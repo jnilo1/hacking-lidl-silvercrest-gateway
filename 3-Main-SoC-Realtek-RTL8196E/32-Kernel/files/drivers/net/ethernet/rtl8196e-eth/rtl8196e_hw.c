@@ -713,21 +713,27 @@ void rtl8196e_hw_stop(struct rtl8196e_hw *hw)
 /* Program all six CPURPDCR registers with the RX pkthdr ring base and CPURMDCR0 with mbuf base. */
 void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 {
+	/*
+	 * Callers pass KSEG1 (uncached) pointers from rtl8196e_alloc_uncached().
+	 * Do NOT apply rtl8196e_uncached_addr() again — the OR is idempotent
+	 * but masks a conceptual error about who owns the address conversion.
+	 */
 	(void)hw;
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR0);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR1);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR2);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR3);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR4);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPURPDCR5);
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(mbuf), CPURMDCR0);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR0);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR1);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR2);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR3);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR4);
+	rtl8196e_writel((u32)pkthdr, CPURPDCR5);
+	rtl8196e_writel((u32)mbuf, CPURMDCR0);
 }
 
 /* Program CPUTPDCR0 with the TX pkthdr ring base address. */
 void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 {
+	/* Caller passes a KSEG1 pointer — do not double-convert */
 	(void)hw;
-	rtl8196e_writel((u32)rtl8196e_uncached_addr(pkthdr), CPUTPDCR0);
+	rtl8196e_writel((u32)pkthdr, CPUTPDCR0);
 }
 
 /* Unmask RX done, TX done, link change and descriptor runout interrupts in CPUIIMR. */
