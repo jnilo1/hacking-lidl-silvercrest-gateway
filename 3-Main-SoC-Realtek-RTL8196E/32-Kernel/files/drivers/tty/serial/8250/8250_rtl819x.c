@@ -26,6 +26,8 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/clk.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
 
 #include "8250.h"
 
@@ -42,12 +44,11 @@
 #define RTL8196E_UART_FLOW_CTRL_BIT		BIT(29)
 
 /*
- * PIN_MUX_SEL register (physical 0x18000040).
+ * PIN_MUX_SEL register (offset 0x40 in system controller).
  * Bits 1, 3, 6 must be set for UART1 TXD/RXD signals to reach the
  * physical pins.  Without this, the UART peripheral works internally
  * (THRE fires, DMA runs) but no electrical signal reaches the EFR32.
  */
-#define RTL8196E_PIN_MUX_SEL_PHYS		0x18000040
 #define RTL8196E_PIN_MUX_UART1_BITS		(BIT(1) | BIT(3) | BIT(6))
 
 /**
@@ -222,24 +223,16 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	}
 
-	/* Ensure UART1 pins are muxed to the UART peripheral */
+	/* Ensure UART1 pins are muxed to the UART peripheral via syscon */
 	{
-		void __iomem *pin_mux;
+		struct regmap *syscon;
 
-		pin_mux = devm_ioremap(&pdev->dev,
-				       RTL8196E_PIN_MUX_SEL_PHYS, 4);
-		if (pin_mux) {
-			u32 val = readl(pin_mux);
-
-			if ((val & RTL8196E_PIN_MUX_UART1_BITS) !=
-			    RTL8196E_PIN_MUX_UART1_BITS) {
-				val |= RTL8196E_PIN_MUX_UART1_BITS;
-				writel(val, pin_mux);
-				dev_info(&pdev->dev,
-					 "PIN_MUX_SEL: configured for UART1 (0x%08x)\n",
-					 readl(pin_mux));
-			}
-		}
+		syscon = syscon_regmap_lookup_by_phandle(pdev->dev.of_node,
+							 "realtek,syscon");
+		if (!IS_ERR(syscon))
+			regmap_update_bits(syscon, 0x40,
+					   RTL8196E_PIN_MUX_UART1_BITS,
+					   RTL8196E_PIN_MUX_UART1_BITS);
 	}
 
 	/* Optional: Get clock if specified in DT */
