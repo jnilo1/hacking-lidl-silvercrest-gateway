@@ -191,31 +191,27 @@ static int rtl8196e_open(struct net_device *ndev)
 	int ret;
 	bool link;
 
-	napi_enable(&priv->napi);
-
 	rtl8196e_hw_init(&priv->hw);
 	rtl8196e_hw_set_rx_rings(&priv->hw,
 				   rtl8196e_ring_rx_pkthdr_base(priv->ring),
 				   rtl8196e_ring_rx_mbuf_base(priv->ring));
 	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
 	ret = rtl8196e_hw_init_phy(&priv->hw, priv->phy_port, priv->phy_id);
-	if (ret) {
-		napi_disable(&priv->napi);
+	if (ret)
 		return ret;
-	}
 	ret = rtl8196e_hw_vlan_setup(&priv->hw, priv->vlan_id, 0,
 				     priv->portmask | rtl8196e_cpu_port_mask,
 				     priv->iface.untag_ports);
 	if (ret) {
 		netdev_err(ndev, "VLAN setup failed (%d)\n", ret);
-		goto err_disable_napi;
+		return ret;
 	}
 	ret = rtl8196e_hw_netif_setup(&priv->hw, ndev->dev_addr,
 				      priv->vlan_id, ndev->mtu,
 				      priv->portmask | rtl8196e_cpu_port_mask);
 	if (ret) {
 		netdev_err(ndev, "NETIF setup failed (%d)\n", ret);
-		goto err_disable_napi;
+		return ret;
 	}
 	rtl8196e_hw_l2_setup(&priv->hw);
 	if (rtl8196e_force_trap) {
@@ -246,6 +242,7 @@ static int rtl8196e_open(struct net_device *ndev)
 		}
 	}
 	rtl8196e_hw_start(&priv->hw);
+	napi_enable(&priv->napi);
 	rtl8196e_hw_enable_irqs(&priv->hw);
 
 	netif_start_queue(ndev);
@@ -258,10 +255,6 @@ static int rtl8196e_open(struct net_device *ndev)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
 
 	return 0;
-
-err_disable_napi:
-	napi_disable(&priv->napi);
-	return ret;
 }
 
 /* Bring the interface down: stop queue, disable IRQs, stop HW, cancel timers. */
