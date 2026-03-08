@@ -11,17 +11,6 @@
 #include <linux/string.h>
 #include "rtl8196e_hw.h"
 
-/* Write a 32-bit value to an MMIO-mapped register. */
-static inline void rtl8196e_writel(u32 val, u32 reg)
-{
-	*(volatile u32 *)(reg) = val;
-}
-
-/* Read a 32-bit value from an MMIO-mapped register. */
-static inline u32 rtl8196e_readl(u32 reg)
-{
-	return *(volatile u32 *)(reg);
-}
 
 /* Poll MDCIOSR until the MDC/MDIO bus is idle; return -ETIMEDOUT on failure. */
 static int rtl8196e_mdio_wait_ready(void)
