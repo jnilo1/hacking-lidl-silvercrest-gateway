@@ -292,12 +292,20 @@ static int __init rtl819x_timer_init(struct device_node *np)
 	/* Clock stays enabled (timer runs forever), but release the reference */
 	clk_put(clk);
 
-	/*
-	 * The timer input clock is the SoC LX bus clock (200 MHz on RTL8196E).
-	 * TODO: obtain this from a "busclk" in DT rather than hardcoding.
-	 * See LOT 3 item 3.5 for the proper DT-based fix.
-	 */
-	div_fac = 200000000 / timer_rate;
+	{
+		struct clk *busclk;
+		u32 bus_rate = 200000000;  /* fallback for DTs without busclk */
+
+		busclk = of_clk_get_by_name(np, "busclk");
+		if (!IS_ERR(busclk)) {
+			clk_prepare_enable(busclk);
+			bus_rate = clk_get_rate(busclk);
+			if (!bus_rate)
+				bus_rate = 200000000;
+			clk_put(busclk);
+		}
+		div_fac = bus_rate / timer_rate;
+	}
 	tc_w32(div_fac << 16, REALTEK_TC_REG_CLOCK_DIV);
 
 	/* Initialize clocksource and clockevent */
