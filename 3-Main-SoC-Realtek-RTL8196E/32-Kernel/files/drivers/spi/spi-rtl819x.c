@@ -20,6 +20,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/iopoll.h>
+#include <asm/unaligned.h>
 
 #define DRIVER_NAME "realtek-spi"
 
@@ -109,7 +110,7 @@ static void rtk_set_default_config(struct realtek_spi_data *rsd, u32 div_idx)
 
 static u32 rtk_choose_div_idx(struct realtek_spi_data *rsd, u32 hz)
 {
-	u32 parent = rsd->parent_rate ? rsd->parent_rate : 190000000;
+	u32 parent = rsd->parent_rate ? rsd->parent_rate : 200000000;
 	u32 best_idx =
 		ARRAY_SIZE(realtek_spi_clk_div_table) - 1; /* 16 par défaut */
 	u32 i;
@@ -187,8 +188,8 @@ static int rtk_read(struct realtek_spi_data *rsd, u8 *buf, unsigned len)
 		ret = rtk_wait_ready(rsd);
 		if (ret)
 			return ret;
-		*(u32 *)buf = realtek_spi_resolve_data(
-			rtk_rr(rsd, RTK_SPI_DATA_OFFSET), 4);
+		put_unaligned(realtek_spi_resolve_data(
+			rtk_rr(rsd, RTK_SPI_DATA_OFFSET), 4), (u32 *)buf);
 		buf += 4;
 		len -= 4;
 	}
@@ -227,7 +228,7 @@ static int rtk_write(struct realtek_spi_data *rsd, const u8 *buf, unsigned len)
 	rtk_set_txrx_size(rsd, 4);
 	while (len >= 4) {
 		rtk_wr(rsd, RTK_SPI_DATA_OFFSET,
-		       realtek_spi_make_data(*(const u32 *)buf, 4));
+		       realtek_spi_make_data(get_unaligned((const u32 *)buf), 4));
 		ret = rtk_wait_ready(rsd);
 		if (ret)
 			return ret;
@@ -253,7 +254,7 @@ static int realtek_spi_transfer_one(struct spi_master *master,
 				    struct spi_device *spi,
 				    struct spi_transfer *xfer)
 {
-	struct realtek_spi_data *rsd = spi_master_get_devdata(spi->master);
+	struct realtek_spi_data *rsd = spi_master_get_devdata(master);
 	u32 hz = xfer->speed_hz ? xfer->speed_hz :
 				  (spi->max_speed_hz ? spi->max_speed_hz :
 						       master->max_speed_hz);
@@ -317,8 +318,10 @@ static int realtek_spi_probe(struct platform_device *pdev)
 		return PTR_ERR(rsd->base);
 
 	/* Horloge (optionnelle) */
-	rsd->clk = devm_clk_get(&pdev->dev, NULL);
-	if (!IS_ERR(rsd->clk)) {
+	rsd->clk = devm_clk_get_optional(&pdev->dev, NULL);
+	if (IS_ERR(rsd->clk))
+		return PTR_ERR(rsd->clk);
+	if (rsd->clk) {
 		ret = clk_prepare_enable(rsd->clk);
 		if (ret)
 			return ret;
@@ -328,7 +331,7 @@ static int realtek_spi_probe(struct platform_device *pdev)
 		of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 				     &rate);
 	if (!rate)
-		rate = 190000000; /* fallback */
+		rate = 200000000; /* fallback: LX bus clock on RTL8196E */
 	rsd->parent_rate = rate;
 
 	master->max_speed_hz = rate / 2; /* div=2 */
@@ -341,8 +344,10 @@ static int realtek_spi_probe(struct platform_device *pdev)
 
 	ret = devm_spi_register_master(&pdev->dev, master);
 	if (ret) {
-		if (!IS_ERR(rsd->clk))
+		if (rsd->clk) {
 			clk_disable_unprepare(rsd->clk);
+			rsd->clk = NULL;
+		}
 		return ret;
 	}
 
@@ -359,8 +364,10 @@ static int realtek_spi_remove(struct platform_device *pdev)
 			rsd, ARRAY_SIZE(realtek_spi_clk_div_table) - 1);
 		rtk_wr(rsd, RTK_SPI_CONTROL_STATUS_OFFSET,
 		       RTK_SPI_CS_ALL_HIGH | RTK_SPI_READY);
-		if (!IS_ERR(rsd->clk))
+		if (rsd->clk) {
 			clk_disable_unprepare(rsd->clk);
+			rsd->clk = NULL;
+		}
 	}
 	return 0;
 }
@@ -375,8 +382,10 @@ static void realtek_spi_shutdown(struct platform_device *pdev)
 			rsd, ARRAY_SIZE(realtek_spi_clk_div_table) - 1);
 		rtk_wr(rsd, RTK_SPI_CONTROL_STATUS_OFFSET,
 		       RTK_SPI_CS_ALL_HIGH | RTK_SPI_READY);
-		if (!IS_ERR(rsd->clk))
+		if (rsd->clk) {
 			clk_disable_unprepare(rsd->clk);
+			rsd->clk = NULL;
+		}
 	}
 }
 
