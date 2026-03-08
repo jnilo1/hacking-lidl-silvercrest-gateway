@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * RTL8196E Status LED Driver
  * 
@@ -111,7 +112,7 @@ static int __init rtl8196e_led_init(void)
     }
 
     /* Create /proc/led1 entry */
-    proc_entry = proc_create(PROC_NAME, 0666, NULL, &led_proc_ops);
+    proc_entry = proc_create(PROC_NAME, 0644, NULL, &led_proc_ops);
     if (!proc_entry) {
         pr_err("%s: cannot create /proc/%s\n", DRIVER_NAME, PROC_NAME);
         gpio_free(LED_GPIO);
