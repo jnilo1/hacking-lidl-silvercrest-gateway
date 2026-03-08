@@ -131,9 +131,9 @@ static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 	rx_entry = rtl8196e_ring_rx_pkthdr_entry(ring, rx_idx);
 	rx_mbuf_entry = rtl8196e_ring_rx_mbuf_entry(ring, rx_idx);
 
-	isr = *(volatile u32 *)CPUIISR;
-	imr = *(volatile u32 *)CPUIIMR;
-	icr = *(volatile u32 *)CPUICR;
+	isr = rtl8196e_readl(CPUIISR);
+	imr = rtl8196e_readl(CPUIIMR);
+	icr = rtl8196e_readl(CPUICR);
 
 	if (entry)
 		ph = (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
@@ -145,14 +145,14 @@ static void rtl8196e_dbg_timer_fn(struct timer_list *t)
 		    icr, imr, isr);
 	netdev_info(priv->ndev,
 		    "dbg: CPUTPDCR0=0x%08x CPURPDCR0=0x%08x CPURMDCR0=0x%08x\n",
-		    *(volatile u32 *)CPUTPDCR0,
-		    *(volatile u32 *)CPURPDCR0,
-		    *(volatile u32 *)CPURMDCR0);
+		    rtl8196e_readl(CPUTPDCR0),
+		    rtl8196e_readl(CPURPDCR0),
+		    rtl8196e_readl(CPURMDCR0));
 	netdev_info(priv->ndev,
 		    "dbg: CPUQDM0=0x%08x CPUQDM2=0x%08x CPUQDM4=0x%08x\n",
-		    *(volatile u32 *)CPUQDM0,
-		    *(volatile u32 *)CPUQDM2,
-		    *(volatile u32 *)CPUQDM4);
+		    rtl8196e_readl(CPUQDM0),
+		    rtl8196e_readl(CPUQDM2),
+		    rtl8196e_readl(CPUQDM4));
 
 	if (ph) {
 		netdev_info(priv->ndev,
@@ -290,12 +290,14 @@ static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *n
 
 	if (unlikely(!priv->ring || !priv->portmask)) {
 		dev_kfree_skb_any(skb);
+		ndev->stats.tx_dropped++;
 		return NETDEV_TX_OK;
 	}
 
 	if (unlikely(skb_is_nonlinear(skb))) {
 		if (skb_linearize(skb)) {
 			dev_kfree_skb_any(skb);
+			ndev->stats.tx_dropped++;
 			return NETDEV_TX_OK;
 		}
 	}
@@ -395,7 +397,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {
-			*(volatile u32 *)CPUIISR = PKTHDR_DESC_RUNOUT_IP_ALL | MBUF_DESC_RUNOUT_IP_ALL;
+			rtl8196e_writel(PKTHDR_DESC_RUNOUT_IP_ALL | MBUF_DESC_RUNOUT_IP_ALL, CPUIISR);
 			rtl8196e_hw_enable_irqs(&priv->hw);
 		}
 	}
@@ -411,13 +413,15 @@ static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 	u32 status;
 	bool link;
 
-	status = *(volatile u32 *)CPUIISR;
+	status = rtl8196e_readl(CPUIISR);
 	if (rtl8196e_debug && priv->dbg_irqs < 3) {
 		netdev_info(ndev, "dbg: ISR status=0x%08x\n", status);
 		priv->dbg_irqs++;
 	}
-	*(volatile u32 *)CPUIISR = status;
-	status &= *(volatile u32 *)CPUIIMR;
+	rtl8196e_writel(status, CPUIISR);
+	status &= rtl8196e_readl(CPUIIMR);
+	if (unlikely(!status))
+		return IRQ_NONE;
 
 	if (unlikely(status & LINK_CHANGE_IP)) {
 		link = rtl8196e_hw_link_up(&priv->hw, priv->phy_port);
