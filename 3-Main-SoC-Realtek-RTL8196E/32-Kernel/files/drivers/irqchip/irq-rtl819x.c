@@ -34,11 +34,11 @@
 /* Hardware Definitions */
 /* ========================================================================== */
 
-static void __iomem *_intc_membase;
+static void __iomem *rtl819x_intc_base;
 static DEFINE_RAW_SPINLOCK(intc_lock);  /* Protects GIMR read-modify-write */
 
-#define ic_w32(val, reg)        __raw_writel(val, _intc_membase + reg)
-#define ic_r32(reg)             __raw_readl(_intc_membase + reg)
+#define ic_w32(val, reg)        writel(val, rtl819x_intc_base + reg)
+#define ic_r32(reg)             readl(rtl819x_intc_base + reg)
 
 /* Interrupt Controller Registers */
 #define REALTEK_IC_REG_MASK         0x00    /* GIMR - Global Interrupt Mask */
@@ -202,14 +202,18 @@ static void realtek_soc_irq_handler(struct irq_desc *desc)
     pending = mask & status;
 
     if (unlikely(!pending))
-        return;
+        return;  /* Spurious: no pending bits after masking — normal for level-triggered chained handler */
 
     /* Process all pending interrupts */
     while (pending) {
         int bit = __ffs(pending);
         unsigned int virq = 0;
 
-        /* Acknowledge interrupt in hardware */
+        /*
+         * Clear pending latch in GISR. For level-triggered sources (e.g. switch),
+         * the bit will be re-asserted by hardware if the source is still active.
+         * The peripheral handler must drain the source to stop re-triggering.
+         */
         ic_w32(BIT(bit), REALTEK_IC_REG_STATUS);
 
         /*
@@ -280,10 +284,18 @@ static int intc_map(struct irq_domain *d, unsigned int irq, irq_hw_number_t hw)
     return 0;
 }
 
+static void intc_unmap(struct irq_domain *d, unsigned int irq)
+{
+    if (irq == switch_virq) switch_virq = 0;
+    else if (irq == uart0_virq) uart0_virq = 0;
+    else if (irq == uart1_virq) uart1_virq = 0;
+}
+
 /* IRQ domain operations */
 static const struct irq_domain_ops irq_domain_ops = {
     .xlate = irq_domain_xlate_onecell,
     .map = intc_map,
+    .unmap = intc_unmap,
 };
 
 /* ========================================================================== */
@@ -313,8 +325,8 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
         return ret;
     }
 
-    _intc_membase = ioremap(res.start, resource_size(&res));
-    if (!_intc_membase) {
+    rtl819x_intc_base = ioremap(res.start, resource_size(&res));
+    if (!rtl819x_intc_base) {
         pr_err("RTL8196E INTC: Failed to map registers at %pa\n", &res.start);
         return -ENOMEM;
     }
@@ -357,7 +369,7 @@ static int __init intc_of_init(struct device_node *node, struct device_node *par
     return 0;
 
 err_iounmap:
-    iounmap(_intc_membase);
+    iounmap(rtl819x_intc_base);
     return ret;
 }
 
