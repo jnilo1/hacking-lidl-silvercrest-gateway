@@ -16,6 +16,7 @@
 #include <linux/timer.h>
 #include <linux/errno.h>
 #include <linux/ethtool.h>
+#include <linux/mfd/syscon.h>
 #include <asm/cacheflush.h>
 #include "rtl8196e_dt.h"
 #include "rtl8196e_hw.h"
@@ -527,6 +528,14 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (priv->phy_port < 0) {
 		ret = -EINVAL;
 		goto err_free;
+	}
+
+	{
+		struct regmap *syscon;
+
+		syscon = syscon_regmap_lookup_by_phandle(pdev->dev.of_node,
+							 "realtek,syscon");
+		priv->hw.syscon = IS_ERR(syscon) ? NULL : syscon;
 	}
 
 	priv->ring = rtl8196e_ring_create(RTL8196E_TX_DESC,

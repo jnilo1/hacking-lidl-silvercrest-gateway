@@ -8,6 +8,7 @@
  */
 #include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/regmap.h>
 #include <linux/string.h>
 #include "rtl8196e_hw.h"
 
@@ -292,10 +293,8 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	u32 clk;
 	int ret;
 
-	(void)hw;
-
 	/*
-	 * Configure pin mux for MII mode (same as legacy SDK driver).
+	 * Configure pin mux for MII mode via syscon regmap.
 	 * Without this, bootloader defaults leave pins muxed to functions
 	 * that drive EFR32 nRST LOW, preventing the Zigbee radio from
 	 * operating.
@@ -303,14 +302,17 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 * Bits [4:3] are the UART1 TXD mux field — set to 01 (UART1)
 	 * rather than clearing to 00, matching the vendor BSP sequence.
 	 */
-	rtl8196e_writel((rtl8196e_readl(PIN_MUX_SEL) &
-			~((3 << 8) | (3 << 10) | (3 << 3) | (1 << 15))) |
-			(1 << 3),
-			PIN_MUX_SEL);
-	rtl8196e_writel(rtl8196e_readl(PIN_MUX_SEL2) &
-			~((3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
-			  (3 << 12) | (7 << 15)),
-			PIN_MUX_SEL2);
+	if (hw->syscon) {
+		/* PIN_MUX_SEL: bits [4:3]=01 (UART1), clear bits 8-10,15 */
+		regmap_update_bits(hw->syscon, 0x40,
+				   (3 << 8) | (3 << 10) | (3 << 3) | (1 << 15),
+				   (1 << 3));
+		/* PIN_MUX_SEL2: clear bits 0-17 */
+		regmap_update_bits(hw->syscon, 0x44,
+				   (3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
+				   (3 << 12) | (7 << 15),
+				   0);
+	}
 
 	/* Ensure switch core clock is active (vendor sequence) */
 	clk = rtl8196e_readl(SYS_CLK_MAG);

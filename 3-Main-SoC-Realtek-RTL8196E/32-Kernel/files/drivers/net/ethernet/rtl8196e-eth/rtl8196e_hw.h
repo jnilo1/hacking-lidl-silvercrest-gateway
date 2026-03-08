@@ -7,10 +7,12 @@
 
 #include <linux/types.h>
 #include <linux/io.h>
+#include <linux/regmap.h>
 #include "rtl8196e_regs.h"
 
 struct rtl8196e_hw {
 	void __iomem *base;
+	struct regmap *syscon;
 };
 
 int rtl8196e_hw_init(struct rtl8196e_hw *hw);
