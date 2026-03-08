@@ -16,6 +16,21 @@ static inline void *rtl8196e_uncached_addr(void *p)
 	return (void *)((unsigned long)p | RTL8196E_UNCACHE_MASK);
 }
 
+/*
+ * MMIO helpers for Ethernet registers accessed via hardcoded KSEG1 addresses.
+ * These remain volatile-based (not readl/writel) because the registers use
+ * hardcoded virtual addresses, not __iomem pointers from ioremap.
+ */
+static inline void rtl8196e_writel(u32 val, u32 reg)
+{
+	*(volatile u32 *)(reg) = val;
+}
+
+static inline u32 rtl8196e_readl(u32 reg)
+{
+	return *(volatile u32 *)(reg);
+}
+
 /* Base addresses */
 #define SYSTEM_BASE    0xB8000000
 #define SWCORE_BASE    0xBB800000
