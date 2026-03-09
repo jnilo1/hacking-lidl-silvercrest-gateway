@@ -26,7 +26,8 @@ rootfs (33-), and userdata (34-).
 ### 32-Kernel
 - Syscon/regmap: PIN_MUX_SEL/SEL2 access coordinated via shared regmap (GPIO, UART, Ethernet)
 - Interrupt controller: chained_irq_enter/exit, GIMR enabled after handler install, raw_spinlock on GIMR
-- Ethernet: IRQ_NONE on spurious, tx_dropped accounting, READ_ONCE/WRITE_ONCE on ring indices, napi_enable after HW init
+- Ethernet: IRQ_NONE on spurious, tx_dropped accounting, napi_enable after HW init
+- CONFIG_MIPS_L1_CACHE_SHIFT corrected from 5 (32 B) to 4 (16 B) to match actual RLX4181 cache line size
 - Timer: bus clock from DT (busclk fixed-clock), max_delta_ticks capped to 28-bit, clk_prepare_enable
 - SPI: unaligned access safety (get/put_unaligned), devm_clk_get_optional, double-disable prevention
 - UART1: devm_clk_get_optional, dev_warn/err/dbg, PIN_MUX via syscon
