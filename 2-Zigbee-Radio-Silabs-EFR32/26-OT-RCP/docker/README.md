@@ -42,9 +42,24 @@ TCP bridge. The host only needs Matter Server + Home Assistant.
 ### On the Lidl Gateway
 
 - **EFR32 flashed with OT-RCP firmware** (`ot-rcp.gbl`)
-- **Userdata flashed** in the correct radio mode:
-  - Use cases 1 & 2: Zigbee mode (`flash_userdata.sh` → select Zigbee)
-  - Use case 3: Thread mode (`flash_userdata.sh` → select Thread)
+- **Gateway in the correct radio mode:**
+  - Use cases 1 & 2: Zigbee mode (serialgateway)
+  - Use case 3: Thread mode (otbr-agent)
+
+### Switching Radio Mode (no reflash needed)
+
+The radio mode is controlled by `/userdata/etc/radio.conf` on the gateway.
+You can switch without reflashing:
+
+```bash
+# Switch to Zigbee mode (use cases 1 & 2)
+ssh root@192.168.1.88 "rm -f /userdata/etc/radio.conf; reboot"
+
+# Switch to Thread mode (use case 3)
+ssh root@192.168.1.88 "echo MODE=otbr > /userdata/etc/radio.conf; reboot"
+```
+
+Alternatively, `flash_userdata.sh` sets the mode at flash time via its prompt.
 
 ### On Your Computer
 
@@ -230,7 +245,7 @@ Same as use case 2: **Settings → Devices & Services → Thread → Configure**
 
 1. Install **"Home Assistant"** from the Play Store
 2. Connect to your HA instance: `http://<HOST_IP>:8123`
-3. **Sync Thread credentials:**
+3. **Sync Thread credentials** (required after every Thread network change):
    Settings → Companion App → Troubleshooting → Sync Thread credentials
 4. **Commission:**
    Settings → Devices & Services → Add Device → Add Matter device
@@ -275,6 +290,8 @@ docker run --rm --network host --privileged \
 | Matter integration shows "offline" | Check Matter Server container: `docker compose logs matter-server` |
 | OTBR: "Failed to bind socket" | Wrong backbone interface — check `ip link` |
 | BLE advertising timeout | Matter devices advertise 15-30 min after reset — act quickly |
+| "Use as preferred network" not shown | Restart Home Assistant after forming/changing the Thread network |
+| Commissioning fails after switching use case | Sync Thread credentials in Companion App — the app caches credentials from the previous Thread network |
 
 ---
 
