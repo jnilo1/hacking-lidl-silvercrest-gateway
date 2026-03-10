@@ -436,6 +436,7 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		ph->ph_flags = PKTHDR_USED | PKT_INCOMING;
 
 		napi_gro_receive(napi, skb);
+
 		work_done++;
 		goto rearm;
 

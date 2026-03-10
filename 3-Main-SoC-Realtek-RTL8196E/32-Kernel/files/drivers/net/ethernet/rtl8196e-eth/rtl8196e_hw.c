@@ -738,10 +738,14 @@ void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 	rtl8196e_writel((u32)pkthdr, CPUTPDCR0);
 }
 
-/* Unmask RX done, TX done, link change and descriptor runout interrupts in CPUIIMR. */
+/*
+ * Unmask RX done, link change and descriptor runout interrupts in CPUIIMR.
+ * TX_ALL_DONE is intentionally NOT masked — TX reclaim is done in software
+ * (in NAPI poll and start_xmit) to avoid one IRQ per TX completion.
+ */
 void rtl8196e_hw_enable_irqs(struct rtl8196e_hw *hw)
 {
-	u32 mask = RX_DONE_IE_ALL | TX_ALL_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
+	u32 mask = RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
 	(void)hw;
 	rtl8196e_writel(mask, CPUIIMR);
 }

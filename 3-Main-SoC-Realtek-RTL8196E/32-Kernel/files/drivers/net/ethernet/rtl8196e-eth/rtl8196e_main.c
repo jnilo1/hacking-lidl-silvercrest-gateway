@@ -25,15 +25,15 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "1.2"
+#define RTL8196E_DRV_VERSION "2.0"
 
-#define RTL8196E_TX_DESC      600
-#define RTL8196E_RX_DESC      500
-#define RTL8196E_RX_MBUF_DESC 500
+#define RTL8196E_TX_DESC      128
+#define RTL8196E_RX_DESC      128
+#define RTL8196E_RX_MBUF_DESC 128
 #define RTL8196E_CLUSTER_SIZE 1700
 
-#define RTL8196E_TX_STOP_THRESH 16
-#define RTL8196E_TX_WAKE_THRESH 64
+#define RTL8196E_TX_STOP_THRESH 4
+#define RTL8196E_TX_WAKE_THRESH 16
 
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
@@ -297,6 +297,18 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 		}
 	}
 
+	/*
+	 * Reclaim completed TX descriptors on every xmit call.
+	 * With TX_ALL_DONE IRQ disabled, this is the only reclaim path
+	 * for pure TX traffic (no RX IRQ to trigger NAPI reclaim).
+	 * When RX traffic is present, NAPI poll handles most reclaim
+	 * in batch; this call is then a fast no-op (cons == prod).
+	 */
+	{
+		unsigned int rpkts = 0, rbytes = 0;
+		rtl8196e_ring_tx_reclaim(priv->ring, &rpkts, &rbytes, 0);
+	}
+
 	/* Flush packet data (descriptor flushes done inside tx_submit) */
 	{
 		unsigned int flush_len = skb->len < ETH_ZLEN ? ETH_ZLEN : skb->len;
@@ -307,6 +319,7 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 					     priv->vlan_id, priv->portmask,
 					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
+
 	if (unlikely(priv->tx_debug_once == 0)) {
 		priv->tx_debug_once = 1;
 		priv->tx_dbg_portmask = priv->portmask;
@@ -426,7 +439,7 @@ static __iram irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 			netif_carrier_off(ndev);
 	}
 
-	if (likely(status & (RX_DONE_IP_ALL | TX_ALL_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL))) {
+	if (likely(status & (RX_DONE_IP_ALL | PKTHDR_DESC_RUNOUT_IP_ALL))) {
 		if (likely(napi_schedule_prep(&priv->napi))) {
 			rtl8196e_hw_disable_irqs(&priv->hw);
 			__napi_schedule(&priv->napi);
