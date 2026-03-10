@@ -432,7 +432,7 @@ microcom -s 115200 /dev/ttyS1
 # To exit microcom: Ctrl+X
 
 # Or from remote host (if serialgateway is running):
-nc 192.168.1.X 8888
+nc 192.168.1.88 8888
 # To exit nc: Ctrl+C
 ```
 

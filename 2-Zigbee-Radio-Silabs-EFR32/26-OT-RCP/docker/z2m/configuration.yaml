@@ -4,7 +4,7 @@ mqtt:
   base_topic: zigbee2mqtt
   server: mqtt://mosquitto:1883
 serial:
-  port: tcp://192.168.1.X:8888
+  port: tcp://192.168.1.88:8888
   adapter: zoh
 frontend:
   enabled: true

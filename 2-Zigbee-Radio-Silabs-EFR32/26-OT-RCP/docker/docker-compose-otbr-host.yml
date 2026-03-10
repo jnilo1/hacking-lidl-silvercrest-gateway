@@ -31,7 +31,7 @@ services:
       # REQUIRED: Set this to your Lidl gateway's IP address
       # The gateway must be running serialgateway on port 8888
       # ============================================================
-      - RCP_HOST=192.168.1.X    # ← Your gateway's IP
+      - RCP_HOST=192.168.1.88   # ← Your gateway's IP (default)
       - RCP_PORT=8888
       - RCP_BAUDRATE=115200
       # ============================================================

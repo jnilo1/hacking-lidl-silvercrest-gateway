@@ -127,7 +127,7 @@ See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details 
 Your PC                          Gateway                         EFR32
 ───────                          ───────                         ─────
     │                                │                              │
-    │  socket://192.168.1.X:8888     │                              │
+    │  socket://192.168.1.88:8888     │                              │
     ├───────────────────────────────>│      serialgateway           │
     │                                │        (TCP↔UART)            │
     │                                │                              │

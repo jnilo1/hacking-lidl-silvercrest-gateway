@@ -80,7 +80,7 @@ Runs Zigbee2MQTT with the `zoh` adapter. The Zigbee stack runs on the host
 1. Edit `z2m/configuration.yaml` — set your gateway IP:
    ```yaml
    serial:
-     port: tcp://192.168.1.X:8888
+     port: tcp://192.168.1.88:8888
      adapter: zoh
    ```
 
@@ -124,7 +124,7 @@ echo "net.ipv6.conf.all.forwarding=1" | sudo tee /etc/sysctl.d/99-thread.conf
 Edit `docker-compose-otbr-host.yml`:
 ```yaml
 environment:
-  - RCP_HOST=192.168.1.X     # ← Your gateway's IP
+  - RCP_HOST=192.168.1.88     # ← Your gateway's IP
   - OTBR_BACKBONE_IF=enp2s0  # ← Your host's Ethernet interface (ip link)
 ```
 

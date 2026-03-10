@@ -122,14 +122,14 @@ Edit `configuration.yaml`:
 
 ```yaml
 serial:
-  port: tcp://192.168.1.X:8888
+  port: tcp://192.168.1.88:8888
   adapter: ember
 ```
 
 ### Home Assistant ZHA Configuration
 
 Add integration with:
-- **Serial port path:** `socket://192.168.1.X:8888`
+- **Serial port path:** `socket://192.168.1.88:8888`
 
 > **Note:** Baudrate and flow control are handled by `serialgateway` on the gateway side, not by the client application.
 
