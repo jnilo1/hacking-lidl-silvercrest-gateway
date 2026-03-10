@@ -47,6 +47,15 @@ if [ "$net_choice" = "1" ]; then
     GATEWAY="${GATEWAY:-192.168.1.1}"
     printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
     echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+
+    # Update gateway IP in Docker Compose and Z2M config files
+    DOCKER_DIR="${SCRIPT_DIR}/../../2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker"
+    if [ -d "$DOCKER_DIR" ]; then
+        sed -i "s|RCP_HOST=[0-9.]*|RCP_HOST=${IPADDR}|" \
+            "$DOCKER_DIR/docker-compose-otbr-host.yml" 2>/dev/null || true
+        sed -i "s|tcp://[0-9.]*:8888|tcp://${IPADDR}:8888|" \
+            "$DOCKER_DIR/z2m/configuration.yaml" 2>/dev/null || true
+    fi
 else
     rm -f "$ETH0_CONF"
     echo "→ DHCP"
