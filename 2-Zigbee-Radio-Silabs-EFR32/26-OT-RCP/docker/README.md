@@ -165,7 +165,27 @@ Verify OTBR is running:
 curl -s http://192.168.1.88:8081/node | python3 -m json.tool
 ```
 
-#### 2. Start
+#### 2. Form the Thread Network (first time only)
+
+On a fresh install, the Thread network is not yet created. Initialize it:
+
+```bash
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl dataset init new"
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl dataset commit active"
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl ifconfig up"
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl thread start"
+```
+
+Verify:
+```bash
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl state"
+# Should print "leader" after a few seconds
+```
+
+> The dataset is persisted in `/userdata/thread/`. After a reboot, OTBR
+> auto-attaches to the saved network — this step is only needed once.
+
+#### 3. Start Matter Server and Home Assistant
 
 ```bash
 docker compose -f docker-compose-otbr-gateway.yml up -d
@@ -174,7 +194,7 @@ docker compose -f docker-compose-otbr-gateway.yml up -d
 > **Note:** IPv6 forwarding is handled by the gateway's `S70otbr` init script.
 > No need to configure it on the host — the host does not do border routing.
 
-#### 3. Configure Home Assistant
+#### 4. Configure Home Assistant
 
 Open http://localhost:8123, create your account, then add integrations:
 
