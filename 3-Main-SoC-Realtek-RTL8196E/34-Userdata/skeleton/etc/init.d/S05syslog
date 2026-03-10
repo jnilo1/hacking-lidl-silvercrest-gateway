@@ -8,8 +8,8 @@
 # Author: J. Nilo - May 2025
 #
 
-# Set timezone before starting syslogd so log timestamps are local
-[ -f /etc/TZ ] && export TZ=$(cat /etc/TZ)
+# Note: syslogd timestamps are UTC regardless of TZ — this is standard
+# for embedded systems and avoids DST ambiguities in log analysis.
 
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
 

@@ -37,6 +37,7 @@ start)
     echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
 
     $OTBR_BIN \
+        -d 4 \
         -I "$THREAD_IF" \
         -B "$BACKBONE_IF" \
         --rest-listen-address "$REST_LISTEN" \
