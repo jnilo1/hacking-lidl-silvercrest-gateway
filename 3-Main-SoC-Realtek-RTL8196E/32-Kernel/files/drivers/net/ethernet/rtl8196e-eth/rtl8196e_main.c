@@ -18,6 +18,7 @@
 #include <linux/ethtool.h>
 #include <linux/mfd/syscon.h>
 #include <asm/cacheflush.h>
+#include <asm/mach-realtek/imem.h>
 #include "rtl8196e_dt.h"
 #include "rtl8196e_hw.h"
 #include "rtl8196e_ring.h"
@@ -275,7 +276,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 }
 
 /* Transmit a packet: linearize if needed, flush data cache, submit to TX ring. */
-static netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
+static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	bool was_empty = false;
@@ -372,7 +373,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 }
 
 /* NAPI poll: drain RX ring up to budget, reclaim completed TX, wake queue if stalled. */
-static int rtl8196e_poll(struct napi_struct *napi, int budget)
+static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 {
 	struct rtl8196e_priv *priv = container_of(napi, struct rtl8196e_priv, napi);
 	unsigned int pkts = 0, bytes = 0;
@@ -400,7 +401,7 @@ static int rtl8196e_poll(struct napi_struct *napi, int budget)
 }
 
 /* Interrupt handler: read and clear CPUIISR, update link state, schedule NAPI. */
-static irqreturn_t rtl8196e_isr(int irq, void *dev_id)
+static __iram irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 {
 	struct net_device *ndev = dev_id;
 	struct rtl8196e_priv *priv = netdev_priv(ndev);

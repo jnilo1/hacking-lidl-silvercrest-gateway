@@ -16,6 +16,7 @@
 
 #include <asm/irq_cpu.h>
 #include <asm/mipsregs.h>
+#include <asm/mach-realtek/imem.h>
 
 /* MIPS CPU Interrupt Lines (IP0-IP7) */
 #define REALTEK_CPU_IRQ_CASCADE     2       /* IP2 - Cascaded interrupts (UART0 only) */
@@ -39,7 +40,7 @@
  * Note: Uses independent if statements (not else-if) to handle multiple
  * simultaneous interrupts in a single dispatch call, reducing latency.
  */
-asmlinkage void plat_irq_dispatch(void)
+asmlinkage __iram void plat_irq_dispatch(void)
 {
     unsigned long pending = read_c0_status() & read_c0_cause() & ST0_IM;
 

@@ -1,0 +1,42 @@
+--- a/kernel/irq/handle.c
++++ b/kernel/irq/handle.c
+@@ -17,6 +17,12 @@
+
+ #include "internals.h"
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ #ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
+ void (*handle_arch_irq)(struct pt_regs *) __ro_after_init;
+ #endif
+@@ -134,7 +140,7 @@
+ 	wake_up_process(action->thread);
+ }
+
+-irqreturn_t __handle_irq_event_percpu(struct irq_desc *desc, unsigned int *flags)
++irqreturn_t __iram_hotpath __handle_irq_event_percpu(struct irq_desc *desc, unsigned int *flags)
+ {
+ 	irqreturn_t retval = IRQ_NONE;
+ 	unsigned int irq = desc->irq_data.irq;
+@@ -188,7 +194,7 @@
+ 	return retval;
+ }
+
+-irqreturn_t handle_irq_event_percpu(struct irq_desc *desc)
++irqreturn_t __iram_hotpath handle_irq_event_percpu(struct irq_desc *desc)
+ {
+ 	irqreturn_t retval;
+ 	unsigned int flags = 0;
+@@ -202,7 +208,7 @@
+ 	return retval;
+ }
+
+-irqreturn_t handle_irq_event(struct irq_desc *desc)
++irqreturn_t __iram_hotpath handle_irq_event(struct irq_desc *desc)
+ {
+ 	irqreturn_t ret;
+

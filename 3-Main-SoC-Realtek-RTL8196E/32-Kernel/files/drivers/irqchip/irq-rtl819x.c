@@ -30,6 +30,7 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/io.h>
+#include <asm/mach-realtek/imem.h>
 
 /* ========================================================================== */
 /* Hardware Definitions */
@@ -192,7 +193,7 @@ static struct irq_chip realtek_soc_irq_chip = {
  * Handles multiple simultaneous interrupts. Uses cached virtual IRQs
  * for frequently-used interrupts (Switch, UARTs) to avoid lookup overhead.
  */
-static void realtek_soc_irq_handler(struct irq_desc *desc)
+static __iram void realtek_soc_irq_handler(struct irq_desc *desc)
 {
     struct irq_chip *chip = irq_desc_get_chip(desc);
     struct irq_domain *domain = irq_desc_get_handler_data(desc);

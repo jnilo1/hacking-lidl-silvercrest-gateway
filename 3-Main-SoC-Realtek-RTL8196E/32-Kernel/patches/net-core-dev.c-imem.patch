@@ -1,0 +1,60 @@
+--- a/net/core/dev.c
++++ b/net/core/dev.c
+@@ -149,6 +149,12 @@
+
+ #include "net-sysfs.h"
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ #define MAX_GRO_SKBS 8
+
+ /* This should be increased if a protocol with a bigger head is added. */
+@@ -6175,7 +6181,7 @@
+ 	return ret;
+ }
+
+-gro_result_t napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
++gro_result_t __iram_hotpath napi_gro_receive(struct napi_struct *napi, struct sk_buff *skb)
+ {
+ 	gro_result_t ret;
+
+@@ -6452,7 +6458,7 @@
+  * The entry's receive function will be scheduled to run.
+  * Consider using __napi_schedule_irqoff() if hard irqs are masked.
+  */
+-void __napi_schedule(struct napi_struct *n)
++void __iram_hotpath __napi_schedule(struct napi_struct *n)
+ {
+ 	unsigned long flags;
+
+@@ -6497,14 +6503,14 @@
+  * due to force-threaded interrupts and spinlock substitution.
+  */
+-void __napi_schedule_irqoff(struct napi_struct *n)
++void __iram_hotpath __napi_schedule_irqoff(struct napi_struct *n)
+ {
+ 	if (!IS_ENABLED(CONFIG_PREEMPT_RT))
+ 		____napi_schedule(this_cpu_ptr(&softnet_data), n);
+ 	else
+ 		__napi_schedule(n);
+ }
+ EXPORT_SYMBOL(__napi_schedule_irqoff);
+
+-bool napi_complete_done(struct napi_struct *n, int work_done)
++bool __iram_hotpath napi_complete_done(struct napi_struct *n, int work_done)
+ {
+ 	unsigned long flags, val, new, timeout = 0;
+ 	bool ret = true;
+@@ -6911,7 +6917,7 @@
+ 	return work;
+ }
+
+-static __latent_entropy void net_rx_action(struct softirq_action *h)
++static __latent_entropy __iram_hotpath void net_rx_action(struct softirq_action *h)
+ {
+ 	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
+ 	unsigned long time_limit = jiffies +

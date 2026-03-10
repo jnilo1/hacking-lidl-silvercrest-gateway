@@ -1,0 +1,43 @@
+--- a/net/core/skbuff.c
++++ b/net/core/skbuff.c
+@@ -81,6 +81,12 @@
+ #include "datagram.h"
+ #include "sock_destructor.h"
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ struct kmem_cache *skbuff_head_cache __ro_after_init;
+ static struct kmem_cache *skbuff_fclone_cache __ro_after_init;
+ #ifdef CONFIG_SKB_EXTENSIONS
+@@ -318,7 +324,7 @@
+  *  before giving packet to stack.
+  *  RX rings only contains data buffers, not full skbs.
+  */
+-struct sk_buff *__build_skb(void *data, unsigned int frag_size)
++struct sk_buff * __iram_hotpath __build_skb(void *data, unsigned int frag_size)
+ {
+ 	struct sk_buff *skb;
+
+@@ -511,7 +517,7 @@
+  *	%NULL is returned if there is no free memory.
+  */
+-struct sk_buff *__napi_alloc_skb(struct napi_struct *napi, unsigned int len,
+-				 gfp_t gfp_mask)
++struct sk_buff * __iram_hotpath __napi_alloc_skb(struct napi_struct *napi,
++				 unsigned int len, gfp_t gfp_mask)
+ {
+ 	struct napi_alloc_cache *nc;
+ 	struct sk_buff *skb;
+@@ -918,7 +924,7 @@
+ 	_kfree_skb_defer(skb);
+ }
+
+-void napi_consume_skb(struct sk_buff *skb, int budget)
++void __iram_hotpath napi_consume_skb(struct sk_buff *skb, int budget)
+ {
+ 	/* Zero budget indicate non-NAPI context called us, like netpoll */
+ 	if (unlikely(!budget)) {

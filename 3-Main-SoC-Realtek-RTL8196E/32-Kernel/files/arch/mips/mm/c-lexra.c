@@ -18,6 +18,7 @@
 #include <asm/cpu.h>
 #include <asm/cpu-features.h>
 #include <asm/cacheflush.h>
+#include <asm/mach-realtek/imem.h>
 
 /*
  * RLX4181 (WULING) Configuration:
@@ -99,7 +100,7 @@
  * Flush D-cache range using CACHE instructions
  * For RLX4181 which has CONFIG_CPU_HAS_DCACHE_OP
  */
-static inline void rlx_flush_dcache_fast(unsigned long start, unsigned long end)
+static noinline __iram void rlx_flush_dcache_fast(unsigned long start, unsigned long end)
 {
 	unsigned long p;
 
@@ -119,7 +120,7 @@ static inline void rlx_flush_dcache_fast(unsigned long start, unsigned long end)
  * Flush D-cache range
  * Use CCTL for large ranges, CACHE instructions for small ranges
  */
-static inline void rlx_flush_dcache_range(unsigned long start, unsigned long end)
+static noinline __iram void rlx_flush_dcache_range(unsigned long start, unsigned long end)
 {
 	/* For large ranges, use CCTL to flush entire cache */
 	if (end - start > 8192) {  /* cpu_dcache_size = 8KB */
@@ -221,13 +222,13 @@ static inline void rlx_wback_dcache_range(unsigned long start, unsigned long end
 	rlx_wback_dcache_fast(start, end);
 }
 
-static void rlx_dma_cache_wback_inv(unsigned long start, unsigned long size)
+static __iram void rlx_dma_cache_wback_inv(unsigned long start, unsigned long size)
 {
 	unsigned long end = start + size;
 	rlx_flush_dcache_range(start, end);
 }
 
-static void rlx_dma_cache_inv(unsigned long start, unsigned long size)
+static __iram void rlx_dma_cache_inv(unsigned long start, unsigned long size)
 {
 	unsigned long end = start + size;
 	rlx_flush_dcache_range(start, end);

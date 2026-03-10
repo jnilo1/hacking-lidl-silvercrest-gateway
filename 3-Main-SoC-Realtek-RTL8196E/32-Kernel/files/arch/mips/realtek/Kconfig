@@ -38,4 +38,17 @@ choice
 
 endchoice
 
+config RTL8196E_IMEM
+	bool "Use on-chip I-MEM for hot-path functions"
+	depends on SOC_RTL8196E
+	default y
+	help
+	  Place hot-path functions (IRQ dispatch, NAPI poll, TX submit,
+	  DMA cache ops) in the 16 KB on-chip instruction SRAM (I-MEM)
+	  for zero wait-state instruction fetch.  The RLX4181 COP3
+	  coprocessor maps a 16 KB SDRAM region to the on-chip SRAM
+	  at boot time via IRAM Fill.
+
+	  If unsure, say Y.
+
 endif

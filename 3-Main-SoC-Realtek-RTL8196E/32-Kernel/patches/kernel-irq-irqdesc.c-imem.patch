@@ -1,0 +1,24 @@
+--- a/kernel/irq/irqdesc.c
++++ b/kernel/irq/irqdesc.c
+@@ -17,6 +17,12 @@
+ #include <linux/irqdomain.h>
+ #include <linux/sysfs.h>
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ #include "internals.h"
+
+ /*
+@@ -641,7 +647,7 @@
+  * @irq:	The irq number to handle
+  *
+  */
+-int generic_handle_irq(unsigned int irq)
++int __iram_hotpath generic_handle_irq(unsigned int irq)
+ {
+ 	struct irq_desc *desc = irq_to_desc(irq);
+ 	struct irq_data *data;

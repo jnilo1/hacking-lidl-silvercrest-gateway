@@ -1,0 +1,24 @@
+--- a/net/ethernet/eth.c
++++ b/net/ethernet/eth.c
+@@ -52,6 +52,12 @@
+ #include <linux/of_net.h>
+ #include <linux/pci.h>
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ __setup("ether=", netdev_boot_setup);
+
+ /**
+@@ -152,7 +158,7 @@
+  * assume 802.3 if the type field is short enough to be a length.
+  * This is normal practice and works for any 'now in use' protocol.
+  */
+-__be16 eth_type_trans(struct sk_buff *skb, struct net_device *dev)
++__be16 __iram_hotpath eth_type_trans(struct sk_buff *skb, struct net_device *dev)
+ {
+ 	unsigned short _service_access_point;
+ 	const unsigned short *sap;

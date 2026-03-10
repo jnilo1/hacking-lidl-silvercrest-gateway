@@ -1,0 +1,23 @@
+--- a/arch/mips/kernel/irq.c
++++ b/arch/mips/kernel/irq.c
+@@ -23,6 +23,12 @@
+ #include <linux/atomic.h>
+ #include <linux/uaccess.h>
+
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ void *irq_stack[NR_CPUS];
+
+ /*
+@@ -99,7 +105,7 @@
+  * handlers).
+  */
+-void __irq_entry do_IRQ(unsigned int irq)
++void __iram_hotpath do_IRQ(unsigned int irq)
+ {
+ 	irq_enter();
+ 	check_stack_overflow();
