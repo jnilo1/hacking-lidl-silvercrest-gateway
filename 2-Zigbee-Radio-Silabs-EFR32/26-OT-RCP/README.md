@@ -87,6 +87,7 @@ Zigbee Devices                        Docker Host
 ```
 
 **Gateway setup:** flash userdata in **Zigbee** mode.
+**Quick start:** see [`docker/README.md` — Use Case 1](docker/README.md#use-case-1-zoh--zigbee-zigbee-on-host).
 
 > zigbee-on-host is open-source, integrated in Zigbee2MQTT 2.x, and under
 > active development. See the [GitHub repo](https://github.com/Nerivec/zigbee-on-host).
@@ -110,6 +111,7 @@ Matter Devices                        Docker Host
 
 **Gateway setup:** flash userdata in **Zigbee** mode (serialgateway bridges
 the radio to TCP; OTBR runs on the host).
+**Quick start:** see [`docker/README.md` — Use Case 2](docker/README.md#use-case-2-otbr-on-host--threadmatter-docker).
 
 ### Use case 3: OTBR on Gateway (v2.0+)
 
@@ -137,6 +139,7 @@ Matter Devices                                       Docker Host
 - Self-contained — Thread mesh stays up even without the host
 
 This is the **recommended setup** for Thread/Matter since v2.0.
+**Quick start:** see [`docker/README.md` — Use Case 3](docker/README.md#use-case-3-otbr-on-gateway--threadmatter-native-v20).
 
 ---
 
