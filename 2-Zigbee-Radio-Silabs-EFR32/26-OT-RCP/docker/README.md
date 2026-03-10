@@ -281,8 +281,10 @@ docker run --rm --network host --privileged \
 | Device | Protocol | Stack | Status |
 |--------|----------|-------|--------|
 | Xiaomi LYWSD03MMC | Zigbee | ZoH (use case 1) | OK |
-| IKEA TIMMERFLOTTE | Matter/Thread | OTBR on host (use case 2) | OK — 22.8 °C, 54.69 % |
-| IKEA TIMMERFLOTTE | Matter/Thread | OTBR on gateway (use case 3) | OK |
+| IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | OTBR on host (use case 2) | OK |
+| IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | OTBR on gateway (use case 3) | OK |
+| IKEA BILRESA dual button | Matter/Thread | OTBR on gateway (use case 3) | OK |
+| IKEA MYGGSPRAY wrlss mtn sensor | Matter/Thread | OTBR on gateway (use case 3) | OK |
 
 ---
 

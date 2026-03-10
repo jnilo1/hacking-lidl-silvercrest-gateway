@@ -161,8 +161,10 @@ alternative, and troubleshooting.
 | Device | Protocol | Use case | Status |
 |--------|----------|----------|--------|
 | Xiaomi LYWSD03MMC | Zigbee | 1 (ZoH) | OK |
-| IKEA TIMMERFLOTTE | Matter/Thread | 2 (OTBR host) | OK — 22.8 °C, 54.69 % |
-| IKEA TIMMERFLOTTE | Matter/Thread | 3 (OTBR gateway) | OK |
+| IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | 2 (OTBR host) | OK |
+| IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | 3 (OTBR gateway) | OK |
+| IKEA BILRESA dual button | Matter/Thread | 3 (OTBR gateway) | OK |
+| IKEA MYGGSPRAY wrlss mtn sensor | Matter/Thread | 3 (OTBR gateway) | OK |
 
 ---
 
