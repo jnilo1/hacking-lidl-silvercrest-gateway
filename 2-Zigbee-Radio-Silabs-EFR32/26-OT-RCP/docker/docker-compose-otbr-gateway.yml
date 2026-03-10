@@ -22,8 +22,6 @@
 #      - Matter: ws://localhost:5580/ws
 #   5. Commission Matter devices via Settings → Devices → Add Device → Matter
 
-x-gateway-ip: &gateway-ip "192.168.1.88"
-
 services:
   # Python Matter Server — Matter fabric controller
   # Needs D-Bus for BLE commissioning
