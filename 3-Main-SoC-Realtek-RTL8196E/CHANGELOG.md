@@ -43,10 +43,15 @@ rootfs (33-), and userdata (34-).
 - DT: syscon on system-controller, busclk fixed-clock, gpio-leds node
 - Kconfig: CONFIG_MFD_SYSCON=y, CONFIG_LEDS_GPIO=y, CONFIG_LEDS_TRIGGERS=y
 - IPv6 stack integrated into base config (+135 KB kernel, zero overhead when unused)
-- CONFIG_FILE_LOCKING=y (required by otbr-agent daemon lock)
+- CONFIG_FILE_LOCKING=y (required by otbr-agent flock())
 - CONFIG_TUN=y (required for wpan0 Thread interface)
-- CONFIG_IEEE802154=y (802.15.4 radio subsystem)
-- Kernel size: 1.0 MB -> 1.1 MB
+- Kconfig size reduction (-298 KB text, -106 KB compressed = -9.2%):
+  - Stripped unused subsystems: MTD_CFI/JEDECPROBE, PHYLIB/MDIO, MSDOS/EFI_PARTITION,
+    NLS, IKCONFIG, INET_DIAG, IPV6_SIT/TUNNEL, MIPS_FP_SUPPORT, IEEE802154, SHMEM
+  - CRC32_SLICEBY8 → SLICEBY4 (-4 KB tables, better D-cache fit)
+  - Disabled SYN_COOKIES (unnecessary behind NAT), NETFILTER (incompatible with
+    RTL8196E Ethernet driver)
+- Kernel size: 1.0 MB → 1.03 MB (net, after IPv6 addition and kconfig stripping)
 
 ### 33-Rootfs
 - BusyBox: IPv6 support (ping6, traceroute6, ip route)
