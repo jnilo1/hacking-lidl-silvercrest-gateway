@@ -7,11 +7,14 @@
 
 ## 1. Measurement Method
 
-### 1.1 Kernel instrumentation
+### 1.1 Kernel instrumentation (development only)
 
-We added lightweight `ktime_get_ns()` probes at key points in the driver hot path,
-exposed via `/proc/net/rtl8196e_perf`. The instrumentation is compiled into the
-driver (not a separate module) and has no runtime overhead when not being read.
+During development, we added temporary `ktime_get_ns()` probes at key points in the
+driver hot path, exposed via `/proc/net/rtl8196e_perf`. **This instrumentation has been
+removed from the production driver v2.0** — the committed code contains no probes, no
+perf counters, and no /proc entry. All measurements in this document were taken with
+the instrumented build and are representative of the driver's behavior, though the
+production driver runs slightly faster due to the absence of probe overhead.
 
 **TX path (`rtl8196e_start_xmit`)** — 5 timestamps per packet:
 - `t0`: function entry
@@ -40,6 +43,7 @@ Each `ktime_get_ns()` call reads the CP0 Count register through the kernel timek
 (seqlock + clocksource read + 64-bit multiply). On this 200 MHz MIPS core, each call
 costs approximately 2-5 µs. With 5 calls per TX packet, the instrumentation adds
 ~10-25 µs overhead per packet. This is visible in the UDP TX results (see section 3).
+**The production driver does not pay this cost.**
 
 Since the core is single-threaded, **hardirqs can preempt `start_xmit`**. The measured
 `tx_total_ns` therefore includes any IRQ handler time that fires during the function.
@@ -49,7 +53,7 @@ This is not a bug — it reveals real contention between TX submission and IRQ p
 
 All tests use `iperf` (v2) between the host PC (Ubuntu, 192.168.1.200, Gigabit NIC)
 and the gateway (RTL8196E, 192.168.1.88, 100 Mbps). Duration: 15 seconds per test.
-OTBR agent stopped during tests. Test script: `test_perf_driver.sh`.
+OTBR agent stopped during tests.
 
 ## 2. Baseline Results (TX completion IRQs enabled, rings 600/500)
 
@@ -280,7 +284,7 @@ backlog at 7 pkts/poll — more than sufficient.
 
 ### 4.3 Combined results (v2.0: TX IRQ mitigation + rings 128)
 
-Measured with `test_perf_driver.sh` (wire-speed tests):
+Measured with the instrumented build (wire-speed tests):
 
 | Test    | v1.2 baseline | v2.0 final | Delta   |
 |---------|---------------|------------|---------|
@@ -296,8 +300,7 @@ given the +28% UDP TX improvement and ~780 KB RAM savings.
 
 ### 5.1 Test methodology
 
-Test script `test_perf_driver.sh` uses realistic packet sizes and rates matching
-actual gateway traffic patterns:
+Tests use realistic packet sizes and rates matching actual gateway traffic patterns:
 
 | Test         | Proto | Payload | Rate    | Simulates                    |
 |--------------|-------|---------|---------|------------------------------|
@@ -307,7 +310,7 @@ actual gateway traffic patterns:
 | tcp_rx/tx    | TCP   | 1448 B  | max     | Firmware update / SCP        |
 | udp_flood    | UDP   | 1472 B  | 95 Mbps | Stress test (HW limits)      |
 
-### 5.2 Results (v2.0 final configuration)
+### 5.2 Results (v2.0 configuration, instrumented build)
 
 | Test           | Mbps   | Loss | pps   | tx_avg_ns | rx_avg_ns |
 |----------------|--------|------|-------|-----------|-----------|
@@ -363,6 +366,7 @@ throughput limits are noticeable is bulk file transfer.
 - MAC: RTL8196E integrated 5-port 100 Mbps switch
 - Kernel: 5.10.246 with custom Lexra/RLX patches
 - I-MEM: 29 hot-path functions in 16 KB on-chip SRAM (7,348 bytes / 44.8%)
-- Driver: rtl8196e-eth v2.0 (TX IRQ mitigation, rings 128, ktime instrumentation)
+- Driver: rtl8196e-eth v2.0 (TX IRQ mitigation, rings 128)
+- Measurements taken with temporary ktime instrumentation (removed from production build)
 - Test tool: iperf v2 (both sides)
 - Host: Ubuntu PC with Gigabit Ethernet
