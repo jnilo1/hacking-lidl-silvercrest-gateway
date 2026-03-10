@@ -5,6 +5,13 @@
 #   - Kernel with IPv6 + CONFIG_FILE_LOCKING
 #   - EFR32 flashed with OT-RCP firmware
 #   - otbr-agent binary in /userdata/usr/bin/
+#
+# Flash wear protection:
+#   otbr-agent writes frame counters every ~1000 frames (~480 writes/day).
+#   To protect the JFFS2 flash, we run from tmpfs (/tmp/thread) and only
+#   sync back to flash (/userdata/thread) once per day + on clean shutdown.
+#   On power loss, only frame counters are lost — OpenThread handles this
+#   by jumping ahead on next boot.
 
 OTBR_BIN="/userdata/usr/bin/otbr-agent"
 
@@ -19,6 +26,12 @@ BACKBONE_IF="eth0"
 REST_LISTEN="::0"
 REST_PORT="8081"
 
+# Storage paths
+FLASH_DIR="/userdata/thread"
+RAM_DIR="/tmp/thread"
+SYNC_PID="/tmp/otbr-sync.pid"
+SYNC_INTERVAL=86400  # seconds (24 hours)
+
 case "$1" in
 start)
     [ -x "$OTBR_BIN" ] || exit 0
@@ -30,8 +43,9 @@ start)
 
     echo "Starting otbr-agent..."
 
-    # Create settings directory (persistent across reboots)
-    mkdir -p /userdata/thread
+    # Restore settings from flash to tmpfs
+    mkdir -p "$FLASH_DIR" "$RAM_DIR"
+    cp "$FLASH_DIR"/* "$RAM_DIR"/ 2>/dev/null
 
     # Enable IPv6 forwarding (required for border routing)
     echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
@@ -44,16 +58,25 @@ start)
         --rest-listen-port "$REST_PORT" \
         --vendor-name "Lidl" \
         --model-name "Silvercrest" \
+        --data-path "$RAM_DIR" \
         "$RCP_URL" &
 
     # Reduce log level from info to warn (0=none 1=crit 2=warn 3=note 4=info)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
+
+    # Daily sync loop: tmpfs → flash (background)
+    ( while sleep $SYNC_INTERVAL; do cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; done ) &
+    echo $! > "$SYNC_PID"
     ;;
 
 stop)
     echo "Stopping otbr-agent..."
+    # Stop sync loop
+    [ -f "$SYNC_PID" ] && kill "$(cat "$SYNC_PID")" 2>/dev/null && rm -f "$SYNC_PID"
     killall otbr-agent 2>/dev/null
+    # Final sync to flash
+    cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
     ;;
 
 restart)

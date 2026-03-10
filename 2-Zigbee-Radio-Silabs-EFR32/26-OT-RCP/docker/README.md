@@ -219,6 +219,8 @@ Same as use case 2: **Settings → Devices & Services → Thread → Configure**
 - **Lower latency** — OTBR talks directly to the EFR32 via UART, no TCP bridge
 - **Simpler** — no OTBR Docker container to manage, no `network_mode: host` issues
 - **Self-contained** — gateway works even without the host running (Thread mesh stays up)
+- **Flash wear protection** — settings run from tmpfs, synced to flash once per day
+  and on clean shutdown (see `S70otbr` init script)
 
 ---
 

@@ -194,7 +194,11 @@ ot-ctl
 
 ### Thread dataset persistence
 
-Thread network credentials are stored in `/userdata/thread/` and survive reboots.
+To protect the JFFS2 flash from wear (otbr-agent writes frame counters every
+~1000 frames), `S70otbr` runs otbr-agent with `--data-path /tmp/thread` (tmpfs).
+Settings are restored from `/userdata/thread/` at boot and synced back to flash
+once per day + on clean shutdown.
+
 On restart, `otbr-agent` automatically re-attaches to the saved network (`--auto-attach=1` default).
 
 Note: reflashing userdata erases the Thread dataset — devices will need to be re-commissioned.
@@ -290,6 +294,8 @@ with its sensors and controls.
 | Device | Type | Commissioning | Result |
 |--------|------|---------------|--------|
 | IKEA TIMMERFLOTTE | Temperature/humidity sensor | HA Companion App (BLE) | Temperature, humidity, battery OK |
+| IKEA BILRESA | Dual button | HA Companion App (BLE) | OK |
+| IKEA MYGGSPRAY | Wireless motion sensor | HA Companion App (BLE) | OK |
 
 ## Directory Structure
 
