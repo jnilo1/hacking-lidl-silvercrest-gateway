@@ -165,6 +165,30 @@ TCP RX and TX are fundamentally asymmetric on this single-core CPU:
 2. Single-core CPU (no parallel TX submit + TX reclaim)
 3. TX requires bidirectional processing (data + ACKs) unlike RX (data only + rare ACKs)
 
+### 3.1b Effect of network topology on TX throughput
+
+An interesting counter-intuitive result: **TCP TX through a router (57 Mbps) is higher
+than TCP TX with a direct cable (44 Mbps)**, while TCP RX shows the opposite pattern
+(45 Mbps through router vs 92 Mbps direct).
+
+This confirms the ACK-driven IRQ contention model described above:
+
+- **Direct cable** (sub-ms RTT): TCP ACKs return almost instantly. Each ACK triggers
+  an RX IRQ that preempts the ongoing `start_xmit` on the single-core CPU. The high
+  ACK frequency maximizes IRQ contention → worst-case TX throughput (44 Mbps).
+  Conversely, RX benefits from the low latency — the sender's congestion window opens
+  quickly → best-case RX throughput (92 Mbps).
+
+- **Through a router** (higher RTT, store-and-forward buffering): The router smooths
+  ACK timing by absorbing bursts in its packet buffer. ACKs arrive less frequently and
+  in batches → fewer RX IRQs → less preemption of `start_xmit` → TX improves to 57 Mbps.
+  Conversely, RX drops to 45 Mbps because the router's store-and-forward latency and
+  buffer management throttle the incoming traffic.
+
+The direct cable test is the correct benchmark: it reveals the worst-case TX performance
+(maximum ACK-driven IRQ contention) and the best-case RX performance (no intermediate
+buffering). All measurements in this document use direct cable.
+
 ### 3.2 Why UDP throughput is worse than TCP
 
 **UDP RX (2.6 Mbps vs TCP RX 92 Mbps) — IRQ storm kills userspace:**
