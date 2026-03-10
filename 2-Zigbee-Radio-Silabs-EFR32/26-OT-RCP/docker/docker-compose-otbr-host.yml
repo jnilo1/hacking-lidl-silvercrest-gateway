@@ -1,19 +1,20 @@
-# Docker Compose for Thread/Matter testing with Lidl Silvercrest Gateway
+# Use case 2: OTBR on host — Thread/Matter with OTBR running on your PC
 #
-# Stack: OTBR + Matter Server + Home Assistant
-# See also: docker-compose-zoh.yml for Zigbee2MQTT + zigbee-on-host setup.
+# Stack: OTBR (Docker) + Matter Server + Home Assistant
+# The gateway runs serialgateway only — OTBR runs here on the host.
+#
+# See also:
+#   docker-compose-zoh.yml          — Use case 1: Zigbee (zigbee-on-host)
+#   docker-compose-otbr-gateway.yml — Use case 3: OTBR on gateway (v2.0+)
 #
 # Usage:
-#   1. Flash ot-rcp.gbl to the EFR32
+#   1. Flash ot-rcp.gbl to the EFR32, flash userdata in Zigbee mode
 #   2. Ensure serialgateway is running on the gateway (port 8888, 115200 baud)
-#   3. docker compose up -d
-#   4. Open Home Assistant at http://localhost:8123
-#   5. Add integrations: OTBR (localhost:8081) + Matter (localhost:5580)
-#   6. Commission Matter devices via Settings → Devices → Add Device → Matter
-#
-# References:
-#   https://github.com/bnutzer/docker-otbr-tcp
-#   https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47
+#   3. Edit RCP_HOST and OTBR_BACKBONE_IF below
+#   4. docker compose -f docker-compose-otbr-host.yml up -d
+#   5. Open Home Assistant at http://localhost:8123
+#   6. Add integrations: OTBR (localhost:8081) + Matter (localhost:5580)
+#   7. Commission Matter devices via Settings → Devices → Add Device → Matter
 
 services:
   # OpenThread Border Router — connects to OT-RCP via serialgateway
@@ -46,7 +47,7 @@ services:
   # Needs D-Bus for BLE commissioning
   matter-server:
     container_name: matter-server
-    image: ghcr.io/home-assistant-libs/python-matter-server:stable
+    image: ghcr.io/matter-js/python-matter-server:stable
     network_mode: host
     restart: unless-stopped
     privileged: true

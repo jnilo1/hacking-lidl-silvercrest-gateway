@@ -1,188 +1,168 @@
 # OpenThread RCP Firmware for Lidl Silvercrest Gateway
 
-OpenThread Radio Co-Processor (RCP) firmware for the EFR32MG1B232F256GM48 chip found in the Lidl Silvercrest Smart Home Gateway.
+OpenThread Radio Co-Processor (RCP) firmware for the EFR32MG1B232F256GM48 chip
+found in the Lidl Silvercrest Smart Home Gateway.
 
-This firmware transforms the gateway into an **OpenThread RCP** that works with **zigbee-on-host** (for Zigbee) or **Thread/Matter** networks.
+This firmware transforms the EFR32 into a **raw 802.15.4 radio** using the
+Spinel/HDLC protocol. It is the **single firmware** shared by all 3 use cases
+described below.
 
-## Features
+---
 
-- **OpenThread RCP** - Spinel/HDLC protocol over UART
-- **zigbee-on-host compatible** - Works with Zigbee2MQTT 2.x `zoh` adapter
-- **Thread/Matter ready** - Can be used for Thread border routers
-- **Hardware radio acceleration** - All MAC operations in hardware
-- **Minimal footprint** - ~100KB flash, ~16KB RAM
+## 1. Firmware
 
-## About zigbee-on-host
-
-This firmware works with [**zigbee-on-host**](https://github.com/Nerivec/zigbee-on-host), an open-source Zigbee stack developed by [@Nerivec](https://github.com/Nerivec).
-
-Unlike proprietary solutions like Silicon Labs' zigbeed, zigbee-on-host is:
-- **Fully open-source** - transparent, auditable, community-driven
-- **Integrated in Zigbee2MQTT 2.x** as the `zoh` adapter
-- **Actively developed** - contributions welcome!
-
-> **Note:** zigbee-on-host is still under active development. Check the
-> [GitHub repository](https://github.com/Nerivec/zigbee-on-host) for the latest
-> updates, known issues, and to report bugs.
-
-## Hardware
+### Hardware
 
 | Component | Specification |
 |-----------|---------------|
 | Zigbee SoC | EFR32MG1B232F256GM48 |
-| Flash | 256KB |
-| RAM | 32KB |
-| Radio | 2.4GHz IEEE 802.15.4 |
+| Flash | 256 KB (firmware uses ~100 KB) |
+| RAM | 32 KB (firmware uses ~16 KB) |
+| Radio | 2.4 GHz IEEE 802.15.4 |
 | UART | PA0 (TX), PA1 (RX), PA4 (RTS), PA5 (CTS) @ 115200 baud |
 
----
+### Flash Pre-built Firmware (recommended)
 
-## Option 1: Flash Pre-built Firmware (Recommended)
-
-Pre-built firmware is available in the `firmware/` directory. From the repository root:
+From the repository root:
 
 ```bash
 ./flash_efr32.sh <GATEWAY_IP>
 # Select [4] OT-RCP
 ```
 
-The script handles everything (serialgateway restart, flash, reboot).
+The script handles serialgateway restart, flash, and reboot.
 
----
-
-## Option 2: Build from Source
+### Build from Source
 
 For users who want to customize the firmware or use a different SDK version.
 
-### Prerequisites
-
-Install Silicon Labs tools (see `1-Build-Environment/12-silabs-toolchain/`):
-
 ```bash
-cd 1-Build-Environment/12-silabs-toolchain
-./install_silabs.sh
-```
+# Install Silicon Labs tools (once)
+cd 1-Build-Environment/12-silabs-toolchain && ./install_silabs.sh
 
-This installs:
-- `slc-cli` - Silicon Labs Configurator
-- `arm-none-eabi-gcc` - ARM GCC toolchain
-- `commander` - Simplicity Commander
-- Gecko SDK with OpenThread
-
-### Build
-
-```bash
+# Build
 cd 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP
 ./build_ot_rcp.sh
 ```
 
-### Output
+Output: `firmware/ot-rcp.gbl` (UART flash) and `firmware/ot-rcp.s37` (J-Link/SWD).
 
-```
-firmware/
-├── ot-rcp.gbl   # For UART/Xmodem flashing
-└── ot-rcp.s37   # For J-Link/SWD flashing
-```
+### Technical Notes
 
-### Flash
-
-**Via network (same as Option 1):**
-```bash
-./flash_efr32.sh <GATEWAY_IP>
-# Select [4] OT-RCP
-```
-
-**Via J-Link/SWD** (if you have physical access to the SWD pads):
-```bash
-commander flash firmware/ot-rcp.s37 \
-    --device EFR32MG1B232F256GM48
-```
+- **UART driver:** Uses `uartdrv_usart` (low-level, DMA, async), not `iostream_usart`
+  which would corrupt the binary Spinel stream with LF→CRLF conversion.
+- **RTL8196E boot delay:** 1-second delay at startup for host UART initialization.
+- **Hardware flow control:** RTS/CTS enabled, required for reliable operation over TCP.
+- **Hardware radio acceleration:** All 802.15.4 MAC operations in hardware.
 
 ---
 
-## Usage
+## 2. Use Cases
 
-### Architecture
+All 3 use cases run the **same OT-RCP firmware** on the EFR32. They differ in
+what runs on the gateway's RTL8196E main CPU and on the Docker host.
 
-The OT-RCP firmware supports two modes via separate Docker stacks:
+| # | Use case | Protocol | Gateway runs | Host runs (Docker) |
+|---|----------|----------|-------------|---------------------|
+| 1 | **ZoH** | Zigbee | serialgateway | Zigbee2MQTT + Mosquitto |
+| 2 | **OTBR on host** | Thread/Matter | serialgateway | OTBR + Matter Server + HA |
+| 3 | **OTBR on gateway** | Thread/Matter | otbr-agent (native) | Matter Server + HA |
 
-**Zigbee** — Zigbee2MQTT with zigbee-on-host adapter:
+### Use case 1: ZoH (Zigbee on Host)
+
+The Zigbee stack ([zigbee-on-host](https://github.com/Nerivec/zigbee-on-host)
+by [@Nerivec](https://github.com/Nerivec)) runs on the host via Zigbee2MQTT's
+`zoh` adapter. The gateway only bridges UART to TCP.
 
 ```
 Zigbee Devices                        Docker Host
-       │  802.15.4                   ┌──────────────────────────┐
-       ▼                             │  Zigbee2MQTT (zoh)       │
+       │  802.15.4                  ┌──────────────────────────┐
+       ▼                            │  Zigbee2MQTT (zoh)       │
 ┌─────────────┐  UART   ┌────────┐  │  + zigbee-on-host stack  │
-│  EFR32 RCP  │◄──────►│ serial  │◄─┤  Web UI :8080            │
-│  Spinel/    │ 115200  │ gateway │  └──────────────────────────┘
-│  HDLC       │         │ :8888   │
+│  EFR32 RCP  │◄──────► │ serial │◄─┤  Web UI :8080            │
+│  Spinel/    │ 115200  │ gateway│  └──────────────────────────┘
+│  HDLC       │         │ :8888  │
 └─────────────┘         └────────┘
+     Gateway (Zigbee mode)
 ```
 
-**Thread/Matter** — OTBR + Home Assistant + Companion App:
+**Gateway setup:** flash userdata in **Zigbee** mode.
+
+> zigbee-on-host is open-source, integrated in Zigbee2MQTT 2.x, and under
+> active development. See the [GitHub repo](https://github.com/Nerivec/zigbee-on-host).
+
+### Use case 2: OTBR on Host
+
+OTBR runs in a Docker container on the host PC. It connects to the gateway's
+`serialgateway` over TCP to reach the EFR32 radio.
 
 ```
 Matter Devices                        Docker Host
-       │  Thread 802.15.4            ┌──────────────────────────┐
-       ▼                             │  OTBR (border router)    │
+       │  Thread 802.15.4           ┌──────────────────────────┐
+       ▼                            │  OTBR (Docker container) │
 ┌─────────────┐  UART   ┌────────┐  │  REST API :8081          │
-│  EFR32 RCP  │◄──────►│ serial  │◄─┤  Matter Server :5580     │
-│  Spinel/    │ 115200  │ gateway │  │  Home Assistant :8123    │
-│  HDLC       │         │ :8888   │  │  ← Companion App (BLE)  │
+│  EFR32 RCP  │◄──────► │ serial │◄─┤  Matter Server :5580     │
+│  Spinel/    │ 115200  │ gateway│  │  Home Assistant :8123    │
+│  HDLC       │         │ :8888  │  │  ← Companion App (BLE)   │
 └─────────────┘         └────────┘  └──────────────────────────┘
+     Gateway (Zigbee mode)
 ```
 
-The RTL8196E runs `serialgateway` to bridge the EFR32's UART to TCP port 8888.
-See [34-Userdata](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/) for gateway setup.
+**Gateway setup:** flash userdata in **Zigbee** mode (serialgateway bridges
+the radio to TCP; OTBR runs on the host).
 
-### Docker Stacks
+### Use case 3: OTBR on Gateway (v2.0+)
 
-Pre-configured Docker Compose files are in [`docker/`](docker/README.md):
+OTBR runs **natively on the gateway** (otbr-agent on the RTL8196E CPU).
+No serialgateway, no TCP bridge between OTBR and the radio. The host only
+runs Matter Server + Home Assistant.
 
-| Stack | Command | Use case |
-|-------|---------|----------|
-| Zigbee (zoh) | `docker compose -f docker-compose-zoh.yml up -d` | Zigbee2MQTT |
-| Thread/Matter | `docker compose up -d` | OTBR + Home Assistant + Matter |
+```
+Matter Devices                                       Docker Host
+       │  Thread 802.15.4                          ┌──────────────────┐
+       ▼                                           │  Matter Server   │
+┌─────────────┐  UART   ┌──────────────────┐  REST │  :5580           │
+│  EFR32 RCP  │◄──────► │  otbr-agent      │◄──────┤  Home Assistant  │
+│  Spinel/    │ 115200  │  (native on CPU) │ :8081 │  :8123           │
+│  HDLC       │         │  REST API :8081  │       │  ← Companion App │
+└─────────────┘         └──────────────────┘       └──────────────────┘
+     Gateway (Thread mode)
+```
 
-See [`docker/README.md`](docker/README.md) for full setup instructions
-(IPv6 forwarding, HA integrations, Companion App commissioning, chip-tool alternative).
+**Gateway setup:** flash userdata in **Thread** mode.
 
-### Tested Devices
+**Advantages over use case 2:**
+- Lower latency — OTBR talks directly to the EFR32 via UART
+- Simpler — no OTBR Docker container to manage
+- Self-contained — Thread mesh stays up even without the host
 
-| Device | Protocol | Stack | Status |
-|--------|----------|-------|--------|
-| Xiaomi LYWSD03MMC | Zigbee | zoh | OK |
-| IKEA TIMMERFLOTTE | Matter/Thread | OTBR + HA Companion App | OK (22.8 °C, 54.69 %) |
+This is the **recommended setup** for Thread/Matter since v2.0.
 
 ---
 
-## Technical Details
+## 3. Docker Stacks
 
-### Memory Usage
+Pre-configured Docker Compose files are in [`docker/`](docker/):
 
-| Resource | Used | Available |
-|----------|------|-----------|
-| Flash | ~100 KB | 256 KB |
-| RAM | ~16 KB | 32 KB |
+| # | Use case | Compose file | Command |
+|---|----------|-------------|---------|
+| 1 | ZoH | `docker-compose-zoh.yml` | `docker compose -f docker-compose-zoh.yml up -d` |
+| 2 | OTBR on host | `docker-compose-otbr-host.yml` | `docker compose -f docker-compose-otbr-host.yml up -d` |
+| 3 | OTBR on gateway | `docker-compose-otbr-gateway.yml` | `docker compose -f docker-compose-otbr-gateway.yml up -d` |
 
-### UART Driver: uartdrv (not iostream)
+See [`docker/README.md`](docker/README.md) for full setup instructions:
+IPv6 forwarding, HA integrations, Companion App commissioning, chip-tool
+alternative, and troubleshooting.
 
-OpenThread uses `uartdrv_usart` directly for Spinel/HDLC communication — **not** the `iostream_usart` component.
+---
 
-The distinction matters:
+## 4. Tested Devices
 
-| Driver | Level | Usage |
-|--------|-------|-------|
-| `uartdrv_usart` | Low-level HAL, DMA, async | Spinel/HDLC binary protocol ← **this project** |
-| `iostream_usart` | High-level stdio/printf abstraction (built on uartdrv) | Debug console, CLI, logs |
-
-`iostream` adds text-oriented processing (LF→CRLF conversion, buffering) that would corrupt a binary Spinel stream. The OpenThread platform layer (`otSysProcessDrivers`) calls `uartdrv` APIs directly.
-
-### Features
-
-- **RTL8196E Boot Delay:** 1-second delay for host UART initialization
-- **Hardware Flow Control:** RTS/CTS required for reliable TCP operation
-- **Hardware Radio Acceleration:** All MAC operations in hardware
+| Device | Protocol | Use case | Status |
+|--------|----------|----------|--------|
+| Xiaomi LYWSD03MMC | Zigbee | 1 (ZoH) | OK |
+| IKEA TIMMERFLOTTE | Matter/Thread | 2 (OTBR host) | OK — 22.8 °C, 54.69 % |
+| IKEA TIMMERFLOTTE | Matter/Thread | 3 (OTBR gateway) | OK |
 
 ---
 
@@ -197,13 +177,8 @@ The distinction matters:
 ### HDLC Parsing Errors
 
 1. Ensure baud rate is 115200 (not higher)
-2. Check for Zigbee device flooding (remove battery from problematic devices)
+2. Check for device flooding (remove battery from problematic devices)
 3. Verify hardware flow control is enabled
-
-### Device Won't Pair
-
-1. Factory reset the device (hold button while inserting battery)
-2. Ensure permit join is enabled in Z2M
 
 ---
 
@@ -213,20 +188,21 @@ The distinction matters:
 26-OT-RCP/
 ├── build_ot_rcp.sh              # Build script
 ├── README.md                    # This file
+├── THREAD-MATTER-PRIMER.md      # Educational guide: Thread vs Zigbee vs Matter
 ├── patches/
 │   ├── ot-rcp.slcp              # Project config (based on SDK sample)
-│   ├── ot-rcp.slcp.sdk-original # Original SDK sample for reference
 │   ├── main.c                   # Entry point (RTL8196E boot delay)
 │   ├── app.c / app.h            # OT instance init + hardware watchdog
 │   ├── sl_uartdrv_usart_vcom_config.h  # UART: 115200, HW flow control
 │   └── sl_rail_util_pti_config.h       # PTI disabled (suppresses SDK warning)
 ├── docker/                      # Docker Compose stacks
-│   ├── README.md                # Setup guide (Zigbee + Thread/Matter)
-│   ├── docker-compose.yml       # Thread/Matter: OTBR + Matter Server + HA
-│   ├── docker-compose-zoh.yml   # Zigbee: Mosquitto + Zigbee2MQTT (zoh)
+│   ├── README.md                # Full setup guide (3 use cases)
+│   ├── docker-compose-zoh.yml           # Use case 1: ZoH
+│   ├── docker-compose-otbr-host.yml     # Use case 2: OTBR on host
+│   ├── docker-compose-otbr-gateway.yml  # Use case 3: OTBR on gateway
 │   ├── z2m/configuration.yaml   # Zigbee2MQTT config
 │   └── mosquitto/mosquitto.conf # MQTT broker config
-└── firmware/                    # Output (generated)
+└── firmware/                    # Pre-built binaries
     ├── ot-rcp.gbl               # For UART flashing
     └── ot-rcp.s37               # For SWD flashing
 ```
@@ -235,18 +211,19 @@ The distinction matters:
 
 ## Related Projects
 
-- `24-NCP-UART-HW/` - NCP firmware (EZSP protocol)
-- `25-RCP-UART-HW/` - RCP firmware (CPC protocol, for cpcd + zigbeed)
-- `27-Router/` - Autonomous Zigbee router (no host needed)
+- `24-NCP-UART-HW/` — NCP firmware (EZSP protocol)
+- `25-RCP-UART-HW/` — RCP firmware (CPC protocol, for cpcd + zigbeed)
+- `27-Router/` — Autonomous Zigbee router (no host needed)
+- `3-Main-SoC.../34-Userdata/` — Gateway firmware with native OTBR (v2.0+)
 
 ## References
 
-- [zigbee-on-host](https://github.com/Nerivec/zigbee-on-host) - Open-source Zigbee stack by Nerivec
+- [zigbee-on-host](https://github.com/Nerivec/zigbee-on-host) — Open-source Zigbee stack by Nerivec
 - [Zigbee2MQTT](https://www.zigbee2mqtt.io/)
 - [OpenThread RCP](https://openthread.io/platforms/co-processor)
-- [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) - OTBR Docker image for TCP-based RCPs
-- [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/) - Official Matter documentation
-- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) - Thread/Matter on the Lidl gateway
+- [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) — OTBR Docker image for TCP-based RCPs
+- [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/)
+- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) — Thread/Matter on the Lidl gateway
 
 ## License
 

@@ -1,0 +1,60 @@
+# Use case 3: OTBR on gateway — Thread/Matter with OTBR running on the gateway
+#
+# Stack: Matter Server + Home Assistant (NO OTBR container)
+# The gateway runs otbr-agent natively (v2.0+) — REST API on :8081.
+# This stack provides only HA + Matter Server on the host.
+#
+# See also:
+#   docker-compose-zoh.yml          — Use case 1: Zigbee (zigbee-on-host)
+#   docker-compose-otbr-host.yml    — Use case 2: OTBR on host
+#
+# Prerequisites:
+#   1. Flash ot-rcp.gbl to the EFR32
+#   2. Flash userdata in Thread mode (flash_userdata.sh → select "Thread")
+#   3. Verify OTBR is running: curl http://<GATEWAY_IP>:8081/node
+#
+# Usage:
+#   1. Edit GATEWAY_IP below
+#   2. docker compose -f docker-compose-otbr-gateway.yml up -d
+#   3. Open Home Assistant at http://localhost:8123
+#   4. Add integrations:
+#      - OTBR: http://<GATEWAY_IP>:8081  (NOT localhost — it runs on the gateway)
+#      - Matter: ws://localhost:5580/ws
+#   5. Commission Matter devices via Settings → Devices → Add Device → Matter
+
+x-gateway-ip: &gateway-ip "192.168.1.88"
+
+services:
+  # Python Matter Server — Matter fabric controller
+  # Needs D-Bus for BLE commissioning
+  matter-server:
+    container_name: matter-server
+    image: ghcr.io/matter-js/python-matter-server:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    security_opt:
+      - apparmor=unconfined
+    volumes:
+      - matter_data:/data
+      - /run/dbus:/run/dbus:ro
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+    environment:
+      - TZ=Europe/Paris
+
+  # Home Assistant — UI for commissioning and device management
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - ha_config:/config
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=Europe/Paris
+
+volumes:
+  matter_data:
+  ha_config:

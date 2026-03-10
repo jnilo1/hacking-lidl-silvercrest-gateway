@@ -1,14 +1,19 @@
-# Docker Compose for Zigbee stack with Lidl Silvercrest Gateway (OT-RCP mode)
+# Use case 1: ZoH — Zigbee via zigbee-on-host (Zigbee2MQTT zoh adapter)
 #
-# Unlike 25-RCP-UART-HW (which requires cpcd + zigbeed), OT-RCP uses the
-# Spinel/HDLC protocol directly. Zigbee2MQTT connects to the gateway's
-# serialgateway TCP socket via the zigbee-on-host (zoh) adapter.
+# Stack: Mosquitto + Zigbee2MQTT
+# The Zigbee stack runs on the host (zigbee-on-host by @Nerivec), not on
+# the EFR32. OT-RCP provides the raw 802.15.4 radio via Spinel/HDLC.
+#
+# See also:
+#   docker-compose-otbr-host.yml    — Use case 2: OTBR on host
+#   docker-compose-otbr-gateway.yml — Use case 3: OTBR on gateway (v2.0+)
 #
 # Usage:
-#   1. Flash ot-rcp.gbl to the EFR32
+#   1. Flash ot-rcp.gbl to the EFR32, flash userdata in Zigbee mode
 #   2. Ensure serialgateway is running on the gateway (port 8888)
-#   3. docker compose up -d
-#   4. Access Zigbee2MQTT at http://localhost:8080
+#   3. Edit z2m/configuration.yaml — set your gateway IP
+#   4. docker compose -f docker-compose-zoh.yml up -d
+#   5. Access Zigbee2MQTT at http://localhost:8080
 
 services:
   # MQTT broker

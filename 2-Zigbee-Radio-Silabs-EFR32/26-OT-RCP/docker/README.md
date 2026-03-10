@@ -1,53 +1,64 @@
 # Docker Stacks for OT-RCP Firmware
 
-> **Note:** Since v2.0.0, OTBR can run **natively on the gateway** without Docker
-> or an external host. See [`3-Main-SoC.../34-Userdata/ot-br-posix/`](../../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/).
-> The Docker stacks below remain useful for running OTBR on a more powerful host
-> or for the Zigbee (zoh) stack.
+The OT-RCP firmware supports **3 use cases** with the same EFR32 firmware.
+Each use case has its own Docker Compose file.
 
-Two Docker Compose stacks for the Lidl Silvercrest Gateway running OT-RCP
-firmware. Choose based on your use case:
+## Use Cases at a Glance
 
-| Stack | File | Use case |
-|-------|------|----------|
-| **Zigbee (zoh)** | `docker-compose-zoh.yml` | Zigbee devices via Zigbee2MQTT |
-| **Thread/Matter** | `docker-compose.yml` | Matter devices via OTBR + Home Assistant |
+| # | Use case | Compose file | What runs on gateway | What runs on host (Docker) |
+|---|----------|-------------|---------------------|---------------------------|
+| 1 | **ZoH** (Zigbee) | `docker-compose-zoh.yml` | serialgateway | Zigbee2MQTT + Mosquitto |
+| 2 | **OTBR on host** | `docker-compose-otbr-host.yml` | serialgateway | OTBR + Matter Server + HA |
+| 3 | **OTBR on gateway** | `docker-compose-otbr-gateway.yml` | otbr-agent (native) | Matter Server + HA |
 
-Both stacks connect to the same gateway hardware — the OT-RCP firmware supports
-Zigbee (via zigbee-on-host) and Thread/Matter (via OTBR). Only run **one stack
-at a time** since they share the serial port.
+```
+                          Use case 1: ZoH            Use case 2: OTBR host      Use case 3: OTBR gateway
+                        ┌──────────────────┐       ┌──────────────────┐       ┌──────────────────┐
+                        │  Zigbee2MQTT     │       │  OTBR (Docker)   │       │  Matter Server   │
+         Docker host    │  + Mosquitto     │       │  Matter Server   │       │  Home Assistant  │
+                        │  Web UI :8080    │       │  Home Assistant  │       │                  │
+                        └───────┬──────────┘       └───────┬──────────┘       └───────┬──────────┘
+                                │ TCP :8888                │ TCP :8888                │ REST :8081
+                        ┌───────┴──────────┐       ┌───────┴──────────┐       ┌───────┴──────────┐
+         Gateway        │  serialgateway   │       │  serialgateway   │       │  otbr-agent      │
+         (RTL8196E)     │  (Zigbee mode)   │       │  (Zigbee mode)   │       │  (Thread mode)   │
+                        └───────┬──────────┘       └───────┬──────────┘       └───────┬──────────┘
+                                │ UART 115200              │ UART 115200              │ UART 115200
+                        ┌───────┴──────────┐       ┌───────┴──────────┐       ┌───────┴──────────┐
+         EFR32          │  OT-RCP          │       │  OT-RCP          │       │  OT-RCP          │
+                        │  (same firmware) │       │  (same firmware) │       │  (same firmware) │
+                        └──────────────────┘       └──────────────────┘       └──────────────────┘
+```
+
+**Key difference between use cases 2 and 3:** In use case 2, OTBR runs in Docker
+on your PC and connects to the gateway's `serialgateway` over TCP. In use case 3
+(v2.0+), OTBR runs natively on the gateway's RTL8196E CPU — no serialgateway, no
+TCP bridge. The host only needs Matter Server + Home Assistant.
+
+---
 
 ## Requirements
 
 ### On the Lidl Gateway
 
-1. **EFR32MG1B flashed with OT-RCP firmware** (`ot-rcp.gbl`)
-2. **serialgateway running** on port 8888, 115200 baud
+- **EFR32 flashed with OT-RCP firmware** (`ot-rcp.gbl`)
+- **Userdata flashed** in the correct radio mode:
+  - Use cases 1 & 2: Zigbee mode (`flash_userdata.sh` → select Zigbee)
+  - Use case 3: Thread mode (`flash_userdata.sh` → select Thread)
 
 ### On Your Computer
 
 - Docker and Docker Compose
 - Wired Ethernet to the gateway (recommended)
-- For Thread/Matter: Bluetooth adapter (BLE commissioning)
+- For Thread/Matter: Bluetooth adapter (BLE commissioning via HA Companion App)
 
 ---
 
-## Stack 1: Zigbee (zigbee-on-host)
+## Use Case 1: ZoH — Zigbee (zigbee-on-host)
 
 Runs Zigbee2MQTT with the `zoh` adapter. The Zigbee stack runs on the host
-(zigbee-on-host by [@Nerivec](https://github.com/Nerivec/zigbee-on-host)),
-not on the EFR32.
-
-```
-Lidl Gateway                          Docker Host
-┌───────────────────────┐            ┌──────────────────────────────────┐
-│                       │            │                                  │
-│  EFR32 ◄───► serial   │◄── TCP ──►│  Zigbee2MQTT (zoh adapter)       │
-│  (RCP)      gateway   │   :8888   │  + zigbee-on-host stack          │
-│             115200    │            │  Web UI at :8080                 │
-│                       │            │                                  │
-└───────────────────────┘            └──────────────────────────────────┘
-```
+([zigbee-on-host](https://github.com/Nerivec/zigbee-on-host) by
+[@Nerivec](https://github.com/Nerivec)), not on the EFR32.
 
 ### Quick Start
 
@@ -75,207 +86,145 @@ Lidl Gateway                          Docker Host
 
 ---
 
-## Stack 2: Thread/Matter (OTBR + Home Assistant)
+## Use Case 2: OTBR on Host — Thread/Matter (Docker)
 
-Runs an OpenThread Border Router that forms a Thread network. Matter devices
-are commissioned using the **Home Assistant Companion App** on your phone —
-the phone's Bluetooth handles the BLE pairing, then the device joins the
-Thread network via OTBR.
-
-```
-Matter Device (e.g. IKEA TIMMERFLOTTE)
-       │  Thread 802.15.4
-       ▼
-┌───────────────────────┐            ┌──────────────────────────────────┐
-│  EFR32 ◄───► serial   │◄── TCP ──►│  OTBR (bnutzer/otbr-tcp)         │
-│  (RCP)      gateway   │   :8888   │  Web UI :8080, REST API :8081    │
-│             115200    │            │                                  │
-└───────────────────────┘            │  Matter Server (:5580)           │
-                                     │  Home Assistant (:8123)          │
-                                     └──────────────────────────────────┘
-                                              ▲
-                                              │ BLE (commissioning)
-                                     ┌────────┴────────┐
-                                     │  HA Companion    │
-                                     │  App (Android)   │
-                                     └─────────────────┘
-```
+OTBR runs in Docker on your PC, connecting to the gateway's `serialgateway`
+over TCP. The full stack (OTBR + Matter Server + HA) runs on the host.
 
 ### Quick Start
 
-#### 1. Enable IPv6 Forwarding on Your Host
+#### 1. Enable IPv6 Forwarding on the Host
 
-Thread devices communicate over IPv6. The border router needs IPv6 forwarding
-to route traffic between the Thread mesh and your local network:
+OTBR runs on the host in this use case — the host needs IPv6 forwarding to
+route Thread traffic between the mesh and the local network.
 
 ```bash
 sudo sysctl -w net.ipv6.conf.all.forwarding=1
-```
-
-To make this permanent:
-
-```bash
+# Permanent:
 echo "net.ipv6.conf.all.forwarding=1" | sudo tee /etc/sysctl.d/99-thread.conf
-sudo sysctl --system
 ```
 
 #### 2. Configure
 
-Edit `docker-compose.yml`:
-
+Edit `docker-compose-otbr-host.yml`:
 ```yaml
 environment:
   - RCP_HOST=192.168.1.X     # ← Your gateway's IP
   - OTBR_BACKBONE_IF=enp2s0  # ← Your host's Ethernet interface (ip link)
 ```
 
-#### 3. Start the Stack
+#### 3. Start
 
 ```bash
-docker compose up -d
-```
-
-Wait ~30 seconds, then verify OTBR is connected:
-
-```bash
-docker exec otbr ot-ctl state
-# Should print: "leader" (or "detached" → wait a bit longer)
+docker compose -f docker-compose-otbr-host.yml up -d
 ```
 
 #### 4. Configure Home Assistant
 
-Open http://localhost:8123 and create your account (first time only).
+Open http://localhost:8123, create your account, then add integrations
+(**Settings → Devices & Services → Add Integration**):
 
-Then add the required integrations in **Settings → Devices & Services → Add Integration**:
+1. **Open Thread Border Router** — URL: `http://localhost:8081`
+2. **Matter (BETA)** — auto-detects on `localhost:5580` (or manual: `ws://localhost:5580/ws`)
 
-1. **Open Thread Border Router** — enter URL: `http://localhost:8081`
-2. **Matter (BETA)** — should auto-detect the Matter Server on `localhost:5580`
+#### 5. Set Thread Network as Preferred
 
-> If Matter doesn't auto-detect, add it manually with: `ws://localhost:5580/ws`
-
-#### 5. Set the Thread Network as Preferred
-
-Go to **Settings → Devices & Services → Thread → Configure**. Your network
-(named "OpenThreadDemo" by default) should appear. Click on it and select
+**Settings → Devices & Services → Thread → Configure** → select your network →
 **"Use as preferred network"**.
-
-This tells Home Assistant to use this Thread network when commissioning
-Matter devices.
-
-#### 6. Install the Companion App
-
-Install **"Home Assistant"** from the Google Play Store on your Android phone.
-
-At first launch, enter the URL of your HA instance: `http://<HOST_IP>:8123`
-(replace `<HOST_IP>` with your computer's IP address on the local network,
-**not** `localhost` — your phone needs to reach it over Wi-Fi).
-
-Log in with your HA credentials.
-
-#### 7. Sync Thread Credentials
-
-The Companion App needs the Thread network credentials to commission devices.
-This step is **required** — without it, commissioning fails with
-*"Your device requires a Thread border router"*.
-
-In the Companion App:
-**Settings → Companion App → Troubleshooting → Sync Thread credentials**
-
-#### 8. Commission a Matter Device
-
-You need the device's **Matter setup code** — either a QR code or an 11-digit
-manual pairing code, printed on the device or its packaging.
-
-In the Companion App or the HA web UI:
-**Settings → Devices & Services → Add Device → Add Matter device**
-
-Scan the QR code (or enter the manual code). The app will:
-1. Connect to the device via **BLE** (your phone's Bluetooth)
-2. Transfer the Thread network credentials
-3. The device joins the Thread mesh via OTBR
-4. The device appears in Home Assistant with its entities
-
-#### 9. Verify
-
-The commissioned device appears in **Settings → Devices & Services → Matter**
-with its sensors and controls. Example with an IKEA TIMMERFLOTTE:
-
-<img src="hacompanion.jpg" alt="IKEA TIMMERFLOTTE in HA Companion App" width="300">
-
-- Temperature: 22.8 °C
-- Humidity: 54.69 %
-- Battery: 100 %
-- Firmware version and OTA update status
-
-You can also verify from the command line:
-
-```bash
-# Check Thread children (commissioned devices)
-docker exec otbr ot-ctl child table
-
-# Check OTBR REST API
-curl -s http://localhost:8081/node | python3 -m json.tool
-```
 
 ### Services
 
-| Port | Service | Description |
-|------|---------|-------------|
-| 8080 | OTBR Web UI | Thread network management |
-| 8081 | OTBR REST API | Programmatic access to Thread state |
-| 5580 | Matter Server | Python Matter Server WebSocket API |
-| 8123 | Home Assistant | Home automation dashboard |
-
-### Data Persistence
-
-| Volume | Contents |
-|--------|----------|
-| `otbr_data` | Thread network state and credentials |
-| `matter_data` | Matter fabric and device data |
-| `ha_config` | Home Assistant configuration |
+| Port | Service |
+|------|---------|
+| 8080 | OTBR Web UI |
+| 8081 | OTBR REST API |
+| 5580 | Matter Server |
+| 8123 | Home Assistant |
 
 ---
 
-## Commissioning Notes
+## Use Case 3: OTBR on Gateway — Thread/Matter (native, v2.0+)
 
-### BLE Advertising Timeout
+OTBR runs **natively on the gateway** (otbr-agent on the RTL8196E CPU).
+No Docker OTBR container, no serialgateway, no TCP bridge between OTBR and
+the radio. The host only runs Matter Server + Home Assistant.
 
-Matter devices only advertise via BLE for a limited time after factory reset
-(typically 15-30 minutes). If the Companion App cannot find the device,
-factory reset it and try again immediately.
+This is the recommended setup for Thread/Matter since v2.0.
 
-### Factory Reset Between Attempts
+### Quick Start
 
-If commissioning fails partway through, the device may be in an inconsistent state.
-Always factory reset the device before retrying. After a successful commissioning,
-the device stops BLE advertising (it's now on Thread).
-
-### "Your device requires a Thread border router"
-
-The Companion App doesn't have the Thread credentials. Go to:
-**Settings → Companion App → Troubleshooting → Sync Thread credentials**
-
-### "Checking connectivity" hangs
-
-IPv6 forwarding is likely disabled on the Docker host. Enable it:
+#### 1. Flash the Gateway in Thread Mode
 
 ```bash
-sudo sysctl -w net.ipv6.conf.all.forwarding=1
+# Flash userdata — select "Thread" radio mode
+./flash_userdata.sh
 ```
 
-Also verify that the OTBR backbone interface matches your actual Ethernet
-interface (`ip link` to check, update `OTBR_BACKBONE_IF` in docker-compose.yml).
+Verify OTBR is running:
+```bash
+curl -s http://192.168.1.88:8081/node | python3 -m json.tool
+```
 
-### Alternative: chip-tool (CLI)
+#### 2. Start
 
-If you prefer command-line commissioning (or don't have an Android phone),
-you can use chip-tool in Docker:
+```bash
+docker compose -f docker-compose-otbr-gateway.yml up -d
+```
+
+> **Note:** IPv6 forwarding is handled by the gateway's `S70otbr` init script.
+> No need to configure it on the host — the host does not do border routing.
+
+#### 3. Configure Home Assistant
+
+Open http://localhost:8123, create your account, then add integrations:
+
+1. **Open Thread Border Router** — URL: `http://192.168.1.88:8081`
+   (the gateway's IP, **not** localhost — OTBR runs on the gateway)
+2. **Matter (BETA)** — auto-detects on `localhost:5580`
+
+#### 5. Set Thread Network as Preferred
+
+Same as use case 2: **Settings → Devices & Services → Thread → Configure**.
+
+### Services
+
+| Where | Port | Service |
+|-------|------|---------|
+| Gateway | 8081 | OTBR REST API |
+| Host | 5580 | Matter Server |
+| Host | 8123 | Home Assistant |
+
+### Advantages over Use Case 2
+
+- **Lower latency** — OTBR talks directly to the EFR32 via UART, no TCP bridge
+- **Simpler** — no OTBR Docker container to manage, no `network_mode: host` issues
+- **Self-contained** — gateway works even without the host running (Thread mesh stays up)
+
+---
+
+## Commissioning a Matter Device (Use Cases 2 & 3)
+
+### Via Home Assistant Companion App (recommended)
+
+1. Install **"Home Assistant"** from the Play Store
+2. Connect to your HA instance: `http://<HOST_IP>:8123`
+3. **Sync Thread credentials:**
+   Settings → Companion App → Troubleshooting → Sync Thread credentials
+4. **Commission:**
+   Settings → Devices & Services → Add Device → Add Matter device
+5. Scan the QR code or enter the 11-digit pairing code
+6. The app connects via BLE, transfers Thread credentials, device joins the mesh
+
+### Via chip-tool (CLI alternative)
 
 ```bash
 # Get the Thread dataset
+# Use case 2:
 docker exec otbr ot-ctl dataset active -x
+# Use case 3:
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl dataset active -x"
 
-# Commission a device (replace values)
+# Commission
 mkdir -p /tmp/chip-tool-storage
 docker run --rm --network host --privileged \
   -v /run/dbus:/run/dbus:ro \
@@ -286,93 +235,69 @@ docker run --rm --network host --privileged \
   hex:<THREAD_DATASET> \
   <SETUP_CODE> \
   --bypass-attestation-verifier true
-
-# Read temperature (node 1, endpoint 1)
-docker run --rm --network host --privileged \
-  -v /tmp/chip-tool-storage:/tmp \
-  atios/chip-tool:latest \
-  temperaturemeasurement read measured-value 1 1
 ```
 
-Production devices (IKEA, Eve, etc.) require `--bypass-attestation-verifier true`
-because chip-tool's test CA cannot verify production certificates. This is safe
-for home use — it only skips the manufacturer certificate check, not the encryption.
+`--bypass-attestation-verifier true` is needed for production devices (IKEA, Eve, etc.)
+— it skips the manufacturer certificate check (safe for home use).
+
+---
+
+## Commissioning Troubleshooting
+
+| Problem | Solution |
+|---------|----------|
+| "Your device requires a Thread border router" | Sync Thread credentials in Companion App |
+| "Checking connectivity" hangs | Enable IPv6 forwarding on the host |
+| Device not found / BLE scan timeout | Factory reset the device, check Bluetooth is on |
+| OTBR shows "leader" but no children | No devices commissioned yet — add one |
+| Matter integration shows "offline" | Check Matter Server container: `docker compose logs matter-server` |
+| OTBR: "Failed to bind socket" | Wrong backbone interface — check `ip link` |
+| BLE advertising timeout | Matter devices advertise 15-30 min after reset — act quickly |
 
 ---
 
 ## Tested Devices
 
-| Device | Type | Protocol | Commissioning | Data Read |
-|--------|------|----------|---------------|-----------|
-| IKEA TIMMERFLOTTE | Temp/humidity sensor | Matter/Thread | HA Companion App (BLE) | 22.8 °C, 54.69 %, battery 100 % |
-
----
-
-## Troubleshooting
-
-### OTBR: "Failed to bind socket" / TREL error
-
-Wrong backbone interface name. Check yours with `ip link` and update
-`OTBR_BACKBONE_IF` in `docker-compose.yml`.
-
-### Companion App: device not found / BLE scan timeout
-
-1. The device is not advertising — factory reset it
-2. Bluetooth must be enabled on your phone
-3. Stay close to the device during commissioning (BLE range)
-
-### OTBR shows "leader" but no children
-
-The Thread network is formed but no devices have joined yet. Commission a device
-via the Companion App (step 8 above).
-
-### Matter integration shows "offline"
-
-Check that the Matter Server container is running:
-
-```bash
-docker compose logs matter-server --tail=10
-```
-
-If it keeps restarting, ensure `/run/dbus` is accessible on the host:
-`systemctl status dbus`
+| Device | Protocol | Stack | Status |
+|--------|----------|-------|--------|
+| Xiaomi LYWSD03MMC | Zigbee | ZoH (use case 1) | OK |
+| IKEA TIMMERFLOTTE | Matter/Thread | OTBR on host (use case 2) | OK — 22.8 °C, 54.69 % |
+| IKEA TIMMERFLOTTE | Matter/Thread | OTBR on gateway (use case 3) | OK |
 
 ---
 
 ## Commands Reference
 
 ```bash
-# Start Thread/Matter stack
-docker compose up -d
-
-# Start Zigbee (zoh) stack
+# Use case 1: Zigbee (zoh)
 docker compose -f docker-compose-zoh.yml up -d
+docker compose -f docker-compose-zoh.yml down
 
-# Check OTBR state
+# Use case 2: OTBR on host
+docker compose -f docker-compose-otbr-host.yml up -d
+docker compose -f docker-compose-otbr-host.yml down
 docker exec otbr ot-ctl state
 docker exec otbr ot-ctl child table
-docker exec otbr ot-ctl neighbor table
 
-# Get Thread dataset
-docker exec otbr ot-ctl dataset active -x
+# Use case 3: OTBR on gateway
+docker compose -f docker-compose-otbr-gateway.yml up -d
+docker compose -f docker-compose-otbr-gateway.yml down
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl state"
+ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl child table"
+curl -s http://192.168.1.88:8081/node | python3 -m json.tool
 
-# View logs
-docker compose logs -f otbr
-docker compose logs -f matter-server
+# View logs (any stack)
+docker compose -f <compose-file> logs -f
 
-# Stop
-docker compose down
-
-# Full reset (deletes Thread network and all data)
-docker compose down -v
-rm -rf /tmp/chip-tool-storage/*
+# Full reset (deletes all data — Thread network, Matter fabric, HA config)
+docker compose -f <compose-file> down -v
 ```
 
 ## References
 
 - [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) — OTBR Docker image for TCP-based RCPs
-- [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/) — Official Matter documentation
-- [python-matter-server](https://github.com/home-assistant-libs/python-matter-server) — Matter Server used by Home Assistant
-- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) — Thread/Matter on the Lidl gateway
-- [chip-tool guide](https://project-chip.github.io/connectedhomeip-doc/development_controllers/chip-tool/chip_tool_guide.html) — CLI commissioning reference
 - [zigbee-on-host](https://github.com/Nerivec/zigbee-on-host) — Open-source Zigbee stack by Nerivec
+- [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/)
+- [python-matter-server](https://github.com/matter-js/python-matter-server) — Matter Server (migrated to matter-js org)
+- [chip-tool guide](https://project-chip.github.io/connectedhomeip-doc/development_controllers/chip-tool/chip_tool_guide.html)
+- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) — Thread/Matter on the Lidl gateway
