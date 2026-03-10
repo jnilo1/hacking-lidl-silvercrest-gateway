@@ -24,6 +24,13 @@ rootfs (33-), and userdata (34-).
 - S70otbr: starts only when radio mode is OTBR
 
 ### 32-Kernel
+- **Ethernet driver v2.0** — optimized for OTBR/NCP-UART workloads:
+  - TX IRQ mitigation: TX_ALL_DONE interrupt disabled, descriptors reclaimed in start_xmit and NAPI poll (eliminates 1 IRQ per TX packet)
+  - Ring buffers reduced from 600/500 to 128/128 — saves ~780 KB RAM (3.8% of free memory)
+  - TX stop/wake thresholds scaled proportionally (16→4, 64→16)
+  - UDP TX throughput +28% vs conditional reclaim approach
+  - OTBR use case validated: CoAP/mDNS traffic has 88× headroom vs UART bottleneck
+  - 29 hot-path functions placed in 16 KB on-chip I-MEM (SRAM) via `__iram` section
 - Syscon/regmap: PIN_MUX_SEL/SEL2 access coordinated via shared regmap (GPIO, UART, Ethernet)
 - Interrupt controller: chained_irq_enter/exit, GIMR enabled after handler install, raw_spinlock on GIMR
 - Ethernet: IRQ_NONE on spurious, tx_dropped accounting, napi_enable after HW init
