@@ -307,9 +307,10 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 		regmap_update_bits(hw->syscon, 0x40,
 				   (3 << 8) | (3 << 10) | (3 << 3) | (1 << 15),
 				   (1 << 3));
-		/* PIN_MUX_SEL2: clear bits 0-17 */
+		/* PIN_MUX_SEL2: clear MII/nRST bits, preserve bits [4:3]
+		 * (GPIO 11 / Port B3 — status LED via gpio-leds) */
 		regmap_update_bits(hw->syscon, 0x44,
-				   (3 << 0) | (3 << 3) | (3 << 6) | (3 << 9) |
+				   (3 << 0) | (3 << 6) | (3 << 9) |
 				   (3 << 12) | (7 << 15),
 				   0);
 	}
