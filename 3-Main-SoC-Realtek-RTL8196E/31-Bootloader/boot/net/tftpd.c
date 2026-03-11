@@ -127,6 +127,7 @@ static unsigned short CLIENT_port;
 static unsigned short SERVER_port;
 
 void tftpd_send_ack(unsigned short number);
+static void tftpd_send_notify(const char *msg);
 unsigned short ipheader_chksum(unsigned short *ip, int len);
 extern void twiddle(void);
 
@@ -267,17 +268,25 @@ static void handleTFTP_RRQ(void)
 	if (!tftpd_is_ready)
 		return;
 
-	if (file_length_to_server == 0) {
-		prom_printf("**TFTP RRQ Error: no data loaded\n");
-		return;
-	}
-
 	udpheader = tftp_udp_header();
 	if (udpheader->dest != htons(TFTP_PORT))
 		return;
 
 	CLIENT_port = ntohs(udpheader->src);
 	tftp_capture_client();
+
+	/* Read the entire SPI flash into RAM for backup */
+	{
+		unsigned long chip_sz = spi_flash_info[0].chip_size;
+		prom_printf("\n**Flash backup: reading %X bytes...\n", chip_sz);
+		if (!flashread(FILESTART, 0, chip_sz)) {
+			prom_printf("Flash Read Failed!\n");
+			return;
+		}
+		image_address = FILESTART;
+		file_length_to_server = chip_sz;
+		prom_printf("Flash Read OK\n");
+	}
 
 	read_src = image_address;
 	read_remain = file_length_to_server;
@@ -292,7 +301,7 @@ static void handleTFTP_RRQ(void)
 	read_src += sent;
 	read_remain -= sent;
 
-	prom_printf("\n**TFTP Server Download: %X bytes from %X\n",
+	prom_printf("**TFTP Server Download: %X bytes from %X\n",
 		    file_length_to_server, image_address);
 }
 
@@ -389,7 +398,7 @@ void autoreboot()
 		;
 }
 
-void checkAutoFlashing(unsigned long startAddr, int len)
+int checkAutoFlashing(unsigned long startAddr, int len)
 {
 	int i = 0;
 	unsigned long head_offset = 0, srcAddr, burnLen;
@@ -399,6 +408,7 @@ void checkAutoFlashing(unsigned long startAddr, int len)
 	IMG_HEADER_T Header;
 	int skip_check_signature = 0;
 	int trueorfaulse = 0;
+	int flash_ok = 0;
 
 	while ((head_offset + sizeof(IMG_HEADER_T)) < len) {
 		sum = 0;
@@ -480,7 +490,8 @@ void checkAutoFlashing(unsigned long startAddr, int len)
 				prom_printf("%.4s image checksum error at %X!\n",
 					    Header.signature,
 					    startAddr + head_offset);
-				return;
+				tftpd_send_notify("FAIL");
+				return 0;
 			}
 			if (!memcmp(Header.signature, ALL1_SIGNATURE,
 				    SIG_LEN)) {
@@ -507,7 +518,8 @@ void checkAutoFlashing(unsigned long startAddr, int len)
 				prom_printf("%.4s image checksum error at %X!\n",
 					    Header.signature,
 					    startAddr + head_offset);
-				return;
+				tftpd_send_notify("FAIL");
+				return 0;
 			}
 		}
 		prom_printf("checksum Ok !\n");
@@ -546,19 +558,23 @@ void checkAutoFlashing(unsigned long startAddr, int len)
 			       (unsigned char *)srcAddr, burnLen))
 			trueorfaulse = 1;
 
-		if (trueorfaulse)
+		if (trueorfaulse) {
 			prom_printf("\nFlash Write Succeeded!\n%s",
 				    "<RealTek>");
-		else {
+			flash_ok = 1;
+		} else {
 			prom_printf("\nFlash Write Failed!\n%s", "<RealTek>");
-			return;
+			tftpd_send_notify("FAIL");
+			return 0;
 		}
 
 		head_offset += Header.len + sizeof(IMG_HEADER_T);
 	}
+	tftpd_send_notify(flash_ok ? "OK" : "FAIL");
 	if (reboot) {
 		autoreboot();
 	}
+	return flash_ok;
 }
 
 static void prepareACK(void)
@@ -686,6 +702,57 @@ void tftpd_send_ack(unsigned short number)
 		      (unsigned char *)&tftp_tx,
 		      (unsigned short)sizeof(struct iphdr) +
 			  sizeof(struct udphdr) + 4);
+}
+
+#define NOTIFY_PORT 9999
+
+/**
+ * tftpd_send_notify - Send a UDP notification to the TFTP client
+ * @msg: null-terminated message string (e.g., "OK" or "FAIL")
+ *
+ * Sends a small UDP packet to the client on NOTIFY_PORT after a flash
+ * operation completes. The host script listens on this port to detect
+ * completion without requiring serial console confirmation.
+ */
+static void tftpd_send_notify(const char *msg)
+{
+	struct iphdr *ip;
+	struct udphdr *udp;
+	unsigned short msglen;
+	/* Reuse a stack buffer large enough for IP + UDP + short message */
+	unsigned char pkt[sizeof(struct iphdr) + sizeof(struct udphdr) + 32];
+
+	for (msglen = 0; msg[msglen] && msglen < 31; msglen++)
+		;
+	msglen++; /* include the NUL terminator */
+
+	ip = (struct iphdr *)pkt;
+	udp = (struct udphdr *)(pkt + sizeof(struct iphdr));
+
+	ip->verhdrlen = 0x45;
+	ip->service = 0;
+	ip->len = htons(sizeof(struct iphdr) + sizeof(struct udphdr) + msglen);
+	ip->ident = 0;
+	ip->frags = 0;
+	ip->ttl = 60;
+	ip->protocol = IPPROTO_UDP;
+	ip->chksum = 0;
+	ip->src.s_addr = arptable_tftp[TFTP_SERVER].ipaddr.s_addr;
+	ip->dest.s_addr = arptable_tftp[TFTP_CLIENT].ipaddr.s_addr;
+	ip->chksum = ipheader_chksum((unsigned short *)pkt,
+				     sizeof(struct iphdr));
+
+	udp->src = htons(NOTIFY_PORT);
+	udp->dest = htons(NOTIFY_PORT);
+	udp->len = htons(sizeof(struct udphdr) + msglen);
+	udp->chksum = 0;
+
+	memcpy(pkt + sizeof(struct iphdr) + sizeof(struct udphdr), msg, msglen);
+
+	prepare_txpkt(0, ETH_P_IP, arptable_tftp[TFTP_CLIENT].node,
+		      pkt,
+		      (unsigned short)(sizeof(struct iphdr) +
+				       sizeof(struct udphdr) + msglen));
 }
 
 /**

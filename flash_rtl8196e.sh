@@ -135,18 +135,14 @@ if [ "$ok" -ne 1 ]; then
     exit 1
 fi
 
-# Optional full flash backup via FLR (before any write)
+# Optional full flash backup via TFTP GET (bootloader reads flash automatically)
 echo ""
 read -r -p "Back up the current flash before flashing? [y/N] " do_backup
 if [[ "$do_backup" =~ ^[yY]$ ]]; then
     BACKUP_FILE="$(date '+%y%m%d-%H.%M')-Gw-Backup.bin"
-    echo ""
-    echo "On the bootloader serial console, run:"
-    echo "  FLR 80500000 00000000 01000000"
-    echo "Then confirm with Y and wait for 'Flash Read Succeeded!'"
-    read -r -p "Press Enter when done..."
-    echo "Downloading backup to ${BACKUP_FILE}..."
-    out=$(timeout 120 tftp -m binary "$TARGET_IP" -c get "$BACKUP_FILE" 2>&1) || true
+    echo "Downloading full flash backup to ${BACKUP_FILE}..."
+    echo "(Bootloader reads 16 MB SPI flash into RAM, then serves via TFTP)"
+    out=$(timeout 180 tftp -m binary "$TARGET_IP" -c get backup "$BACKUP_FILE" 2>&1) || true
     if echo "$out" | grep -qiE \
             "error|timeout|timed out|refused|failed|unknown host|illegal"; then
         echo "Warning: backup download failed: $out" >&2
@@ -155,7 +151,7 @@ if [[ "$do_backup" =~ ^[yY]$ ]]; then
     else
         size=$(stat -c %s "$BACKUP_FILE" 2>/dev/null || echo 0)
         if [ "$size" -eq 16777216 ]; then
-            echo "Backup saved: ${BACKUP_FILE} [OK]"
+            echo "Backup saved: ${BACKUP_FILE} (16 MB) [OK]"
         else
             echo "Warning: ${BACKUP_FILE} is ${size} bytes (expected 16777216)" >&2
             read -r -p "Continue with flashing anyway? [y/N] " cont
@@ -167,45 +163,89 @@ fi
 # Summary
 echo ""
 echo "Ready to flash 4 partitions to ${TARGET_IP}."
-echo "After each upload, wait for 'Flash Write Succeeded!' on the serial console before confirming"
 echo ""
 read -r -p "Proceed? [y/N] " confirm
 if [[ ! "$confirm" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
 
-# Helper: flash one image and wait for serial confirmation
-# Args: label dir file timeout_seconds
+NOTIFY_PORT=9999
+
+# Helper: flash one image and wait for bootloader UDP notification
+# Args: label dir file tftp_timeout notify_timeout
 flash_image() {
-    local label="$1" dir="$2" file="$3" tmo="$4"
+    local label="$1" dir="$2" file="$3" tftp_tmo="$4" notify_tmo="$5"
     echo ""
     echo "Flashing ${label}..."
+
+    # Start UDP listener BEFORE tftp (so we don't miss the notification)
+    local notify_file
+    notify_file=$(mktemp)
+    (timeout "$notify_tmo" nc -u -l -p "$NOTIFY_PORT" -w "$notify_tmo" > "$notify_file" 2>/dev/null) &
+    local nc_pid=$!
+    sleep 0.2  # let nc bind the port
+
     cd "$dir"
-    out=$(timeout "$tmo" tftp -m binary "$TARGET_IP" -c put "$file" 2>&1) || true
+    out=$(timeout "$tftp_tmo" tftp -m binary "$TARGET_IP" -c put "$file" 2>&1) || true
     cd "$SCRIPT_DIR"
     if echo "$out" | grep -qiE \
         "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+        kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null
+        rm -f "$notify_file"
         echo "Error: transfer failed: $out" >&2
         exit 1
     fi
-    echo "${label} uploaded."
-    read -r -p "Flash Write Succeeded on serial console? [y/N] " r
-    if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
+    echo "${label} uploaded. Waiting for flash write..."
+
+    # Wait for bootloader notification
+    wait "$nc_pid" 2>/dev/null
+    local result
+    result=$(tr -d '\0' < "$notify_file")
+    rm -f "$notify_file"
+
+    if [ "$result" = "OK" ]; then
+        echo "${label}: Flash Write Succeeded."
+    elif [ "$result" = "FAIL" ]; then
+        echo "Error: ${label} flash write FAILED on gateway." >&2
+        exit 1
+    else
+        echo "Warning: no notification received (timeout after ${notify_tmo}s)." >&2
+        echo "Check the serial console for status." >&2
+        read -r -p "Continue? [y/N] " r
+        if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
+    fi
 }
 
-flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"    15
-flash_image "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"  30
-echo "Note: userdata is 12 MB — transfer and flash may take 1-2 minutes."
-flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin" 120
+flash_image "bootloader" "${RTL_DIR}/31-Bootloader" "boot.bin"     15  30
+flash_image "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"   30  60
+flash_image "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin" 120 180
 
 echo ""
-echo "Flashing kernel..."
+echo "Flashing kernel (auto-reboots on success)..."
 cd "${RTL_DIR}/32-Kernel"
+notify_file=$(mktemp)
+(timeout 60 nc -u -l -p "$NOTIFY_PORT" -w 60 > "$notify_file" 2>/dev/null) &
+nc_pid=$!
+sleep 0.2
 out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1) || true
 cd "$SCRIPT_DIR"
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null
+    rm -f "$notify_file"
     echo "Error: transfer failed: $out" >&2
     exit 1
 fi
+echo "Kernel uploaded. Waiting for flash write..."
+wait "$nc_pid" 2>/dev/null
+result=$(tr -d '\0' < "$notify_file")
+rm -f "$notify_file"
+
+if [ "$result" = "OK" ]; then
+    echo "Kernel: Flash Write Succeeded."
+elif [ "$result" = "FAIL" ]; then
+    echo "Error: kernel flash write FAILED." >&2
+    exit 1
+else
+    echo "Warning: no notification received." >&2
+fi
 echo ""
-echo "Done."
-echo "Gateway will reboot automatically with the new firmware."
+echo "Done. Gateway is rebooting with the new firmware."
