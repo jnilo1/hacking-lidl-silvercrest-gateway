@@ -24,7 +24,7 @@ Edit `/usr/local/etc/cpcd.conf`:
 
 ```yaml
 bus_type: UART
-uart_device_file: tcp://192.168.1.xxx:8888
+uart_device_file: tcp://192.168.1.88:8888
 uart_device_baud: 115200
 uart_hardflow: true
 ```

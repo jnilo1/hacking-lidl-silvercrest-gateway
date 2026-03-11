@@ -69,7 +69,7 @@ AutoBurning=0
 Set TFTP Load Addr 0x80100000
 ```
 
-From the PC (le client `tftp` envoie le fichier par nom, sans chemin — il faut donc se placer dans le répertoire contenant `test.bin`) :
+From the PC (the `tftp` client sends the file by name without path — you must `cd` into the directory containing `test.bin`):
 
 ```bash
 cd /path/to/31-Bootloader/btcode/build

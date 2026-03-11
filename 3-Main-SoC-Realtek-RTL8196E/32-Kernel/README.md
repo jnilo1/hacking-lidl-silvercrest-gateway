@@ -2,7 +2,7 @@
 
 This directory contains everything needed to build a modern Linux kernel for the Realtek RTL8196E gateway.
 
-**Current version**: [Linux 5.10.246](https://lwn.net/Articles/1043999/) (29 octobre 2025)
+**Current version**: [Linux 5.10.246](https://lwn.net/Articles/1043999/) (29 October 2025)
 
 ## Why Linux 5.10?
 

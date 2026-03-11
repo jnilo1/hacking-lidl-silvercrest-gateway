@@ -119,7 +119,7 @@ nano ~/.config/rcp-stack/rcp-stack.env
 
 Set your gateway IP and commands:
 ```bash
-RCP_ENDPOINT=tcp://192.168.1.xxx:8888
+RCP_ENDPOINT=tcp://192.168.1.88:8888
 CPCD_COMMAND='cpcd -c "$HOME/.config/rcp-stack/cpcd.conf"'
 ZIGBEED_COMMAND='zigbeed -r "spinel+cpc://$CPC_INSTANCE_NAME?iid=1&iid-list=0" -p "$ZIGBEED_PTY" -d 1 -v 0'
 ```
@@ -268,13 +268,13 @@ rcp-stack up
 
 **Symptom:**
 ```
-Cannot connect to RCP endpoint 192.168.1.xxx:8888
+Cannot connect to RCP endpoint 192.168.1.88:8888
 ```
 
 **Checks:**
 1. Gateway is powered on
 2. `serialgateway` is running on the gateway
-3. Network connectivity: `nc -zv 192.168.1.xxx 8888`
+3. Network connectivity: `nc -zv 192.168.1.88 8888`
 4. Correct IP in `~/.config/rcp-stack/rcp-stack.env`
 
 ### CPC sockets not created

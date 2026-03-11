@@ -32,10 +32,10 @@ Lidl Gateway                         Docker Host
 
 ### 1. Get Your Gateway's IP Address
 
-Find your gateway on the network (usually `192.168.1.x`). Test connectivity:
+Find your gateway on the network (default: `192.168.1.88`). Test connectivity:
 
 ```bash
-nc -zv 192.168.1.126 8888
+nc -zv 192.168.1.88 8888
 ```
 
 ### 2. Configure the IP Address
@@ -44,7 +44,7 @@ Edit `docker-compose.yml` and change `RCP_HOST` to your gateway's IP:
 
 ```yaml
 environment:
-  - RCP_HOST=192.168.1.126   # ← Change this
+  - RCP_HOST=192.168.1.88   # ← Change this if different
 ```
 
 ### 3. Start the Stack
@@ -102,7 +102,7 @@ Edit these in `docker-compose.yml`:
 
 | Variable | Value | Description |
 |----------|-------|-------------|
-| `RCP_HOST` | `192.168.1.xxx` | **Your gateway's IP address** |
+| `RCP_HOST` | `192.168.1.88` | **Your gateway's IP address** |
 | `RCP_PORT` | `8888` | TCP port (default for serialgateway) |
 | `UART_BAUDRATE` | `115200` | Must match RCP firmware baudrate |
 | `ZIGBEED_DEBUG` | `0` | Debug verbosity (0=off, 1=on, 2=verbose) |

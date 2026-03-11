@@ -59,7 +59,7 @@ ssh root@192.168.1.88 "rm -f /userdata/etc/radio.conf; reboot"
 ssh root@192.168.1.88 "echo MODE=otbr > /userdata/etc/radio.conf; reboot"
 ```
 
-Alternatively, `flash_userdata.sh` sets the mode at flash time via its prompt.
+Alternatively, `3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh` sets the mode at flash time via its prompt.
 
 ### On Your Computer
 
@@ -172,7 +172,8 @@ This is the recommended setup for Thread/Matter since v2.0.
 
 ```bash
 # Flash userdata — select "Thread" radio mode
-./flash_userdata.sh
+cd 3-Main-SoC-Realtek-RTL8196E/34-Userdata
+RADIO_MODE=thread CONFIRM=y ./flash_userdata.sh
 ```
 
 Verify OTBR is running:

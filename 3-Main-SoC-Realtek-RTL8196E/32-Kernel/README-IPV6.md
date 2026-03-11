@@ -6,8 +6,7 @@ This document describes the kernel configuration changes required to support Ope
 
 | File | Description |
 |------|-------------|
-| `config-5.10.246-realtek.txt` | Original config without IPv6 |
-| `config-5.10.246-realtek-ipv6.txt` | Modified config with IPv6 support |
+| `config-5.10.246-realtek.txt` | Kernel config (IPv6 support included since v2.0) |
 
 ## Size Impact
 
@@ -265,7 +264,7 @@ CONFIG_NF_NAT_MASQUERADE_IPV4=y     # Masquerading
 
 ### Current Limitations
 
-With the minimal configuration (`config-5.10.246-realtek-ipv6.txt`):
+With the current configuration (`config-5.10.246-realtek.txt`):
 
 1. **No ip6tables** - The `otbr-firewall` script won't work
 2. **No ipset** - Dynamic address filtering unavailable
@@ -279,10 +278,7 @@ With the minimal configuration (`config-5.10.246-realtek-ipv6.txt`):
 ```bash
 cd 32-Kernel
 
-# Use IPv6 configuration
-cp config-5.10.246-realtek-ipv6.txt linux-5.10.246-rtl8196e/.config
-
-# Build
+# IPv6 is included in the default config since v2.0
 ./build_kernel.sh
 ```
 
@@ -313,7 +309,7 @@ For a functional OpenThread Border Router, the kernel must support:
 3. **Netfilter** - For packet forwarding between interfaces
 4. **Multiple routing tables** - For policy routing
 
-All these requirements are met by `config-5.10.246-realtek-ipv6.txt`.
+All these requirements (except netfilter, see limitations above) are met by the default `config-5.10.246-realtek.txt` since v2.0.
 
 ## References
 

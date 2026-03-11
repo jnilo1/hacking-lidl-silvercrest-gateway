@@ -36,8 +36,8 @@ The **serialgateway** tool exposes the Zigbee serial port over TCP, allowing rem
 ### Get the Project
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/lidl-gateway-linux.git
-cd lidl-gateway-linux/3-Main-SoC-Realtek-RTL8196E
+git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
+cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 ```
 
 ### Choose Your Path

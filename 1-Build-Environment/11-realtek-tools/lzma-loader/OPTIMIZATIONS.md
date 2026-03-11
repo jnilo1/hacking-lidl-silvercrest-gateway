@@ -152,11 +152,11 @@ Optimized: ~42-48KB (depends on -O2 vs -Os trade-off)
 
 ## Testing
 
-To test the optimized loader:
+To test the optimized loader, build the kernel and flash it:
 
 ```bash
-cd /mnt/data1/Linuxdev/linux-5.4-claude
-../flash.sh
+cd 3-Main-SoC-Realtek-RTL8196E/32-Kernel
+./build_kernel.sh
 ```
 
 Expected output should show:
@@ -170,11 +170,10 @@ Transferring control to kernel at 0x80000000...
 
 ## Rollback
 
-If issues occur, restore the original:
+If issues occur, restore the original loader from git:
 ```bash
-cd /mnt/data1/Linuxdev/realtek-flashtools
-rm -rf lzma-loader
-mv lzma-loader.backup lzma-loader
+cd 1-Build-Environment/11-realtek-tools/lzma-loader
+git checkout -- .
 ```
 
 ## Future Improvements

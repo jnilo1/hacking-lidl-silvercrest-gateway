@@ -25,9 +25,9 @@ serial console).
 The script:
 1. Asks for network configuration (static IP or DHCP) and rebuilds userdata
 2. Detects the gateway on the network (ARP probe)
-3. Optionally backs up the current flash via FLR
+3. Optionally backs up the current flash via TFTP GET (16 MB full backup)
 4. Flashes all 4 partitions in order: bootloader, rootfs, userdata, kernel
-5. Waits for serial console confirmation after each partition
+5. Waits for bootloader UDP notification (OK/FAIL) after each partition
 
 | Image | Location | Description |
 |-------|----------|-------------|
@@ -60,11 +60,28 @@ The script:
 | ot-rcp.gbl | `26-OT-RCP/firmware/` | OpenThread RCP for otbr-agent |
 | z3-router-7.5.1.gbl | `27-Router/firmware/` | Zigbee 3.0 standalone router |
 
+### `remote_flash.sh` — Remote flash without serial console
+
+Automates the full workflow over SSH: connects to the gateway, sends `boothold` to
+reboot into bootloader, waits for it to come up, then runs the appropriate flash script.
+
+```bash
+cd 3-Main-SoC-Realtek-RTL8196E
+./remote_flash.sh bootloader                # Flash bootloader remotely
+./remote_flash.sh kernel                    # Flash kernel (auto-reboots)
+./remote_flash.sh rootfs                    # Flash rootfs
+./remote_flash.sh userdata                  # Flash userdata (defaults: static IP, Zigbee)
+RADIO_MODE=thread ./remote_flash.sh userdata  # Flash userdata in Thread/OTBR mode
+```
+
+Requires the custom firmware already running (SSH access to the gateway).
+
 ## Prerequisites
 
 ### Hardware
 
-- **Serial adapter** connected to gateway (38400 8N1) — required for RTL8196E flash
+- **Serial adapter** connected to gateway (38400 8N1) — required for initial RTL8196E flash;
+  not needed for subsequent updates via `remote_flash.sh`
 - **Ethernet connection** between PC and gateway (same L2 segment for TFTP)
 
 ### Software
@@ -80,8 +97,8 @@ The script:
 ```
 0x000000-0x020000  mtd0  boot+cfg     (128 KB)   - Bootloader
 0x020000-0x200000  mtd1  linux        (1.9 MB)   - Linux kernel
-0x200000-0x420000  mtd2  rootfs       (2.1 MB)   - Root filesystem
-0x420000-0x1000000 mtd3  jffs2-fs     (11.9 MB)  - User partition
+0x200000-0x400000  mtd2  rootfs       (2 MB)     - Root filesystem
+0x400000-0x1000000 mtd3  jffs2-fs     (12 MB)    - User partition
 ```
 
 ## Troubleshooting

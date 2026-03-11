@@ -160,13 +160,13 @@ void showBoardInfo(void)
 
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.2 - 2026.02.10-18:30+0100 - J. Nilo
+Bootloader: V2.3 - 2026.03.11-19:34+0100 - J. Nilo
 ```
 
 In download mode:
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.2 - 2026.02.10-18:30+0100 - J. Nilo
+Bootloader: V2.3 - 2026.03.11-19:34+0100 - J. Nilo
 ---Escape booting by user
 ---Ethernet init Okay!
 <RealTek>

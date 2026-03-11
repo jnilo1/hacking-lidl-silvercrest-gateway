@@ -18,6 +18,16 @@
 # Usage: ./flash_efr32.sh [GATEWAY_IP]
 #   GATEWAY_IP - Gateway IP address (default: 192.168.1.88)
 #
+# Environment variables (optional, for non-interactive use):
+#   FW_CHOICE  - Firmware to flash: 1=Bootloader, 2=NCP (default), 3=RCP,
+#                4=OT-RCP, 5=Z3-Router
+#   CONFIRM    - Set to "y" to skip the "Flash?" prompt
+#
+# Examples:
+#   ./flash_efr32.sh                          # Interactive menu
+#   FW_CHOICE=2 CONFIRM=y ./flash_efr32.sh    # Flash NCP non-interactively
+#   FW_CHOICE=4 CONFIRM=y ./flash_efr32.sh    # Flash OT-RCP non-interactively
+#
 # J. Nilo - February 2026
 
 set -euo pipefail
@@ -55,16 +65,20 @@ FW_ROUTER="${FW_DIR}/27-Router/firmware/z3-router-7.5.1.gbl"
 
 # --- Firmware selection menu -----------------------------------------------
 
-echo "EFR32 Firmware Flasher"
-echo ""
-echo "  [1] Bootloader    — Gecko Bootloader stage 2 (UART/Xmodem)   ($(basename "$FW_BTL"))"
-echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
-echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
-echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
-echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
-echo ""
-read -r -p "Firmware to flash [2]: " fw_choice
-fw_choice="${fw_choice:-2}"
+if [ -n "${FW_CHOICE:-}" ]; then
+    fw_choice="$FW_CHOICE"
+else
+    echo "EFR32 Firmware Flasher"
+    echo ""
+    echo "  [1] Bootloader    — Gecko Bootloader stage 2 (UART/Xmodem)   ($(basename "$FW_BTL"))"
+    echo "  [2] NCP-UART-HW   — Zigbee NCP for zigbee2mqtt / ZHA         ($(basename "$FW_NCP"))"
+    echo "  [3] RCP-UART-HW   — Multi-PAN RCP for zigbee2mqtt            ($(basename "$FW_RCP"))"
+    echo "  [4] OT-RCP        — OpenThread RCP for otbr-agent            ($(basename "$FW_OT_RCP"))"
+    echo "  [5] Z3-Router     — Zigbee 3.0 standalone router             ($(basename "$FW_ROUTER"))"
+    echo ""
+    read -r -p "Firmware to flash [2]: " fw_choice
+    fw_choice="${fw_choice:-2}"
+fi
 
 case "$fw_choice" in
     1) FIRMWARE="$FW_BTL" ;;
@@ -132,11 +146,13 @@ echo ""
 
 # --- 3. Flash ---------------------------------------------------------------
 
-read -r -p "Flash $(basename "$FIRMWARE") to ${GW_IP}? [y/N] " confirm
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Aborted."
-    $SSH "reboot" 2>/dev/null || true
-    exit 0
+if [ "${CONFIRM:-}" != "y" ]; then
+    read -r -p "Flash $(basename "$FIRMWARE") to ${GW_IP}? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Aborted."
+        $SSH "reboot" 2>/dev/null || true
+        exit 0
+    fi
 fi
 
 echo ""
