@@ -12,7 +12,7 @@ This is the **last missing piece** that makes the entire gateway firmware stack 
 
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.2 - 2026.02.10-18:30+0100 - J. Nilo
+Bootloader: V2.3 - 2026.03.11-19:34+0100 - J. Nilo
 ```
 
 **Download progress in %** — The stock bootloader prints endless `.` or `#` characters that flood the serial console during TFTP transfers. This version shows a clean percentage indicator:
@@ -24,6 +24,14 @@ Flashing: 76%
 **Reboot to bootloader from Linux** — No need to press ESC on the serial console. A single command from Linux SSH writes a magic flag to RAM and reboots; the bootloader detects it and stops at the `<RealTek>` prompt, ready for TFTP. See [Reboot to Bootloader](doc/REBOOT_TO_BOOTLOADER.md) for details.
 
 **Ping support** — The bootloader responds to ICMP Echo Requests. A simple `ping 192.168.1.6` confirms the board is alive and reachable before attempting a TFTP transfer.
+
+**Full flash backup via TFTP GET** — Any `tftp get` command triggers an automatic read of the entire SPI flash (16 MB) into RAM and serves it back. No serial console interaction required:
+
+```bash
+tftp -m binary 192.168.1.6 -c get backup backup.bin   # 16 MB full backup
+```
+
+**Post-flash notification** — After flashing, the bootloader sends a UDP packet (port 9999) to the TFTP client with `OK` or `FAIL`. This enables fully automated remote flashing without serial console confirmation — `flash_rtl8196e.sh` uses this to chain multiple partition flashes unattended.
 
 **Risk-free testing** — The build generates a `test.bin` image that runs entirely from RAM without touching flash. Load it via TFTP, jump to it, and test your bootloader changes live — no risk of bricking. See the [Testing Guide](doc/TESTING.md) for the full workflow.
 

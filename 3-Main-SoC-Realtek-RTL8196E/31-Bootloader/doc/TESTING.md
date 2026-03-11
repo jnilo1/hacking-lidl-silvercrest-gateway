@@ -266,44 +266,22 @@ Verify on serial console:
 - File size matches
 - `Success!` message
 
-### Download test (RRQ / `tftp get`)
+### Download test — full flash backup (RRQ / `tftp get`)
 
-Load data into RAM first, then download it to the host:
-
-```
-<RealTek>FLR 80500000 0 100
-Flash Read Succeeded!
-```
-
-From the PC:
+Any `tftp get` automatically reads the entire SPI flash (16 MB) into RAM
+and serves it. No FLR command needed:
 
 ```bash
-tftp -m binary 192.168.1.6 -c get flash_dump.bin
-ls -l flash_dump.bin   # should be 256 bytes (0x100)
+tftp -m binary 192.168.1.6 -c get backup backup.bin
+ls -l backup.bin   # should be 16777216 bytes (16 MB)
 ```
 
 Verify on serial console:
-- `**TFTP Server Download: 100 bytes from 80500000`
-- Progress twiddler
+- `**Flash backup: reading 1000000 bytes...`
+- `Flash Read OK`
+- `**TFTP Server Download: 1000000 bytes from 80500000`
+- Progress percentage up to `100%`
 - `TFTP Download Complete!`
-
-**Echo-back test** (upload then download, compare):
-
-```bash
-dd if=/dev/urandom of=test_data.bin bs=1 count=4096
-tftp -m binary 192.168.1.6 -c put test_data.bin
-tftp -m binary 192.168.1.6 -c get readback.bin
-cmp test_data.bin readback.bin && echo "PASS" || echo "FAIL"
-```
-
-**Error case** — `get` with no data loaded (fresh boot, no FLR/upload):
-
-```bash
-tftp -m binary 192.168.1.6 -c get empty.bin
-```
-
-Expected: serial console shows `**TFTP RRQ Error: no data loaded`,
-transfer fails on the client side.
 
 ### AUTOBURN test
 
@@ -313,6 +291,34 @@ Upload images with known signatures and verify:
 |-------|-----------|-------------------|
 | `boot.bin` | `boot` | Flash to offset 0, no reboot |
 | `firmware.bin` | `cs6c` | Flash to kernel offset, auto-reboot |
+
+### Post-flash UDP notification test
+
+After each flash with `AUTOBURN 1`, the bootloader sends a UDP packet
+(port 9999) to the TFTP client with `OK` or `FAIL`.
+
+```bash
+# Terminal 1: start listener
+nc -u -l -p 9999
+
+# Terminal 2: send firmware
+tftp -m binary 192.168.1.6 -c put kernel.img
+```
+
+Terminal 1 should display `OK` after the flash completes.
+
+**Error case** — send a random file to trigger FAIL:
+
+```bash
+# Terminal 1: start listener
+nc -u -l -p 9999
+
+# Terminal 2: send garbage
+dd if=/dev/urandom of=/tmp/bad.bin bs=1024 count=4
+tftp -m binary 192.168.1.6 -c put /tmp/bad.bin
+```
+
+Terminal 1 should display `FAIL` (no valid signature found).
 
 ---
 
@@ -376,4 +382,7 @@ AUTOBURN 1
 # On PC:
 tftp -m binary 192.168.1.6 -c put firmware.bin
 # (board reboots automatically)
+
+# === Full flash backup (no serial console needed) ===
+tftp -m binary 192.168.1.6 -c get backup backup.bin
 ```

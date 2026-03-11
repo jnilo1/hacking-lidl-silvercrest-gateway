@@ -6,7 +6,26 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [2.0.0] - 2026-03-06
+## [2.0.0] - 2026-03-11
+
+### 31-Bootloader
+- **TFTP GET full flash backup**: any `tftp get` triggers a full SPI flash read (16 MB)
+  into RAM and serves it — no serial console FLR command needed
+- **UDP notification after flash** (port 9999): bootloader sends "OK" or "FAIL" to the
+  TFTP client after `checkAutoFlashing()` completes, enabling fully automated remote
+  flashing without serial console confirmation
+- Notification sent before `autoreboot()` so it arrives even for kernel images
+
+### 32-Kernel
+- **GPIO 11 / status LED fix**: Ethernet driver no longer clears PIN_MUX_SEL2 bits [4:3]
+  that control GPIO 11 (Port B3), fixing the gpio-leds regression introduced in the
+  procfs-to-gpio-leds migration
+
+### flash_rtl8196e.sh
+- `flash_image()` replaced manual "Flash Write Succeeded?" confirmation with UDP
+  listener (`nc -u -l -p 9999`) — waits for bootloader notification automatically
+- Backup simplified to `tftp get backup` — no serial console interaction required
+- Per-partition notification timeouts (bootloader 30s, rootfs 60s, userdata 180s, kernel 60s)
 
 ### Thread Border Router — OTBR on-device
 - OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
