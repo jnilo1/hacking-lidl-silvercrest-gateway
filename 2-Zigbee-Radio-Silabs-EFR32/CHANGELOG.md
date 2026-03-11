@@ -4,9 +4,34 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
-## [2.0.0] - 2026-03-06
+## [2.0.0] - 2026-03-11
 
-No change (see RTL8196E CHANGELOG for v2.0.0 details).
+### 26-OT-RCP
+- **3 use cases, 1 firmware:** ZoH (Zigbee on Host), OTBR on host (Docker),
+  OTBR on gateway (native) — all use the same OT-RCP firmware
+- 3 Docker Compose stacks: `docker-compose-zoh.yml`, `docker-compose-otbr-host.yml`,
+  `docker-compose-otbr-gateway.yml`
+- Radio mode switching support in Docker compose files
+- Thread network formation guide (use case 3: OTBR on gateway)
+- Tested devices: IKEA TIMMERFLOTTE, BILRESA, MYGGSPRAY (all Matter/Thread)
+- README restructured around the 3 use cases with architecture diagrams
+
+### 22-Backup-Flash-Restore
+- Technical memo: [MEMO-universal-silabs-flasher.md](22-Backup-Flash-Restore/MEMO-universal-silabs-flasher.md)
+  — how USF works over TCP, baud rate mismatch problem, recovery mechanism
+
+### flash_efr32.sh
+- **Auto-recovery from non-standard baud rates:** when firmware runs at 230400
+  or 460800 (e.g., after a custom build), the script scans baud rates, lets USF
+  detect and enter the Gecko Bootloader, restarts serialgateway at 115200, and
+  flashes. Tested with Spinel (OT-RCP) and EZSP (NCP).
+- Patches USF probe methods at install time (`silabs-flasher-probe-methods.patch`)
+  to add SPINEL@115200, SPINEL@230400, EZSP@230400
+- SSH `-n` flag prevents stdin conflicts when piping firmware selection
+- Default gateway IP: 192.168.1.88 (replaces placeholder throughout docs)
+
+### Documentation
+- IP placeholders replaced with default 192.168.1.88 across all Docker and Z2M configs
 
 ---
 
