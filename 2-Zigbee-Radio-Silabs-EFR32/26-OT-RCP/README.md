@@ -54,6 +54,11 @@ Output: `firmware/ot-rcp.gbl` (UART flash) and `firmware/ot-rcp.s37` (J-Link/SWD
 - **RTL8196E boot delay:** 1-second delay at startup for host UART initialization.
 - **Hardware flow control:** RTS/CTS enabled, required for reliable operation over TCP.
 - **Hardware radio acceleration:** All 802.15.4 MAC operations in hardware.
+- **Baud rate: 115200 recommended.** All pre-built firmware uses 115200 to
+  match the Gecko Bootloader. If you recompile at a different baud rate (e.g.
+  230400), `flash_efr32.sh` will automatically detect it, send a Spinel
+  reset-to-bootloader command, and reflash via the Gecko Bootloader — no
+  J-Link/SWD needed.
 
 ---
 
