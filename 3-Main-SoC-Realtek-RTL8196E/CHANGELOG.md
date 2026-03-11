@@ -21,9 +21,18 @@ rootfs (33-), and userdata (34-).
   that control GPIO 11 (Port B3), fixing the gpio-leds regression introduced in the
   procfs-to-gpio-leds migration
 
-### flash_rtl8196e.sh
-- `flash_image()` replaced manual "Flash Write Succeeded?" confirmation with UDP
-  listener (`nc -u -l -p 9999`) — waits for bootloader notification automatically
+### Flash scripts
+- **`remote_flash.sh`** (new): fully automated remote flash via SSH — connects to the
+  gateway, sends `boothold`, waits for bootloader, runs the appropriate flash script.
+  Supports all 4 components: `./remote_flash.sh <bootloader|kernel|rootfs|userdata>`
+- All individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, `flash_rootfs.sh`,
+  `flash_userdata.sh`) now wait for bootloader UDP notification ("OK"/"FAIL") instead of
+  returning immediately after TFTP upload
+- Non-interactive mode via environment variables: `CONFIRM=y` skips "Proceed?" prompt,
+  `NET_MODE=static|dhcp` and `RADIO_MODE=zigbee|thread` skip userdata config prompts.
+  Scripts work identically in interactive and non-interactive mode.
+- `flash_rtl8196e.sh`: `flash_image()` replaced manual "Flash Write Succeeded?"
+  confirmation with UDP listener — waits for bootloader notification automatically
 - Backup simplified to `tftp get backup` — no serial console interaction required
 - Per-partition notification timeouts (bootloader 30s, rootfs 60s, userdata 180s, kernel 60s)
 

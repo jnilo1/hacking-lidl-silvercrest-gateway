@@ -8,6 +8,7 @@
 #   IMAGE - Image file (default: boot.bin)
 #
 # Environment variables (optional overrides):
+#   CONFIRM        - Set to "y" to skip the "Proceed?" prompt
 #   TRIES          - ARP probe attempts (default: 10)
 #   PORT           - UDP port used to trigger ARP (default: 69)
 #   SLEEP_BETWEEN  - Pause between ARP probes in seconds (default: 0.2)
@@ -102,20 +103,45 @@ fi
 
 echo "Flashing ${NAME} (${SIZE} bytes) to ${TARGET_IP}..."
 echo ""
-read -r -p "Proceed? [y/N] " confirm
-if [[ ! "$confirm" =~ ^[yY]$ ]]; then
-    echo "Aborted."
-    exit 0
+if [ "${CONFIRM:-}" != "y" ]; then
+    read -r -p "Proceed? [y/N] " confirm
+    if [[ ! "$confirm" =~ ^[yY]$ ]]; then
+        echo "Aborted."
+        exit 0
+    fi
 fi
 
+NOTIFY_PORT=9999
+NOTIFY_TMO=30
+
+notify_file=$(mktemp)
+(timeout "$NOTIFY_TMO" nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
+nc_pid=$!
+sleep 0.2
+
+echo "Uploading..."
 cd "$SCRIPT_DIR"
 out=$(timeout 15 tftp -m binary "$TARGET_IP" -c put "$NAME" 2>&1) || true
 if echo "$out" | grep -qiE \
     "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
     echo "Error: transfer failed: $out" >&2
     exit 1
 fi
+echo "Uploaded. Waiting for flash write..."
+wait "$nc_pid" 2>/dev/null
+result=$(tr -d '\0' < "$notify_file")
+rm -f "$notify_file"
 
+if [ "$result" = "OK" ]; then
+    echo "Flash Write Succeeded."
+elif [ "$result" = "FAIL" ]; then
+    echo "Error: flash write FAILED on gateway." >&2
+    exit 1
+else
+    echo "Warning: no notification received (timeout ${NOTIFY_TMO}s)." >&2
+    echo "Check the serial console for status."
+fi
 echo ""
 echo "Done."
 echo "Reboot: J BFC00000  (serial console)  or  hard reset the device"

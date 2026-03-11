@@ -12,19 +12,19 @@ This guide explains how to **back up and restore** the embedded flash memory usi
 
 ### Which method to choose?
 
-| | Method 1 (SSH) | Method 2 (Bootloader FLR/FLW) | Method 3 (SPI programmer) |
+| | Method 1 (SSH) | Method 2 (Bootloader TFTP) | Method 3 (SPI programmer) |
 |---|---|---|---|
 | Gateway boots | ✅ required | ✅ required | ❌ not needed |
-| UART access | ❌ not needed | ✅ required | ❌ not needed |
+| UART access | ❌ not needed | ❌ not needed (V2 bootloader) | ❌ not needed |
 | No service interruption | ✅ | ❌ (reboot into bootloader) | ❌ (desolder chip) |
 | Works if Linux is broken | ❌ | ✅ | ✅ |
-| Full flash image | ✅ (concatenate) | ✅ (single FLR command) | ✅ |
+| Full flash image | ✅ (concatenate) | ✅ (single `tftp get`) | ✅ |
 | Firmware layout | **Original only** (5 partitions) | Any | Any |
 | Simplest procedure | ➖ | ✅ **recommended for full backup** | ❌ (requires hardware) |
 
-**Method 2 (FLR/FLW) is the most practical for a full flash backup/restore**: two commands, no SSH, no password, no dependency on the running OS. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
+**Method 2 is the most practical for a full flash backup/restore.** With the V2 bootloader, a single `tftp get` command backs up the entire 16 MB flash — no serial console needed. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
 
-> **Note for custom firmware users:** The SSH scripts only support the original Lidl/Tuya firmware (5 partitions). If your gateway runs the custom firmware (4 partitions), use Method 2 (FLR/FLW) for backup and restore.
+> **Note for custom firmware users:** The SSH scripts only support the original Lidl/Tuya firmware (5 partitions). If your gateway runs the custom firmware (4 partitions), use Method 2 for backup and restore.
 
 ---
 
@@ -86,28 +86,34 @@ ssh -p 2333 -o HostKeyAlgorithms=+ssh-rsa root@<GATEWAY_IP> "dd if=/tmp/rootfs-n
 💡 Refer to the script section at the end of this README for a simpler approach.
 
 
-## 🔧 Method 2 – Bootloader Access (UART + TFTP)
+## 🔧 Method 2 – Bootloader Access (TFTP)
 
-🟠 Use this method if Linux no longer boots, but the Realtek bootloader is still accessible via UART.
+🟠 Use this method if Linux no longer boots, or for a preventive full backup before any modification.
 
-💡 FLR/FLW reads raw flash regardless of filesystem state — it is the **recommended method for a preventive full backup** (before any modification).
+💡 This method reads raw flash regardless of filesystem state — it is the **recommended method for a full backup**.
 
-⚠️ However, if Linux fails to boot due to a corrupted partition, a backup taken at that point will faithfully capture the corrupted data. In that situation, restoring a **previously saved healthy backup** is the right approach.
+⚠️ If Linux fails to boot due to a corrupted partition, a backup taken at that point will faithfully capture the corrupted data. In that situation, restoring a **previously saved healthy backup** is the right approach.
 
 
 ### 🛠 Setup
-
-This second method uses the Realtek bootloader's `FLR` and `FLW` commands to transfer data via TFTP.
 
 #### Install a TFTP client on your Linux host
 ```sh
 sudo apt install tftp-hpa
 ```
 
-#### Accessing the Bootloader
-- Connect a USB-to-serial adapter to your host, and wire its RX/TX pins to the gateway's UART interface.
-- Power on (or reboot) the gateway while pressing the ESC key until the `<RealTek>` prompt appears on the serial console.
-- The bootloader's TFTP server listens on **192.168.1.6** by default. Make sure your PC is on the same subnet.
+#### Entering Bootloader Mode
+
+**From Linux (SSH, no serial console needed):**
+```sh
+ssh root@192.168.1.88 boothold
+```
+The gateway reboots and stops at the `<RealTek>` prompt automatically.
+
+**From serial console:**
+Connect a USB-to-serial adapter (38400 8N1). Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt appears.
+
+The bootloader's TFTP server listens on **192.168.1.6** by default. Make sure your PC is on the same subnet.
 
 ---
 
@@ -115,23 +121,25 @@ sudo apt install tftp-hpa
 
 **This is the safest approach.** It captures the entire 16 MiB flash chip as a single image, regardless of the partition layout. Use this before any modification.
 
-#### Step 1 — Load the entire flash into RAM
+#### V2 bootloader (single command, no serial console)
 
-On the bootloader:
+```sh
+tftp -m binary 192.168.1.6 -c get backup flash_full.bin
+```
+
+Any `tftp get` automatically reads the entire SPI flash (16 MB) into RAM and serves it. No FLR command or serial console interaction needed.
+
+#### Original/V1 bootloader (requires serial console)
+
+On the serial console:
 ```plaintext
 RealTek>FLR 80500000 00000000 01000000
 Flash read from 0 to 80500000 with 1000000 bytes        ?
 (Y)es , (N)o ? --> Y
 Flash Read Succeeded!
 ```
-- `80500000` → RAM address where data will be loaded
-- `00000000` → start of flash (offset 0)
-- `01000000` → full flash size: 16 MiB
 
-Confirm with `Y` when prompted and wait for `Flash Read Succeeded!` before proceeding.
-
-#### Step 2 — Download the image to your host
-
+Then on the host:
 ```sh
 tftp -m binary 192.168.1.6 -c get flash_full.bin
 ```
@@ -325,10 +333,41 @@ jnilo@HP-ZBook:
 
 | Script                                | Method   | Description                                                        |
 |---------------------------------------|----------|--------------------------------------------------------------------|
+| `split_flash.sh`                      | —        | Split a full 16 MB backup into individual partition files          |
+| `../backup_rtl8196e.sh`              | Method 2 | Per-partition backup via bootloader FLR/TFTP (any firmware layout) |
 | `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH (original firmware only)      |
 | `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH (original firmware only)     |
 
-### Usage
+### Full flash backup (V2 bootloader — simplest)
+
+No script needed. Enter bootloader mode and run a single command from the host:
+
+```sh
+ssh root@192.168.1.88 boothold       # reboot to bootloader (or press ESC on serial)
+tftp -m binary 192.168.1.6 -c get backup flash_full.bin
+```
+
+### Split a full backup into partitions
+
+```sh
+./split_flash.sh flash_full.bin              # custom firmware (4 partitions, default)
+./split_flash.sh flash_full.bin lidl         # original Lidl/Tuya (5 partitions)
+```
+
+Creates `mtd0_boot+cfg.bin`, `mtd1_kernel.bin`, `mtd2_rootfs.bin`, etc. next to the input file.
+
+### Per-partition backup (backup_rtl8196e.sh)
+
+Interactive script that guides you through per-partition FLR commands on the serial console:
+
+```sh
+../backup_rtl8196e.sh                # Dump all partitions
+../backup_rtl8196e.sh mtd1 mtd2      # Dump specific partitions
+```
+
+Supports both Lidl/Tuya (5 partitions) and custom (4 partitions) layouts. Large partitions are automatically split into 4 MB chunks.
+
+### SSH backup (original firmware only)
 
 Both scripts connect to the gateway, detect the partition layout from `/proc/mtd`, and abort with FLR/FLW instructions if the custom firmware (4-partition) layout is detected.
 

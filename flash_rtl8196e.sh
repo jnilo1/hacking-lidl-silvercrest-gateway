@@ -179,7 +179,7 @@ flash_image() {
     # Start UDP listener BEFORE tftp (so we don't miss the notification)
     local notify_file
     notify_file=$(mktemp)
-    (timeout "$notify_tmo" nc -u -l -p "$NOTIFY_PORT" -w "$notify_tmo" > "$notify_file" 2>/dev/null) &
+    (timeout "$notify_tmo" nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
     local nc_pid=$!
     sleep 0.2  # let nc bind the port
 
@@ -222,7 +222,7 @@ echo ""
 echo "Flashing kernel (auto-reboots on success)..."
 cd "${RTL_DIR}/32-Kernel"
 notify_file=$(mktemp)
-(timeout 60 nc -u -l -p "$NOTIFY_PORT" -w 60 > "$notify_file" 2>/dev/null) &
+(timeout 60 nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
 nc_pid=$!
 sleep 0.2
 out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put kernel.img 2>&1) || true
