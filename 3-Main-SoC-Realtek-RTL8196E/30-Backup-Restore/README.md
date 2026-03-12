@@ -332,6 +332,7 @@ jnilo@HP-ZBook:
 | Script                                | Description                                                        |
 |---------------------------------------|--------------------------------------------------------------------|
 | `../../backup_gateway.sh`             | **Unified backup** — auto-detects gateway state, backs up all partitions |
+| `../../restore_gateway.sh`            | **Restore** a fullflash.bin backup — guides through LOADADDR + FLW |
 | `split_flash.sh`                      | Split a full 16 MB backup into individual partition files          |
 | `scripts/restore_mtd_via_ssh.sh`      | Restore one or all partitions via SSH (original firmware only)     |
 

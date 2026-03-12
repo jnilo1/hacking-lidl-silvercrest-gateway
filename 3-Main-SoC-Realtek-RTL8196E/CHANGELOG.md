@@ -41,6 +41,9 @@ rootfs (33-), and userdata (34-).
   gateway state (custom Linux SSH:22, Tuya Linux SSH:2333, or bootloader) and chooses the
   best backup method. Outputs `fullflash.bin` + individual partition files + `backup.log`
   to `backups/YYYYMMDD-HHMM/`. Replaces `backup_mtd_via_ssh.sh` and `backup_rtl8196e.sh`.
+- **`restore_gateway.sh`** (new, at repository root): restore a `fullflash.bin` backup to the
+  gateway. Verifies 16 MiB size, detects bootloader type (V2 auto-flash vs V1.2/Tuya guided
+  LOADADDR + FLW on serial console). Symmetric counterpart to `backup_gateway.sh`.
 - Removed `backup_mtd_via_ssh.sh` (superseded by unified script SSH path)
 - Removed `backup_rtl8196e.sh` (superseded by unified script bootloader path)
 

@@ -89,6 +89,7 @@ ______________________________________________________________________
 | Script | Description |
 |--------|-------------|
 | [`backup_gateway.sh`](./backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
+| [`restore_gateway.sh`](./restore_gateway.sh) | Restore a fullflash.bin backup — guides through LOADADDR + FLW |
 | [`flash_rtl8196e.sh`](./flash_rtl8196e.sh) | Flash all 4 Linux partitions — auto-detects bootloader type (custom or Tuya) |
 | [`flash_efr32.sh`](./flash_efr32.sh) | Flash the Zigbee/Thread radio over SSH (OTA via universal-silabs-flasher) |
 
