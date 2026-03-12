@@ -68,13 +68,22 @@ if ! command -v fakeroot >/dev/null 2>&1; then
     exit 1
 fi
 
-# Check that cvimg is built
+# Check that cvimg is available, build it if missing
 BUILD_ENV="${PROJECT_ROOT}/../1-Build-Environment/11-realtek-tools"
 CVIMG_TOOL="${BUILD_ENV}/bin/cvimg"
 if [ ! -f "$CVIMG_TOOL" ]; then
-    echo "cvimg not found. Build realtek-tools first:"
-    echo "   cd ${BUILD_ENV} && ./build_tools.sh"
-    exit 1
+    echo "cvimg not found — building it..."
+    CVIMG_SRC="${BUILD_ENV}/cvimg/cvimg.c"
+    if [ ! -f "$CVIMG_SRC" ]; then
+        echo "Error: cvimg source not found at ${CVIMG_SRC}" >&2
+        exit 1
+    fi
+    mkdir -p "${BUILD_ENV}/bin"
+    gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -o "$CVIMG_TOOL" "$CVIMG_SRC" || {
+        echo "Error: failed to compile cvimg" >&2
+        exit 1
+    }
+    echo "cvimg built."
 fi
 
 cd "${SCRIPT_DIR}"

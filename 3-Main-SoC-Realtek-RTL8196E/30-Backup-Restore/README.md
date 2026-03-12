@@ -12,19 +12,17 @@ This guide explains how to **back up and restore** the embedded flash memory usi
 
 ### Which method to choose?
 
-| | Method 1 (SSH) | Method 2 (Bootloader TFTP) | Method 3 (SPI programmer) |
+| | Unified script | Manual bootloader TFTP | SPI programmer |
 |---|---|---|---|
 | Gateway boots | ✅ required | ✅ required | ❌ not needed |
-| UART access | ❌ not needed | ❌ not needed (V2 bootloader) | ❌ not needed |
-| No service interruption | ✅ | ❌ (reboot into bootloader) | ❌ (desolder chip) |
-| Works if Linux is broken | ❌ | ✅ | ✅ |
-| Full flash image | ✅ (concatenate) | ✅ (single `tftp get`) | ✅ |
-| Firmware layout | **Original only** (5 partitions) | Any | Any |
-| Simplest procedure | ➖ | ✅ **recommended for full backup** | ❌ (requires hardware) |
+| UART access | ❌ not needed (SSH or V2 bootloader) | ❌ not needed (V2 bootloader) | ❌ not needed |
+| No service interruption | ✅ (SSH path) | ❌ (reboot into bootloader) | ❌ (desolder chip) |
+| Works if Linux is broken | ✅ (bootloader path) | ✅ | ✅ |
+| Full flash image | ✅ | ✅ (single `tftp get`) | ✅ |
+| Firmware layout | **Any** (auto-detected) | Any | Any |
+| Simplest procedure | ✅ **recommended** | ➖ | ❌ (requires hardware) |
 
-**Method 2 is the most practical for a full flash backup/restore.** With the V2 bootloader, a single `tftp get` command backs up the entire 16 MB flash — no serial console needed. Use Method 1 when you need a live backup without rebooting (e.g., to capture the current Zigbee configuration in `/tuya`).
-
-> **Note for custom firmware users:** The SSH scripts only support the original Lidl/Tuya firmware (5 partitions). If your gateway runs the custom firmware (4 partitions), use Method 2 for backup and restore.
+**The unified `backup_gateway.sh` script (at the repository root) is the recommended method.** It auto-detects the gateway state (custom Linux SSH:22, Tuya Linux SSH:2333, or bootloader) and uses the best backup path. See the Scripts section below for details.
 
 ---
 
@@ -329,23 +327,33 @@ jnilo@HP-ZBook:
 ⚠️ **Be patient:** This operation takes a while.   
 ⚠️ Ensure that `fullmtd.bin` is exactly **16 MiB (16,777,216 bytes)** and contains valid data.
 
-## 📁 Included Scripts
+## 📁 Scripts
 
-| Script                                | Method   | Description                                                        |
-|---------------------------------------|----------|--------------------------------------------------------------------|
-| `split_flash.sh`                      | —        | Split a full 16 MB backup into individual partition files          |
-| `../backup_rtl8196e.sh`              | Method 2 | Per-partition backup via bootloader FLR/TFTP (any firmware layout) |
-| `scripts/backup_mtd_via_ssh.sh`       | Method 1 | Backup one or all partitions via SSH (original firmware only)      |
-| `scripts/restore_mtd_via_ssh.sh`      | Method 1 | Restore one or all partitions via SSH (original firmware only)     |
+| Script                                | Description                                                        |
+|---------------------------------------|--------------------------------------------------------------------|
+| `../../backup_gateway.sh`             | **Unified backup** — auto-detects gateway state, backs up all partitions |
+| `split_flash.sh`                      | Split a full 16 MB backup into individual partition files          |
+| `scripts/restore_mtd_via_ssh.sh`      | Restore one or all partitions via SSH (original firmware only)     |
 
-### Full flash backup (V2 bootloader — simplest)
+### Unified backup (recommended)
 
-No script needed. Enter bootloader mode and run a single command from the host:
+`backup_gateway.sh` at the repository root auto-detects the gateway state and chooses the best backup method:
+
+- **Custom Linux** (SSH:22) — dumps each partition via `cat /dev/mtdX`
+- **Tuya Linux** (SSH:2333) — same, with legacy SSH options for old Dropbear
+- **V2 bootloader** — single `tftp get backup` (16 MB), auto-split
+- **Old bootloader** (Tuya/V1.2) — guides you through FLR on the serial console, auto-split
+
+The partition layout (custom 4-partition vs original Lidl/Tuya 5-partition) is detected automatically from the flash content — no manual selection required.
 
 ```sh
-ssh root@192.168.1.88 boothold       # reboot to bootloader (or press ESC on serial)
-tftp -m binary 192.168.1.6 -c get backup flash_full.bin
+./backup_gateway.sh                                    # auto-detect everything
+./backup_gateway.sh --linux-ip 192.168.1.71            # gateway on a different IP
+./backup_gateway.sh --linux-ip 192.168.1.88 --boot-ip 192.168.1.6
+./backup_gateway.sh --output /tmp/my-backup
 ```
+
+Output: `backups/YYYYMMDD-HHMM/` with `fullflash.bin`, individual `mtdX_name.bin` files, and `backup.log`.
 
 ### Split a full backup into partitions
 
@@ -355,42 +363,5 @@ tftp -m binary 192.168.1.6 -c get backup flash_full.bin
 ```
 
 Creates `mtd0_boot+cfg.bin`, `mtd1_kernel.bin`, `mtd2_rootfs.bin`, etc. next to the input file.
-
-### Per-partition backup (backup_rtl8196e.sh)
-
-Interactive script that guides you through per-partition FLR commands on the serial console:
-
-```sh
-../backup_rtl8196e.sh                # Dump all partitions
-../backup_rtl8196e.sh mtd1 mtd2      # Dump specific partitions
-```
-
-Supports both Lidl/Tuya (5 partitions) and custom (4 partitions) layouts. Large partitions are automatically split into 4 MB chunks.
-
-### SSH backup (original firmware only)
-
-Both scripts connect to the gateway, detect the partition layout from `/proc/mtd`, and abort with FLR/FLW instructions if the custom firmware (4-partition) layout is detected.
-
-The default port is `2333` (original Lidl/Tuya firmware). The `-o HostKeyAlgorithms=+ssh-rsa` option is added automatically for compatibility with the old Dropbear daemon.
-
-```sh
-# Backup all partitions
-./scripts/backup_mtd_via_ssh.sh all <gateway_ip>
-
-# Restore all partitions
-./scripts/restore_mtd_via_ssh.sh all <gateway_ip>
-
-# Single partition
-./scripts/backup_mtd_via_ssh.sh mtd2 <gateway_ip>
-./scripts/restore_mtd_via_ssh.sh mtd2 <gateway_ip>
-```
-
-If the gateway runs the custom firmware, the scripts will print:
-```
-Error: 4-partition layout detected — this is the custom firmware.
-SSH backup/restore is not supported for this layout.
-
-Use the bootloader FLR/FLW commands instead: ...
-```
 
 

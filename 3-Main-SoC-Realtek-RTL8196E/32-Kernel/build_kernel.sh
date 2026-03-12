@@ -49,6 +49,18 @@ CVIMG=""
 for dir in "$DOCKER_TOOLS" "$BUILD_ENV"; do
     [ -x "${dir}/bin/cvimg" ] && CVIMG="${dir}/bin/cvimg" && break
 done
+# Auto-build cvimg if not found
+if [ -z "$CVIMG" ]; then
+    CVIMG_SRC="${BUILD_ENV}/cvimg/cvimg.c"
+    if [ -f "$CVIMG_SRC" ]; then
+        echo "cvimg not found — building it..."
+        mkdir -p "${BUILD_ENV}/bin"
+        if gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -o "${BUILD_ENV}/bin/cvimg" "$CVIMG_SRC"; then
+            CVIMG="${BUILD_ENV}/bin/cvimg"
+            echo "cvimg built."
+        fi
+    fi
+fi
 
 CVIMG_BURN_ADDR="0x00020000"
 SIGNATURE="cs6c"

@@ -82,12 +82,36 @@ ______________________________________________________________________
 | [2-Zigbee-Radio-Silabs-EFR32](./2-Zigbee-Radio-Silabs-EFR32/) | EFR32 firmware: bootloader, NCP, RCP, OT-RCP, router |
 | [3-Main-SoC-Realtek-RTL8196E](./3-Main-SoC-Realtek-RTL8196E/) | Linux system: bootloader, kernel, rootfs, userdata |
 
-Root-level scripts:
+### Scripts
+
+**Backup & flash** (repository root):
 
 | Script | Description |
 |--------|-------------|
-| `flash_rtl8196e.sh` | Flash the Linux system via TFTP (bootloader mode required) |
-| `flash_efr32.sh` | Flash the Zigbee radio over the network via SSH |
+| [`backup_gateway.sh`](./backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
+| [`flash_rtl8196e.sh`](./flash_rtl8196e.sh) | Flash all 4 Linux partitions — auto-detects bootloader type (custom or Tuya) |
+| [`flash_efr32.sh`](./flash_efr32.sh) | Flash the Zigbee/Thread radio over SSH (OTA via universal-silabs-flasher) |
+
+**Per-component build & flash** (in subdirectories):
+
+| Script | Description |
+|--------|-------------|
+| [`31-Bootloader/build_bootloader.sh`](./3-Main-SoC-Realtek-RTL8196E/31-Bootloader/build_bootloader.sh) | Build the RTL8196E bootloader |
+| [`31-Bootloader/flash_bootloader.sh`](./3-Main-SoC-Realtek-RTL8196E/31-Bootloader/flash_bootloader.sh) | Flash bootloader only (TFTP) |
+| [`32-Kernel/build_kernel.sh`](./3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build the Linux kernel |
+| [`32-Kernel/flash_kernel.sh`](./3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh) | Flash kernel only (TFTP) |
+| [`33-Rootfs/build_rootfs.sh`](./3-Main-SoC-Realtek-RTL8196E/33-Rootfs/build_rootfs.sh) | Build the root filesystem |
+| [`33-Rootfs/flash_rootfs.sh`](./3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh) | Flash rootfs only (TFTP) |
+| [`34-Userdata/build_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/build_userdata.sh) | Build the JFFS2 userdata partition |
+| [`34-Userdata/flash_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh) | Flash userdata only (TFTP) |
+| [`remote_flash.sh`](./3-Main-SoC-Realtek-RTL8196E/remote_flash.sh) | Remote flash via SSH (boothold + TFTP, no serial needed) |
+
+**Backup utilities** (in `30-Backup-Restore/`):
+
+| Script | Description |
+|--------|-------------|
+| [`split_flash.sh`](./3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/split_flash.sh) | Split a 16 MB full flash into individual partition files |
+| [`restore_mtd_via_ssh.sh`](./3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/scripts/restore_mtd_via_ssh.sh) | Restore partitions via SSH (original Tuya firmware only) |
 
 ## Building from Source
 

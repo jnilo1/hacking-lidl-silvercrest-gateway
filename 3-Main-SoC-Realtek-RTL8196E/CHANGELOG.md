@@ -36,6 +36,14 @@ rootfs (33-), and userdata (34-).
 - Backup simplified to `tftp get backup` — no serial console interaction required
 - Per-partition notification timeouts (bootloader 30s, rootfs 60s, userdata 180s, kernel 60s)
 
+### 30-Backup-Restore
+- **`backup_gateway.sh`** (new, at repository root): unified backup script that auto-detects
+  gateway state (custom Linux SSH:22, Tuya Linux SSH:2333, or bootloader) and chooses the
+  best backup method. Outputs `fullflash.bin` + individual partition files + `backup.log`
+  to `backups/YYYYMMDD-HHMM/`. Replaces `backup_mtd_via_ssh.sh` and `backup_rtl8196e.sh`.
+- Removed `backup_mtd_via_ssh.sh` (superseded by unified script SSH path)
+- Removed `backup_rtl8196e.sh` (superseded by unified script bootloader path)
+
 ### Thread Border Router — OTBR on-device
 - OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
 - otbr-agent 0.3.0 (Thread 1.4) cross-compiled for MIPS Lexra, static binary (4.3 MB)
