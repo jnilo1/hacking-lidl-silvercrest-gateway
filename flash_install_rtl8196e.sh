@@ -86,12 +86,12 @@ fi
 
 # Check if Linux is running (SSH on BOOT_IP or LINUX_IP) — means NOT in bootloader
 LINUX_RUNNING=""
-if timeout 2 bash -c "echo >/dev/tcp/$BOOT_IP/22" 2>/dev/null; then
+if timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/22" 2>/dev/null; then
     LINUX_RUNNING="custom:${BOOT_IP}:22"
-elif timeout 2 bash -c "echo >/dev/tcp/$BOOT_IP/2333" 2>/dev/null; then
+elif timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/2333" 2>/dev/null; then
     LINUX_RUNNING="tuya:${BOOT_IP}:2333"
 elif [ "$LINUX_IP" != "$BOOT_IP" ]; then
-    if timeout 2 bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
+    if timeout 1 bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
         LINUX_RUNNING="custom:${LINUX_IP}:22"
     fi
 fi
