@@ -91,17 +91,29 @@ The bootloader auto-detects the image type and flashes it. After flashing, reboo
 <RealTek>J BFC00000
 ```
 
-### Flashing kernel, rootfs, or userdata
+### Flashing individual partitions
 
 Same workflow — just send the image with the right Realtek header:
 
 ```bash
-tftp -m binary 192.168.1.6 -c put rootfs.bin     Will not reboot
-tftp -m binary 192.168.1.6 -c put userdata.bin   Will not reboot
-tftp -m binary 192.168.1.6 -c put kernel.img     Will reboot
+tftp -m binary 192.168.1.6 -c put rootfs.bin     # Will not reboot
+tftp -m binary 192.168.1.6 -c put userdata.bin   # Will not reboot
+tftp -m binary 192.168.1.6 -c put kernel.img     # Will reboot
 ```
 
 The bootloader identifies each image by its header signature and writes it to the correct flash partition.
+
+### Flashing a complete image (fullflash.bin)
+
+The V2.3+ bootloader also auto-detects raw 16 MiB flash images (produced by
+`build_fullflash.sh`). It verifies magic bytes at known partition offsets and
+writes the entire image to flash:
+
+```bash
+tftp -m binary 192.168.1.6 -c put fullflash.bin  # Auto-flashes + reboots
+```
+
+This is what `flash_install_rtl8196e.sh` uses for automated installation.
 
 ## Safety
 

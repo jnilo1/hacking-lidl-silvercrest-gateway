@@ -67,15 +67,19 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 
 ### Flashing
 
-1. Connect to the gateway via serial (38400 8N1)
-2. Enter bootloader mode (press ESC during boot to get `<RealTek>` prompt)
-3. Run the flash script **from the repository root**:
+1. Connect to the gateway via serial (38400 8N1) — only needed for initial install with original Tuya bootloader
+2. Run the install script **from the repository root**:
 
 ```bash
-./flash_rtl8196e.sh              # Flash all partitions
+./flash_install_rtl8196e.sh      # Build fullflash.bin and install
 ```
 
-To flash individual partitions, use the scripts in each subdirectory:
+The script auto-detects the gateway state:
+- **Custom firmware running (SSH:22)** — automatic boothold + reboot + TFTP upload
+- **V2 bootloader** — automatic TFTP upload + auto-flash + reboot
+- **Old bootloader (Tuya/V1.2)** — TFTP upload + guided FLW on serial console
+
+To flash individual partitions (developers), use the scripts in each subdirectory:
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E

@@ -10,31 +10,55 @@ Migrate a Lidl/Silvercrest Zigbee Gateway from Tuya firmware to custom Linux sys
 
 ## Flash Scripts
 
-Two scripts at the repository root handle all flashing operations:
+### `flash_install_rtl8196e.sh` — Full firmware install (recommended)
 
-### `flash_rtl8196e.sh` — RTL8196E main SoC (TFTP)
+Builds a complete 16 MiB flash image and installs it on the gateway. This is the
+recommended script for both first-time installs and upgrades.
 
-Flashes the Linux system (bootloader, kernel, rootfs, userdata) to the RTL8196E
-via TFTP. The gateway must be in bootloader mode (`<RealTek>` prompt on the
-serial console).
+```bash
+./flash_install_rtl8196e.sh [--boot-ip ADDRESS]
+```
+
+The script:
+1. Detects the gateway state (Linux running, bootloader, or unreachable)
+2. If custom firmware is running: automatic boothold + reboot to bootloader
+3. Asks for network configuration (static IP or DHCP) and radio mode (Zigbee or Thread)
+4. Builds `fullflash.bin` via `build_fullflash.sh` (assembles all 4 partitions)
+5. Optionally backs up the current flash
+6. Uploads fullflash.bin via TFTP
+7. V2 bootloader: auto-flashes and reboots automatically
+8. Older bootloaders (Tuya/V1.2): guides you through FLW on the serial console
+
+Environment variables for non-interactive use:
+```bash
+NET_MODE=static RADIO_MODE=zigbee CONFIRM=y ./flash_install_rtl8196e.sh
+```
+
+### `build_fullflash.sh` — Build the flash image
+
+Assembles bootloader, kernel, rootfs and userdata into a single verified 16 MiB
+image. Called automatically by `flash_install_rtl8196e.sh`, but can also be used
+standalone.
+
+```bash
+./build_fullflash.sh
+```
+
+| Partition | Flash offset | Source | Header handling |
+|-----------|-------------|--------|-----------------|
+| boot+cfg | 0x000000 | `31-Bootloader/boot.bin` | Strip cvimg header |
+| kernel | 0x020000 | `32-Kernel/kernel.img` | Keep cs6c header |
+| rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
+| userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |
+
+### `flash_rtl8196e.sh` — Per-partition flash (for developers)
+
+Flashes individual partitions via TFTP. Useful for development when you only need
+to update one component. The gateway must be in bootloader mode.
 
 ```bash
 ./flash_rtl8196e.sh [--ip ADDRESS]
 ```
-
-The script:
-1. Asks for network configuration (static IP or DHCP) and rebuilds userdata
-2. Detects the gateway on the network (ARP probe)
-3. Optionally backs up the current flash via TFTP GET (16 MB full backup)
-4. Flashes all 4 partitions in order: bootloader, rootfs, userdata, kernel
-5. Waits for bootloader UDP notification (OK/FAIL) after each partition
-
-| Image | Location | Description |
-|-------|----------|-------------|
-| boot.bin | `31-Bootloader/` | Custom bootloader with boothold and ICMP ping |
-| kernel.img | `32-Kernel/` | Linux 5.10.246 kernel with rtl8196e-eth driver |
-| rootfs.bin | `33-Rootfs/` | Root filesystem (SquashFS, BusyBox + Dropbear) |
-| userdata.bin | `34-Userdata/` | User partition (JFFS2, init scripts + serialgateway) |
 
 ### `flash_efr32.sh` — Silabs EFR32 radio (OTA via SSH)
 
@@ -86,9 +110,9 @@ Requires the custom firmware already running (SSH access to the gateway).
 
 ### Software
 
-- **tftp-hpa** — for RTL8196E flash:
+- **tftp-hpa** and **netcat** — for RTL8196E flash:
   ```bash
-  sudo apt install tftp-hpa
+  sudo apt install tftp-hpa netcat-openbsd
   ```
 - **Python 3 + venv** — for EFR32 flash (universal-silabs-flasher is installed automatically)
 

@@ -31,16 +31,18 @@ ______________________________________________________________________
 
 ### Step 1: Clone and Flash the Linux System
 
-The gateway must be in bootloader mode (serial console, press ESC on power-on).
-
 ```bash
 git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
 cd hacking-lidl-silvercrest-gateway
-./flash_rtl8196e.sh
+./flash_install_rtl8196e.sh
 ```
 
-The script flashes bootloader, kernel, rootfs and userdata via TFTP, and asks
-for the network configuration (static IP or DHCP).
+The script builds a complete 16 MiB flash image, detects the gateway (with
+automatic boothold if custom firmware is running), uploads it via TFTP, and
+flashes it. With the V2 bootloader, everything is automatic. For older
+bootloaders (Tuya/V1.2), it guides you through the FLW command on the serial
+console.
+
 See [35-Migration](./3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details.
 
 ### Step 2: Flash the Zigbee Radio
@@ -84,13 +86,15 @@ ______________________________________________________________________
 
 ### Scripts
 
-**Backup & flash** (repository root):
+**Install, backup & flash** (repository root):
 
 | Script | Description |
 |--------|-------------|
+| [`flash_install_rtl8196e.sh`](./flash_install_rtl8196e.sh) | **Install custom firmware** — builds fullflash.bin, uploads via TFTP, auto-flashes (V2) or guides FLW (older bootloaders) |
+| [`build_fullflash.sh`](./build_fullflash.sh) | Build a complete 16 MiB flash image from all 4 partitions |
 | [`backup_gateway.sh`](./backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
-| [`restore_gateway.sh`](./restore_gateway.sh) | Restore a fullflash.bin backup — guides through LOADADDR + FLW |
-| [`flash_rtl8196e.sh`](./flash_rtl8196e.sh) | Flash all 4 Linux partitions — auto-detects bootloader type (custom or Tuya) |
+| [`restore_gateway.sh`](./restore_gateway.sh) | Restore a fullflash.bin backup — guides through TFTP + FLW |
+| [`flash_rtl8196e.sh`](./flash_rtl8196e.sh) | Flash individual partitions via TFTP (for developers) |
 | [`flash_efr32.sh`](./flash_efr32.sh) | Flash the Zigbee/Thread radio over SSH (OTA via universal-silabs-flasher) |
 
 **Per-component build & flash** (in subdirectories):
@@ -137,7 +141,7 @@ Then build and flash:
 # Build the Linux system
 cd 3-Main-SoC-Realtek-RTL8196E/32-Kernel && ./build_kernel.sh
 cd ../33-Rootfs && ./build_rootfs.sh
-cd ../.. && ./flash_rtl8196e.sh
+cd ../.. && ./flash_install_rtl8196e.sh
 
 # Build and flash a Zigbee firmware
 cd 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW && ./build_ncp.sh
