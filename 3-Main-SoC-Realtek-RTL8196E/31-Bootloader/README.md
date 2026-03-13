@@ -31,7 +31,7 @@ Flashing: 76%
 tftp -m binary 192.168.1.6 -c get backup backup.bin   # 16 MB full backup
 ```
 
-**Post-flash notification** — After flashing, the bootloader sends a UDP packet (port 9999) to the TFTP client with `OK` or `FAIL`. This enables fully automated remote flashing without serial console confirmation — `flash_rtl8196e.sh` uses this to chain multiple partition flashes unattended.
+**Post-flash notification** — After flashing, the bootloader sends a UDP packet (port 9999) to the TFTP client with `OK` or `FAIL`. This enables fully automated flashing without serial console confirmation — `flash_install_rtl8196e.sh` and `remote_flash.sh` use this.
 
 **Risk-free testing** — The build generates a `test.bin` image that runs entirely from RAM without touching flash. Load it via TFTP, jump to it, and test your bootloader changes live — no risk of bricking. See the [Testing Guide](doc/TESTING.md) for the full workflow.
 

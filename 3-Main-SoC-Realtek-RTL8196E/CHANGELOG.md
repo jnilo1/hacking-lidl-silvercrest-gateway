@@ -6,35 +6,7 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [2.0.0] - 2026-03-11
-
-### 31-Bootloader
-- **TFTP GET full flash backup**: any `tftp get` triggers a full SPI flash read (16 MB)
-  into RAM and serves it — no serial console FLR command needed
-- **UDP notification after flash** (port 9999): bootloader sends "OK" or "FAIL" to the
-  TFTP client after `checkAutoFlashing()` completes, enabling fully automated remote
-  flashing without serial console confirmation
-- Notification sent before `autoreboot()` so it arrives even for kernel images
-
-### 32-Kernel
-- **GPIO 11 / status LED fix**: Ethernet driver no longer clears PIN_MUX_SEL2 bits [4:3]
-  that control GPIO 11 (Port B3), fixing the gpio-leds regression introduced in the
-  procfs-to-gpio-leds migration
-
-### Flash scripts
-- **`remote_flash.sh`** (new): fully automated remote flash via SSH — connects to the
-  gateway, sends `boothold`, waits for bootloader, runs the appropriate flash script.
-  Supports all 4 components: `./remote_flash.sh <bootloader|kernel|rootfs|userdata>`
-- All individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, `flash_rootfs.sh`,
-  `flash_userdata.sh`) now wait for bootloader UDP notification ("OK"/"FAIL") instead of
-  returning immediately after TFTP upload
-- Non-interactive mode via environment variables: `CONFIRM=y` skips "Proceed?" prompt,
-  `NET_MODE=static|dhcp` and `RADIO_MODE=zigbee|thread` skip userdata config prompts.
-  Scripts work identically in interactive and non-interactive mode.
-- `flash_rtl8196e.sh`: `flash_image()` replaced manual "Flash Write Succeeded?"
-  confirmation with UDP listener — waits for bootloader notification automatically
-- Backup simplified to `tftp get backup` — no serial console interaction required
-- Per-partition notification timeouts (bootloader 30s, rootfs 60s, userdata 180s, kernel 60s)
+## [2.0.0] - 2026-03-13
 
 ### 30-Backup-Restore
 - **`backup_gateway.sh`** (new, at repository root): unified backup script that auto-detects
@@ -47,22 +19,21 @@ rootfs (33-), and userdata (34-).
 - Removed `backup_mtd_via_ssh.sh` (superseded by unified script SSH path)
 - Removed `backup_rtl8196e.sh` (superseded by unified script bootloader path)
 
-### Thread Border Router — OTBR on-device
-- OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
-- otbr-agent 0.3.0 (Thread 1.4) cross-compiled for MIPS Lexra, static binary (4.3 MB)
-- ot-ctl CLI for Thread network management (57 KB)
-- REST API on port 8081 — compatible with Home Assistant OTBR integration
-- mDNS/DNS-SD (OpenThread built-in), SRP Advertising Proxy, Border Routing
-- Tested: IKEA TIMMERFLOTTE commissioned via HA Companion App, 20 MB RAM free
-
-### Unified Zigbee/Thread distribution
-- Single kernel, rootfs, and userdata image for both Zigbee and Thread modes
-- `flash_userdata.sh`: new "Radio mode" prompt selects Zigbee or Thread at flash time
-- `/userdata/etc/radio.conf` (MODE=otbr) gates init scripts at boot
-- S60serialgateway: skips when radio mode is OTBR
-- S70otbr: starts only when radio mode is OTBR
+### 31-Bootloader
+- **TFTP GET full flash backup**: any `tftp get` triggers a full SPI flash read (16 MB)
+  into RAM and serves it — no serial console FLR command needed
+- **UDP notification after flash** (port 9999): bootloader sends "OK" or "FAIL" to the
+  TFTP client after `checkAutoFlashing()` completes, enabling fully automated remote
+  flashing without serial console confirmation
+- **Raw fullflash auto-flash**: V2.3+ bootloader detects raw 16 MiB images by verifying
+  magic bytes at partition offsets (bootloader at 0x0, cs6c at 0x20000, hsqs at 0x200000)
+  and writes the entire image to flash — enables fully automatic install via TFTP
+- Notification sent before `autoreboot()` so it arrives even for kernel images
 
 ### 32-Kernel
+- **GPIO 11 / status LED fix**: Ethernet driver no longer clears PIN_MUX_SEL2 bits [4:3]
+  that control GPIO 11 (Port B3), fixing the gpio-leds regression introduced in the
+  procfs-to-gpio-leds migration
 - **Ethernet driver v2.0** — optimized for OTBR/NCP-UART workloads:
   - TX IRQ mitigation: TX_ALL_DONE interrupt disabled, descriptors reclaimed in start_xmit and NAPI poll (eliminates 1 IRQ per TX packet)
   - Ring buffers reduced from 600/500 to 128/128 — saves ~780 KB RAM (3.8% of free memory)
@@ -99,9 +70,44 @@ rootfs (33-), and userdata (34-).
 
 ### 34-Userdata
 - serialgateway: LED control migrated from /proc/led1 to /sys/class/leds/status/brightness
-- otbr-agent and ot-ctl binaries in /userdata/usr/local/bin/
+- otbr-agent and ot-ctl binaries in /userdata/usr/bin/
 - S70otbr init script: IPv6 forwarding, UART 115200, REST on :8081
 - Build script: `ot-br-posix/build_otbr.sh` for cross-compilation
+
+### Flash scripts
+- **`flash_install_rtl8196e.sh`** (new): unified firmware installation script —
+  builds `fullflash.bin`, auto-detects gateway state (custom Linux → boothold,
+  V2 bootloader → auto-flash, old bootloader → guided FLW), handles Tuya and
+  custom firmware. Replaces `flash_rtl8196e.sh` as the recommended install method.
+- **`build_fullflash.sh`** (new): assembles bootloader + kernel + rootfs + userdata
+  into a verified 16 MiB flash image with correct header stripping per partition
+- **`remote_flash.sh`** (new): fully automated remote flash via SSH — connects to the
+  gateway, sends `boothold`, waits for bootloader, runs the appropriate flash script.
+  Supports all 4 components: `./remote_flash.sh <bootloader|kernel|rootfs|userdata>`
+- All individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, `flash_rootfs.sh`,
+  `flash_userdata.sh`) now wait for bootloader UDP notification ("OK"/"FAIL") instead of
+  returning immediately after TFTP upload
+- All build scripts (`build_kernel.sh`, `build_rootfs.sh`, `build_userdata.sh`) check
+  for gcc before attempting to compile cvimg
+- Non-interactive mode via environment variables: `CONFIRM=y` skips "Proceed?" prompt,
+  `NET_MODE=static|dhcp` and `RADIO_MODE=zigbee|thread` skip userdata config prompts.
+- `flash_rtl8196e.sh`: boot-last flash order with r6cr kernel wrapper to avoid
+  intermediate reboots. Retained for per-partition developer use.
+
+### Thread Border Router — OTBR on-device
+- OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
+- otbr-agent 0.3.0 (Thread 1.4) cross-compiled for MIPS Lexra, static binary (4.3 MB)
+- ot-ctl CLI for Thread network management (57 KB)
+- REST API on port 8081 — compatible with Home Assistant OTBR integration
+- mDNS/DNS-SD (OpenThread built-in), SRP Advertising Proxy, Border Routing
+- Tested: IKEA TIMMERFLOTTE commissioned via HA Companion App, 20 MB RAM free
+
+### Unified Zigbee/Thread distribution
+- Single kernel, rootfs, and userdata image for both Zigbee and Thread modes
+- `flash_userdata.sh`: new "Radio mode" prompt selects Zigbee or Thread at flash time
+- `/userdata/etc/radio.conf` (MODE=otbr) gates init scripts at boot
+- S60serialgateway: skips when radio mode is OTBR
+- S70otbr: starts only when radio mode is OTBR
 
 ### Build fixes (ot-br-posix)
 - `-Wno-error=maybe-uninitialized` for GCC 8.5 false positive
