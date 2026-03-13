@@ -262,47 +262,10 @@ static void tftpd_send_data(unsigned short block, unsigned char *data,
 
 static void handleTFTP_RRQ(void)
 {
-	struct udphdr *udpheader;
-	unsigned short sent;
-
 	if (!tftpd_is_ready)
 		return;
 
-	udpheader = tftp_udp_header();
-	if (udpheader->dest != htons(TFTP_PORT))
-		return;
-
-	CLIENT_port = ntohs(udpheader->src);
-	tftp_capture_client();
-
-	/* Read the entire SPI flash into RAM for backup */
-	{
-		unsigned long chip_sz = spi_flash_info[0].chip_size;
-		prom_printf("\n**Flash backup: reading %X bytes...\n", chip_sz);
-		if (!flashread(FILESTART, 0, chip_sz)) {
-			prom_printf("Flash Read Failed!\n");
-			return;
-		}
-		image_address = FILESTART;
-		file_length_to_server = chip_sz;
-		prom_printf("Flash Read OK\n");
-	}
-
-	read_src = image_address;
-	read_remain = file_length_to_server;
-	read_pct = 0;
-	block_expected = 1;
-	one_tftp_lock = 1;
-	bootState = BOOT_STATE2_TFTP_SERVER_RRQ;
-
-	sent = (read_remain > TFTP_DEFAULTSIZE_PACKET) ?
-		TFTP_DEFAULTSIZE_PACKET : read_remain;
-	tftpd_send_data(block_expected, (unsigned char *)read_src, sent);
-	read_src += sent;
-	read_remain -= sent;
-
-	prom_printf("**TFTP Server Download: %X bytes from %X\n",
-		    file_length_to_server, image_address);
+	prom_printf("\n**TFTP RRQ Error: no data loaded\n");
 }
 
 static void handleTFTP_ACK(void)

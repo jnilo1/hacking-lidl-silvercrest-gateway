@@ -119,15 +119,7 @@ The bootloader's TFTP server listens on **192.168.1.6** by default. Make sure yo
 
 **This is the safest approach.** It captures the entire 16 MiB flash chip as a single image, regardless of the partition layout. Use this before any modification.
 
-#### V2 bootloader (single command, no serial console)
-
-```sh
-tftp -m binary 192.168.1.6 -c get backup flash_full.bin
-```
-
-Any `tftp get` automatically reads the entire SPI flash (16 MB) into RAM and serves it. No FLR command or serial console interaction needed.
-
-#### Original/V1 bootloader (requires serial console)
+#### Via bootloader (requires serial console)
 
 On the serial console:
 ```plaintext
@@ -342,8 +334,6 @@ jnilo@HP-ZBook:
 
 - **Custom Linux** (SSH:22) — dumps each partition via `cat /dev/mtdX`
 - **Tuya Linux** (SSH:2333) — same, with legacy SSH options for old Dropbear
-- **V2 bootloader** — single `tftp get backup` (16 MB), auto-split
-- **Old bootloader** (Tuya/V1.2) — guides you through FLR on the serial console, auto-split
 
 The partition layout (custom 4-partition vs original Lidl/Tuya 5-partition) is detected automatically from the flash content — no manual selection required.
 

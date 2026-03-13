@@ -20,8 +20,6 @@ rootfs (33-), and userdata (34-).
 - Removed `backup_rtl8196e.sh` (superseded by unified script bootloader path)
 
 ### 31-Bootloader
-- **TFTP GET full flash backup**: any `tftp get` triggers a full SPI flash read (16 MB)
-  into RAM and serves it — no serial console FLR command needed
 - **UDP notification after flash** (port 9999): bootloader sends "OK" or "FAIL" to the
   TFTP client after `checkAutoFlashing()` completes, enabling fully automated remote
   flashing without serial console confirmation

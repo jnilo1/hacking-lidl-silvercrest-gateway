@@ -175,29 +175,7 @@ else
         exit 1
     fi
 
-    # ARP resolved but no SSH — could be bootloader OR Linux without SSH.
-    # Extra check: if BOOT_IP responds to ping, it could be our V2 bootloader
-    # (which has ICMP) or Linux running without SSH. Old/Tuya bootloaders do
-    # NOT respond to ping, so ping + no SSH = likely Linux.
-    if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
-        # Our V2 bootloader responds to ping — try a quick TFTP GET to confirm
-        tftp_probe=$(timeout 5 tftp -m binary "$BOOT_IP" -c get backup /dev/null 2>&1) || true
-        if echo "$tftp_probe" | grep -qiE "timeout|timed out|refused|failed|unknown"; then
-            echo "Error: ${BOOT_IP} responds to ping but TFTP is not available." >&2
-            echo "Linux may be running without SSH. Enter bootloader mode first." >&2
-            echo ""
-            echo "To enter bootloader mode:"
-            echo "  - Connect serial console (3.3V UART, 38400 baud)"
-            echo "  - Power cycle the gateway"
-            echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-            echo "  - Then re-run:  $0 --boot-ip <BOOTLOADER_IP>"
-            echo ""
-            echo "Note: the bootloader IP is usually 192.168.1.6 (default)."
-            echo "It may differ from the Linux IP (${BOOT_IP})."
-            echo ""
-            exit 1
-        fi
-    fi
+    # ARP resolved + no SSH = bootloader (either V2 with ping or old without).
 fi
 
 # Detect bootloader type: V2 custom responds to ping, older ones don't.

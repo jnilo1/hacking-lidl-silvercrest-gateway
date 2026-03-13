@@ -215,82 +215,14 @@ backup_via_ssh() {
     fi
 }
 
-# --- bootloader backup -------------------------------------------------------
-
 handle_bootloader() {
-    echo "Attempting TFTP backup download (V2 bootloader)..."
-    local out
-    out=$(timeout 180 tftp -m binary "$BOOT_IP" -c get backup "${BACKUP_DIR}/fullflash.bin" 2>&1) || true
-
-    local tftp_ok=true
-    if echo "$out" | grep -qiE \
-            "error|timeout|timed out|refused|failed|unknown host|illegal"; then
-        tftp_ok=false
-    fi
-
-    local size=0
-    if [ -f "${BACKUP_DIR}/fullflash.bin" ]; then
-        size=$(stat -c%s "${BACKUP_DIR}/fullflash.bin" 2>/dev/null || echo 0)
-    fi
-
-    if $tftp_ok && [ "$size" -eq "$FLASH_SIZE" ]; then
-        # V2 bootloader — got 16 MB via TFTP GET backup
-        echo "Full flash received via TFTP (16 MiB). V2 bootloader detected."
-        echo ""
-        local layout
-        layout=$(detect_layout "${BACKUP_DIR}/fullflash.bin")
-        echo "Detected layout: ${layout}"
-        echo "Splitting into partitions (${layout} layout)..."
-        "$SPLIT_FLASH" "${BACKUP_DIR}/fullflash.bin" "$layout"
-    else
-        # Old bootloader (Tuya or V1.2) — needs FLR on serial console
-        rm -f "${BACKUP_DIR}/fullflash.bin"
-
-        if [ ! -t 0 ]; then
-            echo "Error: serial console required for FLR-based backup." >&2
-            echo "Old bootloader (Tuya or V1.2) does not support TFTP GET." >&2
-            echo "Run this script from an interactive terminal with serial access." >&2
-            exit 1
-        fi
-
-        echo ""
-        echo "TFTP GET failed — old bootloader (Tuya or V1.2)."
-        echo "Manual FLR-based backup required."
-        echo ""
-        echo "On the serial console (<RealTek> prompt), type:"
-        echo ""
-        echo "    FLR 80500000 00000000 01000000"
-        echo ""
-        echo "This reads the full 16 MB flash into RAM."
-        echo "Wait for the 'FLR OK' message before continuing."
-        echo ""
-        read -r -p "Press Enter when done... "
-
-        echo ""
-        echo "Fetching flash dump via TFTP..."
-        out=$(timeout 180 tftp -m binary "$BOOT_IP" -c get test "${BACKUP_DIR}/fullflash.bin" 2>&1) || true
-
-        if echo "$out" | grep -qiE \
-                "error|timeout|timed out|refused|failed|unknown host|illegal"; then
-            echo "Error: TFTP transfer failed: $out" >&2
-            exit 1
-        fi
-
-        size=$(stat -c%s "${BACKUP_DIR}/fullflash.bin" 2>/dev/null || echo 0)
-        if [ "$size" -ne "$FLASH_SIZE" ]; then
-            echo "Error: fullflash.bin is ${size} bytes (expected ${FLASH_SIZE})." >&2
-            exit 1
-        fi
-
-        echo "Full flash received (16 MiB)."
-        echo ""
-
-        local layout
-        layout=$(detect_layout "${BACKUP_DIR}/fullflash.bin")
-        echo "Detected layout: ${layout}"
-        echo "Splitting into partitions (${layout} layout)..."
-        "$SPLIT_FLASH" "${BACKUP_DIR}/fullflash.bin" "$layout"
-    fi
+    echo "Backup via SSH is required. The gateway must be running Linux."
+    echo ""
+    echo "To back up from bootloader mode:"
+    echo "  1. Power cycle the gateway and let it boot into Linux"
+    echo "  2. Run:  $0 --linux-ip <GATEWAY_IP>"
+    echo ""
+    exit 1
 }
 
 # --- main --------------------------------------------------------------------

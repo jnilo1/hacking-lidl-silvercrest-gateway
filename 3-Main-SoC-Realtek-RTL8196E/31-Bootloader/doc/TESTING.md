@@ -266,23 +266,6 @@ Verify on serial console:
 - File size matches
 - `Success!` message
 
-### Download test — full flash backup (RRQ / `tftp get`)
-
-Any `tftp get` automatically reads the entire SPI flash (16 MB) into RAM
-and serves it. No FLR command needed:
-
-```bash
-tftp -m binary 192.168.1.6 -c get backup backup.bin
-ls -l backup.bin   # should be 16777216 bytes (16 MB)
-```
-
-Verify on serial console:
-- `**Flash backup: reading 1000000 bytes...`
-- `Flash Read OK`
-- `**TFTP Server Download: 1000000 bytes from 80500000`
-- Progress percentage up to `100%`
-- `TFTP Download Complete!`
-
 ### AUTOBURN test
 
 Upload images with known signatures and verify:
@@ -383,6 +366,4 @@ AUTOBURN 1
 tftp -m binary 192.168.1.6 -c put firmware.bin
 # (board reboots automatically)
 
-# === Full flash backup (no serial console needed) ===
-tftp -m binary 192.168.1.6 -c get backup backup.bin
 ```
