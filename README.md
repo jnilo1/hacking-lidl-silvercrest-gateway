@@ -6,15 +6,14 @@
 
 ## What Can You Do With This?
 
-The **Lidl Silvercrest Zigbee Gateway** (~15 EUR) is normally locked to the Tuya cloud.
-This project replaces the firmware and turns it into a **fully local, open Zigbee coordinator**:
+The **Lidl Silvercrest Zigbee Gateway** is normally locked to the Tuya cloud.
+This project replaces the firmware and turns it into a **fully local, open smart home hub** — Zigbee coordinator, Thread Border Router, or Zigbee router:
 
-- **Zigbee2MQTT / ZHA** — pair and control any Zigbee device, no cloud required
-- **Home Assistant** — use it as your Zigbee coordinator, connected over the network
-- **OpenThread** — use the radio as a Thread Border Router (with otbr-agent)
+- **Zigbee coordinator** — use with Zigbee2MQTT or ZHA to pair and control any Zigbee device, no cloud
+- **Thread Border Router** — run otbr-agent natively on the gateway, compatible with Home Assistant
+- **Zigbee router** — extend your Zigbee mesh with a standalone 3.0 router
 - **SSH access** — full Linux shell on the gateway (BusyBox + Dropbear)
-- **Zigbee router** — turn the gateway into a standalone Zigbee 3.0 router to extend your mesh
-- **OTA firmware updates** — flash the Zigbee radio over the network, no SWD needed
+- **OTA firmware updates** — flash the Zigbee/Thread radio over the network, no SWD needed
 
 The gateway has two chips: a **Realtek RTL8196E** running Linux, and a **Silabs EFR32MG1B**
 Zigbee/Thread radio connected via UART. This project provides firmware for both.
