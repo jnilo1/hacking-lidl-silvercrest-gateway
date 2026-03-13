@@ -410,6 +410,35 @@ int checkAutoFlashing(unsigned long startAddr, int len)
 	int trueorfaulse = 0;
 	int flash_ok = 0;
 
+	/* Raw fullflash detection: 16 MiB image with known magic bytes at
+	 * partition offsets (no cvimg headers). This is produced by
+	 * build_fullflash.sh for full firmware install/restore. */
+	if (len == 0x1000000) {
+		unsigned int m_boot = *((volatile unsigned int *)startAddr);
+		unsigned int m_kern = *((volatile unsigned int *)(startAddr + 0x20000));
+		unsigned int m_root = *((volatile unsigned int *)(startAddr + 0x200000));
+		if (m_boot == 0x0bf00004 &&
+		    m_kern == 0x63733663 &&   /* cs6c */
+		    m_root == 0x68737173) {   /* hsqs */
+			prom_printf("\nRaw fullflash detected (16 MiB).\n");
+			prom_printf("Flash write: dst=0x0 src=0x%x len=0x%x\n",
+				    startAddr, len);
+			if (spi_flw_image_mio_8198(
+				    0, 0, (unsigned char *)startAddr, len)) {
+				prom_printf("\nFlash Write Succeeded!\n%s",
+					    "<RealTek>");
+				tftpd_send_notify("OK");
+				autoreboot();
+				return 1;
+			} else {
+				prom_printf("\nFlash Write Failed!\n%s",
+					    "<RealTek>");
+				tftpd_send_notify("FAIL");
+				return 0;
+			}
+		}
+	}
+
 	while ((head_offset + sizeof(IMG_HEADER_T)) < len) {
 		sum = 0;
 		memcpy(&Header, ((char *)startAddr + head_offset),
