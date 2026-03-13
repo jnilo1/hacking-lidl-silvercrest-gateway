@@ -82,6 +82,13 @@ if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; th
     exit 1
 fi
 
+# Check netcat
+if ! command -v nc >/dev/null 2>&1; then
+    echo "Error: netcat (nc) not found." >&2
+    echo "Install it with: sudo apt install netcat-openbsd" >&2
+    exit 1
+fi
+
 # Resolve network interface
 IFACE="$(ip route get "$BOOT_IP" 2>/dev/null \
     | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
@@ -164,11 +171,14 @@ if [ "$BOOTLOADER_TYPE" = "custom" ]; then
 
     # Try to get a UDP notification (V2 sends OK/FAIL on port 9999)
     notify_file=$(mktemp)
-    (timeout 180 nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
+    (timeout 180 nc -u -l -p "$NOTIFY_PORT" > "$notify_file" 2>/dev/null) &
     nc_pid=$!
 
-    # Re-upload: the first upload already happened, but V2 flashes on receive.
-    # For V1.2, we need LOADADDR. Let's wait for notification first.
+    # Wait for notification (V2 flashes on receive and sends OK/FAIL)
+    while kill -0 "$nc_pid" 2>/dev/null; do
+        [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+        sleep 0.5
+    done
     wait "$nc_pid" 2>/dev/null || true
     result=$(tr -d '\0' < "$notify_file" 2>/dev/null || true)
     rm -f "$notify_file"

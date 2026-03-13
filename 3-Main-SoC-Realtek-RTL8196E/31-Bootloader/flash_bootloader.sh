@@ -17,6 +17,19 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
+# Check prerequisites
+tftp_usage="$(tftp --help 2>&1 || true)"
+if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; then
+    echo "Error: tftp-hpa client not found (need the -c flag)." >&2
+    echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+if ! command -v nc >/dev/null 2>&1; then
+    echo "Error: netcat (nc) not found." >&2
+    echo "Install it with: sudo apt install netcat-openbsd" >&2
+    exit 1
+fi
+
 TARGET_IP="${1:-192.168.1.6}"
 IMAGE="${2:-${SCRIPT_DIR}/boot.bin}"
 
@@ -115,7 +128,7 @@ NOTIFY_PORT=9999
 NOTIFY_TMO=30
 
 notify_file=$(mktemp)
-(timeout "$NOTIFY_TMO" nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
+(timeout "$NOTIFY_TMO" nc -u -l -p "$NOTIFY_PORT" > "$notify_file" 2>/dev/null) &
 nc_pid=$!
 sleep 0.2
 
@@ -129,7 +142,11 @@ if echo "$out" | grep -qiE \
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."
-wait "$nc_pid" 2>/dev/null
+while kill -0 "$nc_pid" 2>/dev/null; do
+    [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+    sleep 0.5
+done
+wait "$nc_pid" 2>/dev/null || true
 result=$(tr -d '\0' < "$notify_file")
 rm -f "$notify_file"
 

@@ -133,13 +133,9 @@ detect_layout() {
 # Args: ssh_port
 backup_via_ssh() {
     local ssh_port="$1"
-    local ssh_opts="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
-
-    if [ "$ssh_port" = "2333" ]; then
-        ssh_opts="-p ${ssh_port} -o HostKeyAlgorithms=+ssh-rsa ${ssh_opts}"
-    else
-        ssh_opts="-p ${ssh_port} ${ssh_opts}"
-    fi
+    # HostKeyAlgorithms=+ssh-rsa always included: harmless on modern servers,
+    # required for old Tuya Dropbear (some users also change port 2333 to 22).
+    local ssh_opts="-p ${ssh_port} -o HostKeyAlgorithms=+ssh-rsa -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10"
 
     # SSH multiplexing: open one connection, reuse for all commands (single password prompt)
     local ssh_ctl

@@ -53,6 +53,11 @@ done
 if [ -z "$CVIMG" ]; then
     CVIMG_SRC="${BUILD_ENV}/cvimg/cvimg.c"
     if [ -f "$CVIMG_SRC" ]; then
+        if ! command -v gcc >/dev/null 2>&1; then
+            echo "Error: gcc not found (needed to compile cvimg)." >&2
+            echo "Install it with: sudo apt install gcc" >&2
+            exit 1
+        fi
         echo "cvimg not found — building it..."
         mkdir -p "${BUILD_ENV}/bin"
         if gcc -std=c99 -Wall -O2 -D_GNU_SOURCE -o "${BUILD_ENV}/bin/cvimg" "$CVIMG_SRC"; then

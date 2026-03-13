@@ -2,8 +2,8 @@
 # flash_rtl8196e.sh — Flash all RTL8196E partitions via TFTP
 #
 # Unified flash script that auto-detects the bootloader type (ping probe):
-#   - Custom (V1.2/V2): bootloader first, UDP notifications, no serial needed
-#   - Tuya (original):  bootloader last, r6cr kernel wrapper, serial console required
+#   - Custom (V1.2/V2): boot-last, r6cr kernel wrapper, UDP notifications (V2)
+#   - Tuya (original):  boot-last, r6cr kernel wrapper, serial console required
 #
 # The device must be in download mode (<RealTek> prompt) before running.
 # A backup via backup_gateway.sh is proposed before flashing.
@@ -26,6 +26,13 @@ tftp_usage="$(tftp --help 2>&1 || true)"
 if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; then
     echo "Error: tftp-hpa client not found (need the -c flag)." >&2
     echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+
+# Check that netcat is installed (used for UDP notification listener)
+if ! command -v nc >/dev/null 2>&1; then
+    echo "Error: netcat (nc) not found." >&2
+    echo "Install it with: sudo apt install netcat-openbsd" >&2
     exit 1
 fi
 
@@ -181,19 +188,48 @@ check_tftp_error() {
 }
 
 # ==========================================================================
-#  CUSTOM BOOTLOADER (V1.2 / V2) — boot first, UDP notifications
+#  CUSTOM BOOTLOADER (V1.2 / V2) — boot last, UDP notifications
 # ==========================================================================
 
 flash_custom() {
     echo "Custom bootloader detected (responds to ping)."
     echo ""
+
+    if ! command -v python3 >/dev/null 2>&1; then
+        echo "Error: python3 is required to wrap the kernel image." >&2
+        exit 1
+    fi
+
+    # --- Re-wrap kernel with r6cr header (reboot=0) ----------------------------
+    # Both "boot" and "cs6c" signatures trigger auto-reboot after flash.
+    # Wrapping the kernel in r6cr avoids intermediate reboots so all partitions
+    # can be flashed before the final bootloader flash triggers the only reboot.
+
+    KERNEL_R6CR="$(mktemp "${RTL_DIR}/32-Kernel/kernel_r6cr.XXXXXX")"
+
+    python3 -c "
+import struct, sys
+kernel = open(sys.argv[1], 'rb').read()
+burn_addr = struct.unpack('>I', kernel[8:12])[0]   # burnAddr from cs6c header
+s = 0
+for i in range(0, len(kernel) - 1, 2):
+    s += (kernel[i] << 8) | kernel[i + 1]
+s &= 0xFFFF
+payload = kernel + struct.pack('>H', (-s) & 0xFFFF)
+hdr = struct.pack('>4sIII', b'r6cr', 0x80C00000, burn_addr, len(payload))
+open(sys.argv[2], 'wb').write(hdr + payload)
+" "$KERNEL_IMG" "$KERNEL_R6CR"
+
+    KERNEL_R6CR_NAME="$(basename "$KERNEL_R6CR")"
+
     echo "Ready to flash 4 partitions to ${BOOT_IP}."
-    echo "Order: bootloader → rootfs → userdata → kernel (reboot)"
+    echo "Order: rootfs → userdata → kernel → bootloader (reboot)"
     echo ""
     read -r -p "Proceed? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
 
     # Helper: flash one image and wait for bootloader UDP notification
+    # V2 sends OK/FAIL on port 9999 after flash. V1.2 has no notification.
     # Args: label dir file tftp_timeout notify_timeout
     flash_image_udp() {
         local label="$1" dir="$2" file="$3" tftp_tmo="$4" notify_tmo="$5"
@@ -203,7 +239,7 @@ flash_custom() {
         # Start UDP listener BEFORE tftp (so we don't miss the notification)
         local notify_file
         notify_file=$(mktemp)
-        (timeout "$notify_tmo" nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
+        (timeout "$notify_tmo" nc -u -l -p "$NOTIFY_PORT" > "$notify_file" 2>/dev/null) &
         local nc_pid=$!
         sleep 0.2  # let nc bind the port
 
@@ -218,7 +254,11 @@ flash_custom() {
         fi
         echo "${label} uploaded. Waiting for flash write..."
 
-        # Wait for bootloader notification
+        # Poll for notification (exit early instead of waiting full timeout)
+        while kill -0 "$nc_pid" 2>/dev/null; do
+            [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+            sleep 0.5
+        done
         wait "$nc_pid" 2>/dev/null || true
         local result
         result=$(tr -d '\0' < "$notify_file")
@@ -238,12 +278,19 @@ flash_custom() {
         fi
     }
 
-    # --- Flash bootloader first -----------------------------------------------
+    # --- Boot-last order: no intermediate reboot, no serial console (V2) ------
+    flash_image_udp "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"         30  60
+    echo "Note: userdata is 12 MB — transfer and flash may take 1-2 minutes."
+    flash_image_udp "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin"       120 180
+    flash_image_udp "kernel"     "${RTL_DIR}/32-Kernel"     "$KERNEL_R6CR_NAME"  30  60
+
+    # --- Bootloader last — triggers auto-reboot with all new firmware ---------
     echo ""
-    echo "Flashing bootloader..."
+    echo "Flashing bootloader (gateway will reboot after this)..."
+    local notify_file
     notify_file=$(mktemp)
-    (timeout 30 nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
-    nc_pid=$!
+    (timeout 30 nc -u -l -p "$NOTIFY_PORT" > "$notify_file" 2>/dev/null) &
+    local nc_pid=$!
     sleep 0.2
 
     cd "${RTL_DIR}/31-Bootloader"
@@ -257,54 +304,24 @@ flash_custom() {
     fi
     echo "Bootloader uploaded. Waiting for flash write..."
 
+    while kill -0 "$nc_pid" 2>/dev/null; do
+        [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+        sleep 0.5
+    done
     wait "$nc_pid" 2>/dev/null || true
+    local result
     result=$(tr -d '\0' < "$notify_file")
     rm -f "$notify_file"
 
     if [ "$result" = "OK" ]; then
         echo "Bootloader: Flash Write Succeeded."
     elif [ "$result" = "FAIL" ]; then
-        echo "Error: bootloader flash write FAILED on gateway." >&2
+        echo "Error: bootloader flash write FAILED." >&2
         exit 1
     else
-        echo "Warning: no notification received." >&2
-        echo "Check the serial console for 'Flash Write Succeeded!' status." >&2
-        read -r -p "Continue? [y/N] " r
-        if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
+        echo "No notification received (V1.2 bootloader — this is normal)."
     fi
 
-    # --- Flash remaining partitions -------------------------------------------
-    flash_image_udp "rootfs"     "${RTL_DIR}/33-Rootfs"     "rootfs.bin"   30  60
-    flash_image_udp "userdata"   "${RTL_DIR}/34-Userdata"   "userdata.bin" 120 180
-
-    echo ""
-    echo "Flashing kernel (auto-reboots on success)..."
-    notify_file=$(mktemp)
-    (timeout 60 nc -u -l -p "$NOTIFY_PORT" -w 1 > "$notify_file" 2>/dev/null) &
-    nc_pid=$!
-    sleep 0.2
-    cd "${RTL_DIR}/32-Kernel"
-    out=$(timeout 30 tftp -m binary "$BOOT_IP" -c put kernel.img 2>&1) || true
-    cd "$SCRIPT_DIR"
-    if check_tftp_error "$out"; then
-        kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null
-        rm -f "$notify_file"
-        echo "Error: transfer failed: $out" >&2
-        exit 1
-    fi
-    echo "Kernel uploaded. Waiting for flash write..."
-    wait "$nc_pid" 2>/dev/null || true
-    result=$(tr -d '\0' < "$notify_file")
-    rm -f "$notify_file"
-
-    if [ "$result" = "OK" ]; then
-        echo "Kernel: Flash Write Succeeded."
-    elif [ "$result" = "FAIL" ]; then
-        echo "Error: kernel flash write FAILED." >&2
-        exit 1
-    else
-        echo "Warning: no notification received." >&2
-    fi
     echo ""
     echo "Done. Gateway is rebooting with the new firmware."
 }

@@ -27,6 +27,11 @@ BUILD_ENV="${PROJECT_ROOT}/../1-Build-Environment/11-realtek-tools"
 CVIMG_TOOL="${BUILD_ENV}/bin/cvimg"
 if [ ! -f "$CVIMG_TOOL" ]; then
     echo "cvimg not found — building it..."
+    if ! command -v gcc >/dev/null 2>&1; then
+        echo "Error: gcc not found (needed to compile cvimg)." >&2
+        echo "Install it with: sudo apt install gcc" >&2
+        exit 1
+    fi
     CVIMG_SRC="${BUILD_ENV}/cvimg/cvimg.c"
     if [ ! -f "$CVIMG_SRC" ]; then
         echo "Error: cvimg source not found at ${CVIMG_SRC}" >&2
