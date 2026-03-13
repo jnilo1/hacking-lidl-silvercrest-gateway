@@ -120,6 +120,20 @@ Use this only if the bootloader is corrupted and the gateway is completely unres
 
 > A programming clip does **not** work on this board.
 
+### Detect the chip
+
+```sh
+flashrom -p ch341a_spi -c GD25Q128C
+```
+
+Expected output:
+```
+Found GigaDevice flash chip "GD25Q128C" (16384 kB, SPI) on ch341a_spi.
+No operations were specified.
+```
+
+If the chip is not detected, check your connections and install the latest version from [flashrom.org](https://www.flashrom.org/).
+
 ### Read (backup)
 
 ```sh
@@ -133,8 +147,6 @@ flashrom -p ch341a_spi -c GD25Q128C -w fullflash.bin
 ```
 
 Ensure `fullflash.bin` is exactly 16 MiB. The operation takes a few minutes.
-
-If `flashrom` does not detect the chip, install the latest version from [flashrom.org](https://www.flashrom.org/).
 
 ---
 
