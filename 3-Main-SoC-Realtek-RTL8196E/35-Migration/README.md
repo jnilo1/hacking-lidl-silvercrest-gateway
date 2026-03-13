@@ -51,14 +51,19 @@ standalone.
 | rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
 | userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |
 
-### `flash_rtl8196e.sh` — Per-partition flash (for developers)
+### `remote_flash.sh` — Per-partition flash (for developers)
 
-Flashes individual partitions via TFTP. Useful for development when you only need
-to update one component. The gateway must be in bootloader mode.
+Flashes a single partition via SSH + boothold + TFTP. Connects to the running
+gateway, sends it to bootloader mode, waits, then runs the appropriate flash
+script. No serial console needed.
 
 ```bash
-./flash_rtl8196e.sh [--ip ADDRESS]
+cd 3-Main-SoC-Realtek-RTL8196E
+./remote_flash.sh <bootloader|kernel|rootfs|userdata> [LINUX_IP] [BOOT_IP]
 ```
+
+The individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, etc.)
+can also be used directly when the gateway is already in bootloader mode.
 
 ### `flash_efr32.sh` — Silabs EFR32 radio (OTA via SSH)
 

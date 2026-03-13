@@ -136,7 +136,7 @@ echo "MODE=otbr" > /userdata/etc/radio.conf
 # 4. Gateway reboots — otbr-agent starts automatically
 ```
 
-Alternatively, reflash userdata with `flash_userdata.sh` or `flash_rtl8196e.sh` which prompt for the radio mode.
+Alternatively, reflash userdata with `flash_userdata.sh` which prompts for the radio mode.
 
 ## SSH Passwordless Access
 

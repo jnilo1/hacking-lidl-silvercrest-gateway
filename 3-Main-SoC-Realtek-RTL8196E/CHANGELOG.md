@@ -91,8 +91,7 @@ rootfs (33-), and userdata (34-).
   for gcc before attempting to compile cvimg
 - Non-interactive mode via environment variables: `CONFIRM=y` skips "Proceed?" prompt,
   `NET_MODE=static|dhcp` and `RADIO_MODE=zigbee|thread` skip userdata config prompts.
-- `flash_rtl8196e.sh`: boot-last flash order with r6cr kernel wrapper to avoid
-  intermediate reboots. Retained for per-partition developer use.
+- Removed `flash_rtl8196e.sh` (superseded by `flash_install_rtl8196e.sh` and `remote_flash.sh`)
 
 ### Thread Border Router — OTBR on-device
 - OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)
