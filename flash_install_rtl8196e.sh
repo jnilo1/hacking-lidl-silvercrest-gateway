@@ -102,6 +102,17 @@ if [ -n "$LINUX_RUNNING" ]; then
     fw_port="$(echo "$LINUX_RUNNING" | cut -d: -f3)"
     echo "Linux detected at ${fw_host}:${fw_port} (${fw_type} firmware)."
 
+    # --- propose backup (while Linux is still running) -----------------------
+    if [ "${CONFIRM:-}" != "y" ]; then
+        echo ""
+        echo "It is recommended to back up the flash before installing."
+        read -r -p "Run backup_gateway.sh now? [y/N] " do_backup
+        if [[ "$do_backup" =~ ^[yY]$ ]]; then
+            "${SCRIPT_DIR}/backup_gateway.sh" --linux-ip "$fw_host" --boot-ip "$BOOT_IP"
+            echo ""
+        fi
+    fi
+
     if [ "$fw_type" = "custom" ]; then
         echo "Sending boothold + reboot..."
         ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
@@ -197,17 +208,17 @@ fi
 
 echo "Bootloader detected at ${BOOT_IP} (type: ${BOOTLOADER_TYPE})."
 
-# --- propose backup ----------------------------------------------------------
-
-echo ""
-echo "It is recommended to back up the flash before installing."
-if [ "${CONFIRM:-}" = "y" ]; then
-    echo "(skipped — CONFIRM=y)"
-else
-    read -r -p "Run backup_gateway.sh now? [y/N] " do_backup
-    if [[ "$do_backup" =~ ^[yY]$ ]]; then
-        "${SCRIPT_DIR}/backup_gateway.sh" --boot-ip "$BOOT_IP"
-        echo ""
+# If we reached bootloader without going through Linux (no backup opportunity),
+# warn the user.
+if [ -z "$LINUX_RUNNING" ] && [ "${CONFIRM:-}" != "y" ]; then
+    echo ""
+    echo "WARNING: No backup was made. To back up first, boot the gateway"
+    echo "into Linux and run:  ./backup_gateway.sh"
+    echo ""
+    read -r -p "Continue without backup? [y/N] " do_continue
+    if [[ ! "$do_continue" =~ ^[yY]$ ]]; then
+        echo "Aborted."
+        exit 0
     fi
 fi
 
