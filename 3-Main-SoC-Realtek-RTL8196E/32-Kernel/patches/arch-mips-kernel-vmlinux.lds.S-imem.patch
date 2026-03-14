@@ -1,6 +1,6 @@
 --- a/arch/mips/kernel/vmlinux.lds.S
 +++ b/arch/mips/kernel/vmlinux.lds.S
-@@ -83,6 +83,33 @@
+@@ -83,6 +83,34 @@
  		__stop___dbe_table = .;
  	}
  
@@ -31,6 +31,7 @@
 +	}
 +	__dram_end = .;
 +#endif
- 
++
  	_sdata = .;			/* Start of data section */
  	RO_DATA(4096)
+ 
