@@ -5,14 +5,12 @@
 #   1. TCP Ubuntu -> RTL8196E  (RX, 30s)
 #   2. TCP RTL8196E -> Ubuntu  (TX, 30s)
 #
-# Based on the full test suite at:
-#   /mnt/data1/Linuxdev/rtl_rootfs/test_ethernet_rtl8196e.sh
-#
 # Baseline (legacy rtl819x v2.1.0):
 #   RX: 86.6 Mbps  |  TX: 48.1 Mbps
-#   /mnt/data1/Linuxdev/rtl_rootfs/test_results_rtl819x_v2.1.0_20260205/
 #
-# Usage: ./test_rtl8196e_eth.sh [description]
+# Can be run from any directory — results are saved in 32-Kernel/.
+#
+# Usage: ./scripts/test_rtl8196e_eth.sh [description]
 #
 # J. Nilo — February 2026
 
@@ -26,7 +24,8 @@ IPERF_PORT=5001
 DURATION=30
 RTL_IFACE="eth0"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LOG_DIR="${SCRIPT_DIR}/test_results_$(date +%Y%m%d_%H%M%S)"
+KERNEL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${KERNEL_DIR}/test_results_$(date +%Y%m%d_%H%M%S)"
 TEST_DESCRIPTION="${1:-rtl8196e-eth quick test}"
 
 # Colors & logging
