@@ -44,11 +44,16 @@ SLEEP_BETWEEN="${SLEEP_BETWEEN:-0.2}"
 
 ETH0_CONF="${SCRIPT_DIR}/skeleton/etc/eth0.conf"
 RADIO_CONF="${SCRIPT_DIR}/skeleton/etc/radio.conf"
-MAC_CONF="${SCRIPT_DIR}/skeleton/etc/mac_address"
-AUTH_KEYS="${SCRIPT_DIR}/skeleton/ssh/authorized_keys"
-
-# Remove generated config files on exit (success or failure) to keep skeleton clean
-cleanup() { rm -f "$ETH0_CONF" "$RADIO_CONF" "$MAC_CONF" "$AUTH_KEYS"; }
+# Save skeleton state before any config injection, restore on exit
+SKEL_BACKUP=$(mktemp -d)
+cp -a "${SCRIPT_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
+cp -a "${SCRIPT_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
+cleanup() {
+    rm -rf "${SCRIPT_DIR}/skeleton/etc" "${SCRIPT_DIR}/skeleton/ssh"
+    cp -a "$SKEL_BACKUP/etc" "${SCRIPT_DIR}/skeleton/etc"
+    [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${SCRIPT_DIR}/skeleton/ssh"
+    rm -rf "$SKEL_BACKUP"
+}
 trap cleanup EXIT
 
 # --- Network configuration -------------------------------------------------
