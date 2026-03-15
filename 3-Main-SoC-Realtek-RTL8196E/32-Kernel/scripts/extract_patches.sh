@@ -5,7 +5,9 @@
 #   - files/     : New files that don't exist in vanilla kernel
 #   - patches/   : Unified diff patches for modified files
 #
-# Usage: ./extract_patches.sh [patched_kernel_dir]
+# Can be run from any directory — all paths are relative to 32-Kernel/.
+#
+# Usage: ./scripts/extract_patches.sh [patched_kernel_dir]
 #
 # Environment variables:
 #   OUTPUT_FILES    - Output directory for new files (default: files)
@@ -33,6 +35,9 @@ RED='\033[0;31m'
 NC='\033[0m'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+KERNEL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+cd "$KERNEL_DIR"
 
 # Parse arguments
 PATCHED_DIR="${1:-$PATCHED_DIR_DEFAULT}"
