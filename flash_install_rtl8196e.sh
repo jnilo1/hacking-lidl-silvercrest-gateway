@@ -114,9 +114,28 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
 
     if [ "$fw_type" = "custom" ]; then
+        SSH_SOCK="/tmp/flash_install_ssh_$$"
+        FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10"
+
+        # Save user config before reboot (will be injected into userdata)
+        echo "Saving gateway config..."
+        SAVE_TAR=$(mktemp)
+        # shellcheck disable=SC2086
+        ssh $FI_SSH_OPTS "root@${fw_host}" \
+            "tar cf - -C /userdata etc ssh 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+        if [ -s "$SAVE_TAR" ]; then
+            USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
+            tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
+            echo "  Preserved: etc/ and ssh/ from gateway"
+            export NET_MODE="skip"
+            export RADIO_MODE="skip"
+        fi
+        rm -f "$SAVE_TAR"
+
         echo "Sending boothold + reboot..."
-        ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 \
-            "root@${fw_host}" "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+        # shellcheck disable=SC2086
+        ssh $FI_SSH_OPTS "root@${fw_host}" \
+            "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
     else
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."

@@ -82,58 +82,78 @@ fi
 ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
 RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
 
-    # Network config
-    if [ "${NET_MODE:-}" = "static" ] || [ "${NET_MODE:-}" = "dhcp" ]; then
-        net_choice="${NET_MODE}"
-    else
-        echo "Network configuration:"
-        echo "  [1] Static IP (recommended)"
-        echo "  [2] DHCP"
-        read -r -p "Choice [1]: " net_choice
-        net_choice="${net_choice:-1}"
-        [ "$net_choice" = "1" ] && net_choice="static"
-        [ "$net_choice" = "2" ] && net_choice="dhcp"
-    fi
+# Save skeleton state before any config injection, restore after build
+SKEL_BACKUP=$(mktemp -d)
+cp -a "${USERDATA_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
+cp -a "${USERDATA_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
+restore_skeleton() {
+    rm -rf "${USERDATA_DIR}/skeleton/etc" "${USERDATA_DIR}/skeleton/ssh"
+    cp -a "$SKEL_BACKUP/etc" "${USERDATA_DIR}/skeleton/etc"
+    [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${USERDATA_DIR}/skeleton/ssh"
+    rm -rf "$SKEL_BACKUP"
+}
+trap restore_skeleton EXIT
 
-    if [ "$net_choice" = "static" ]; then
-        if [ -z "${NET_MODE:-}" ]; then
-            read -r -p "IP address [192.168.1.88]: " IPADDR_IN
-            read -r -p "Netmask    [255.255.255.0]: " NETMASK_IN
-            read -r -p "Gateway    [192.168.1.1]:   " GATEWAY_IN
-            IPADDR="${IPADDR_IN:-${IPADDR:-192.168.1.88}}"
-            NETMASK="${NETMASK_IN:-${NETMASK:-255.255.255.0}}"
-            GATEWAY="${GATEWAY_IN:-${GATEWAY:-192.168.1.1}}"
-        else
-            IPADDR="${IPADDR:-192.168.1.88}"
-            NETMASK="${NETMASK:-255.255.255.0}"
-            GATEWAY="${GATEWAY:-192.168.1.1}"
-        fi
-        printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
-        echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+    # Network config — "skip" means config already injected by caller
+    if [ "${NET_MODE:-}" = "skip" ]; then
+        echo "→ Network config preserved from gateway"
     else
-        rm -f "$ETH0_CONF"
-        echo "→ DHCP"
+        if [ "${NET_MODE:-}" = "static" ] || [ "${NET_MODE:-}" = "dhcp" ]; then
+            net_choice="${NET_MODE}"
+        else
+            echo "Network configuration:"
+            echo "  [1] Static IP (recommended)"
+            echo "  [2] DHCP"
+            read -r -p "Choice [1]: " net_choice
+            net_choice="${net_choice:-1}"
+            [ "$net_choice" = "1" ] && net_choice="static"
+            [ "$net_choice" = "2" ] && net_choice="dhcp"
+        fi
+
+        if [ "$net_choice" = "static" ]; then
+            if [ -z "${NET_MODE:-}" ]; then
+                read -r -p "IP address [192.168.1.88]: " IPADDR_IN
+                read -r -p "Netmask    [255.255.255.0]: " NETMASK_IN
+                read -r -p "Gateway    [192.168.1.1]:   " GATEWAY_IN
+                IPADDR="${IPADDR_IN:-${IPADDR:-192.168.1.88}}"
+                NETMASK="${NETMASK_IN:-${NETMASK:-255.255.255.0}}"
+                GATEWAY="${GATEWAY_IN:-${GATEWAY:-192.168.1.1}}"
+            else
+                IPADDR="${IPADDR:-192.168.1.88}"
+                NETMASK="${NETMASK:-255.255.255.0}"
+                GATEWAY="${GATEWAY:-192.168.1.1}"
+            fi
+            printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
+            echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+        else
+            rm -f "$ETH0_CONF"
+            echo "→ DHCP"
+        fi
     fi
 
     # Radio config
-    if [ "${RADIO_MODE:-}" = "zigbee" ] || [ "${RADIO_MODE:-}" = "thread" ]; then
-        radio_choice="${RADIO_MODE}"
+    if [ "${RADIO_MODE:-}" = "skip" ]; then
+        echo "→ Radio config preserved from gateway"
     else
-        echo "Radio mode:"
-        echo "  [1] Zigbee (NCP or RCP+zigbeed)"
-        echo "  [2] Thread (OTBR)"
-        read -r -p "Choice [1]: " radio_choice
-        radio_choice="${radio_choice:-1}"
-        [ "$radio_choice" = "1" ] && radio_choice="zigbee"
-        [ "$radio_choice" = "2" ] && radio_choice="thread"
-    fi
+        if [ "${RADIO_MODE:-}" = "zigbee" ] || [ "${RADIO_MODE:-}" = "thread" ]; then
+            radio_choice="${RADIO_MODE}"
+        else
+            echo "Radio mode:"
+            echo "  [1] Zigbee (NCP or RCP+zigbeed)"
+            echo "  [2] Thread (OTBR)"
+            read -r -p "Choice [1]: " radio_choice
+            radio_choice="${radio_choice:-1}"
+            [ "$radio_choice" = "1" ] && radio_choice="zigbee"
+            [ "$radio_choice" = "2" ] && radio_choice="thread"
+        fi
 
-    if [ "$radio_choice" = "thread" ]; then
-        echo "MODE=otbr" > "$RADIO_CONF"
-        echo "→ Thread (OTBR)"
-    else
-        rm -f "$RADIO_CONF"
-        echo "→ Zigbee"
+        if [ "$radio_choice" = "thread" ]; then
+            echo "MODE=otbr" > "$RADIO_CONF"
+            echo "→ Thread (OTBR)"
+        else
+            rm -f "$RADIO_CONF"
+            echo "→ Zigbee"
+        fi
     fi
     echo ""
 
@@ -141,8 +161,7 @@ RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
     "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
     echo ""
 
-    # Cleanup config files (they're now baked into the JFFS2)
-    rm -f "$ETH0_CONF" "$RADIO_CONF"
+    # Skeleton is restored by the EXIT trap (restore_skeleton)
 
 # --- check sizes -------------------------------------------------------------
 
