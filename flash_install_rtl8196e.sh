@@ -256,15 +256,16 @@ if [ "$BOOTLOADER_TYPE" = "v2" ]; then
         echo "Error: TFTP transfer failed: $out" >&2
         exit 1
     fi
-    echo "Upload OK. Waiting for auto-flash notification (10s)..."
+    echo "Upload OK. Waiting for auto-flash (up to 3 minutes)..."
 
     # Wait for UDP notification (OK or FAIL) on port 9999
     # V2.3+ bootloaders auto-flash and notify within seconds.
-    # Older V2 bootloaders send FAIL or nothing — short timeout to avoid blocking.
+    # Older V2 bootloaders send FAIL or nothing.
+    # Flash takes ~2 minutes — timeout must cover the full write cycle.
     result=""
     if command -v nc >/dev/null 2>&1; then
         notify_file=$(mktemp)
-        (timeout 10 nc -u -l -p 9999 > "$notify_file" 2>/dev/null) &
+        (timeout 180 nc -u -l -p 9999 > "$notify_file" 2>/dev/null) &
         nc_pid=$!
 
         while kill -0 "$nc_pid" 2>/dev/null; do
