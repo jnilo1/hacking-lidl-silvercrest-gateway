@@ -117,6 +117,13 @@ if [ -n "$LINUX_RUNNING" ]; then
         SSH_SOCK="/tmp/flash_install_ssh_$$"
         FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10"
 
+        # Verify SSH access before proceeding
+        # shellcheck disable=SC2086
+        if ! ssh $FI_SSH_OPTS "root@${fw_host}" "true" 2>/dev/null; then
+            echo "Error: SSH authentication failed." >&2
+            exit 1
+        fi
+
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
         echo "Saving gateway config..."

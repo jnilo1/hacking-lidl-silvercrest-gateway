@@ -83,6 +83,13 @@ if ssh_reachable; then
     # --- step 2: preserve config before reboot (userdata only) ----------------
 
     if [ "$COMPONENT" = "userdata" ]; then
+        # Verify SSH access (opens ControlMaster connection)
+        # shellcheck disable=SC2086
+        if ! ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" "true" 2>/dev/null; then
+            echo "Error: SSH authentication failed." >&2
+            exit 1
+        fi
+
         echo "Saving gateway config before flash..."
         SKELETON="${FLASH_DIR}/skeleton"
         SAVE_TAR=$(mktemp)
