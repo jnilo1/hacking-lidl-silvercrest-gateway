@@ -27,7 +27,8 @@ LINUX_IP="${2:-192.168.1.88}"
 BOOT_IP="${3:-192.168.1.6}"
 
 SSH_USER="${SSH_USER:-root}"
-SSH_OPTS="${SSH_OPTS:--o ConnectTimeout=5}"
+SSH_SOCK="/tmp/remote_flash_ssh_$$"
+SSH_OPTS="${SSH_OPTS:--o ConnectTimeout=5} -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=60"
 
 usage() {
     echo "Usage: $0 <bootloader|kernel|rootfs|userdata> [LINUX_IP] [BOOT_IP]"
