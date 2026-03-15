@@ -86,13 +86,15 @@ if ssh_reachable; then
         echo "Saving gateway config before flash..."
         SKELETON="${FLASH_DIR}/skeleton"
         SAVE_TAR=$(mktemp)
+        # Save only user-configurable files (not init scripts or system files)
+        SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         # shellcheck disable=SC2086
         ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
-            "tar cf - -C /userdata etc ssh 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+            "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
 
         if [ -s "$SAVE_TAR" ]; then
             tar xf "$SAVE_TAR" -C "$SKELETON" 2>/dev/null || true
-            echo "  Preserved: etc/ and ssh/ from gateway"
+            echo "  Preserved user config from gateway"
             CONFIG_PRESERVED=true
         else
             echo "  Warning: could not save config from gateway"

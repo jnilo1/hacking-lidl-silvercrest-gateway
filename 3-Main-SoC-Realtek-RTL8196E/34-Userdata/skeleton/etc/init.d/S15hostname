@@ -40,14 +40,7 @@ cat >/var/hosts <<EOF
 $CURRENT_IP       $HOSTNAME
 EOF
 
-# Write /var/resolv.conf (symlinked from /etc/resolv.conf to avoid jffs2 writes)
-# but only if not using dhcp
-if [ -f /userdata/etc/eth0.conf ]; then
-cat >/var/resolv.conf <<EOF
-nameserver 8.8.8.8
-nameserver 1.1.1.1
-EOF
-fi
+# resolv.conf is set by S10network (static: from eth0.conf, DHCP: from udhcpc)
 
 # Clean-up
 if [ -f /var/run/current_eth0_ip ]; then

@@ -118,15 +118,17 @@ if [ -n "$LINUX_RUNNING" ]; then
         FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10"
 
         # Save user config before reboot (will be injected into userdata)
+        # Only user-configurable files — not init scripts or system files
         echo "Saving gateway config..."
         SAVE_TAR=$(mktemp)
+        SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "tar cf - -C /userdata etc ssh 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+            "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
         if [ -s "$SAVE_TAR" ]; then
             USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
             tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
-            echo "  Preserved: etc/ and ssh/ from gateway"
+            echo "  Preserved user config from gateway"
             export NET_MODE="skip"
             export RADIO_MODE="skip"
         fi
