@@ -6,12 +6,12 @@
 #   - EFR32 flashed with OT-RCP firmware
 #   - otbr-agent binary in /userdata/usr/bin/
 #
-# Flash wear protection:
-#   otbr-agent writes frame counters every ~1000 frames (~480 writes/day).
-#   To protect the JFFS2 flash, we run from tmpfs (/tmp/thread) and only
-#   sync back to flash (/userdata/thread) once Thread is up + on clean shutdown.
-#   On power loss, only frame counters are lost — OpenThread handles this
-#   by jumping ahead on next boot.
+# Storage:
+#   otbr-agent runs from tmpfs (/tmp/thread) to protect JFFS2 from flash
+#   wear (frame counters update ~480 times/day). The active dataset is
+#   synced to flash (/userdata/thread) once Thread is up + on clean shutdown.
+#   On power loss, only frame counters are lost — OpenThread recovers by
+#   jumping ahead on next boot.
 
 OTBR_BIN="/userdata/usr/bin/otbr-agent"
 
