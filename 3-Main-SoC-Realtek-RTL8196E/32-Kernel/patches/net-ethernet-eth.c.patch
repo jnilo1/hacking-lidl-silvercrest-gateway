@@ -1,9 +1,9 @@
 --- a/net/ethernet/eth.c
 +++ b/net/ethernet/eth.c
-@@ -52,6 +52,12 @@
- #include <linux/of_net.h>
- #include <linux/pci.h>
-
+@@ -61,6 +61,12 @@
+ #include <linux/uaccess.h>
+ #include <net/pkt_sched.h>
+ 
 +#ifdef CONFIG_RTL8196E_IMEM
 +#define __iram_hotpath __attribute__((section(".iram")))
 +#else
@@ -11,7 +11,7 @@
 +#endif
 +
  __setup("ether=", netdev_boot_setup);
-
+ 
  /**
 @@ -152,7 +158,7 @@
   * assume 802.3 if the type field is short enough to be a length.

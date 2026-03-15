@@ -1,9 +1,22 @@
 --- a/net/core/skbuff.c
 +++ b/net/core/skbuff.c
-@@ -89,6 +89,13 @@
+@@ -81,6 +81,12 @@
+ #include "datagram.h"
+ #include "sock_destructor.h"
+ 
++#ifdef CONFIG_RTL8196E_IMEM
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ struct kmem_cache *skbuff_head_cache __ro_after_init;
+ static struct kmem_cache *skbuff_fclone_cache __ro_after_init;
+ #ifdef CONFIG_SKB_EXTENSIONS
+@@ -89,6 +95,13 @@
  int sysctl_max_skb_frags __read_mostly = MAX_SKB_FRAGS;
  EXPORT_SYMBOL(sysctl_max_skb_frags);
-
+ 
 +/* Realtek private buffer pool support - vendor patch from 2.6.30
 + * Only active when the legacy rtl819x driver is compiled in. */
 +#ifdef CONFIG_RTL819X
@@ -14,10 +27,30 @@
  /**
   *	skb_panic - private function for out-of-line support
   *	@skb:	buffer
-@@ -600,10 +606,16 @@ static void skb_free_head(struct sk_buff *skb)
+@@ -311,7 +324,7 @@
+  *  before giving packet to stack.
+  *  RX rings only contains data buffers, not full skbs.
+  */
+-struct sk_buff *__build_skb(void *data, unsigned int frag_size)
++struct sk_buff * __iram_hotpath __build_skb(void *data, unsigned int frag_size)
+ {
+ 	struct sk_buff *skb;
+ 
+@@ -504,8 +517,8 @@
+  *
+  *	%NULL is returned if there is no free memory.
+  */
+-struct sk_buff *__napi_alloc_skb(struct napi_struct *napi, unsigned int len,
+-				 gfp_t gfp_mask)
++struct sk_buff * __iram_hotpath __napi_alloc_skb(struct napi_struct *napi,
++				 unsigned int len, gfp_t gfp_mask)
+ {
+ 	struct napi_alloc_cache *nc;
+ 	struct sk_buff *skb;
+@@ -600,10 +613,16 @@
  {
  	unsigned char *head = skb->head;
-
+ 
 -	if (skb->head_frag)
 +	if (skb->head_frag) {
  		skb_free_frag(head);
@@ -32,5 +65,14 @@
 +			kfree(head);
 +	}
  }
-
+ 
  static void skb_release_data(struct sk_buff *skb)
+@@ -905,7 +924,7 @@
+ 	_kfree_skb_defer(skb);
+ }
+ 
+-void napi_consume_skb(struct sk_buff *skb, int budget)
++void __iram_hotpath napi_consume_skb(struct sk_buff *skb, int budget)
+ {
+ 	/* Zero budget indicate non-NAPI context called us, like netpoll */
+ 	if (unlikely(!budget)) {

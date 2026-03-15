@@ -3,7 +3,7 @@
 @@ -17,6 +17,12 @@
  #include <linux/irqdomain.h>
  #include <linux/sysfs.h>
-
+ 
 +#ifdef CONFIG_RTL8196E_IMEM
 +#define __iram_hotpath __attribute__((section(".iram")))
 +#else
@@ -11,7 +11,7 @@
 +#endif
 +
  #include "internals.h"
-
+ 
  /*
 @@ -641,7 +647,7 @@
   * @irq:	The irq number to handle

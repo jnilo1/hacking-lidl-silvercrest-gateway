@@ -4,7 +4,7 @@
 # Uses arch/mips/boot/compressed/ (zboot) — no external lzma or lzma-loader.
 #
 # Supports two Ethernet drivers selectable at build time:
-#   - rtl8196e-eth  (new, recommended) — default
+#   - rtl8196e  (new, recommended) — default
 #   - rtl819x       (legacy SDK port)  — pass 'legacy' argument
 #
 # Usage:
@@ -88,7 +88,7 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: $0 [legacy] [clean|menuconfig|olddefconfig|vmlinux]"
             echo ""
-            echo "  (none)        New driver (rtl8196e-eth) — default"
+            echo "  (none)        New driver (rtl8196e) — default"
             echo "  legacy        Legacy driver (rtl819x)"
             echo "  clean         Remove build tree and rebuild from scratch"
             echo "  menuconfig    Run kernel menuconfig"
@@ -106,10 +106,10 @@ done
 
 # Driver-specific settings
 if [ "$DRIVER" = "new" ]; then
-    export LOCALVERSION="-rtl8196e-eth"
-    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-eth"
+    export LOCALVERSION="-rtl8196e"
+    BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e"
     IMAGE="${SCRIPT_DIR}/kernel.img"
-    DRIVER_LABEL="rtl8196e-eth (new, recommended)"
+    DRIVER_LABEL="rtl8196e (new, recommended)"
 else
     export LOCALVERSION="-rtl8196e"
     BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_VERSION}-rtl8196e-legacy"

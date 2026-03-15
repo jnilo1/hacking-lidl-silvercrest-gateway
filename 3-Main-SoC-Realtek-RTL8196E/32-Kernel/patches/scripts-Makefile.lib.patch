@@ -2,10 +2,10 @@
 +++ b/scripts/Makefile.lib
 @@ -370,7 +370,7 @@
  # ---------------------------------------------------------------------------
-
+ 
  quiet_cmd_lzma = LZMA    $@
 -      cmd_lzma = { cat $(real-prereqs) | $(LZMA) -9; $(size_append); } > $@
 +      cmd_lzma = { cat $(real-prereqs) | $(LZMA) --lzma1=lc=1,lp=2,pb=2,dict=8MiB; $(size_append); } > $@
-
+ 
  quiet_cmd_lzo = LZO     $@
        cmd_lzo = { cat $(real-prereqs) | $(KLZOP) -9; $(size_append); } > $@
