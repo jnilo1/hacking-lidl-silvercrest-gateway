@@ -67,7 +67,8 @@ start)
     # Sync dataset to flash once Thread is up (background)
     (
         for _ in $(seq 1 30); do
-            state=$(/userdata/usr/bin/ot-ctl state 2>/dev/null | tr -d '\r\n')
+            state=$(/userdata/usr/bin/ot-ctl state 2>/dev/null)
+            state=${state%%[[:cntrl:]]*}
             case "$state" in
                 leader|router|child)
                     cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
