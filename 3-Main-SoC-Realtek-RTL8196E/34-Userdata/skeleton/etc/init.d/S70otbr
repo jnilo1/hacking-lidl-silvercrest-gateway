@@ -9,7 +9,7 @@
 # Flash wear protection:
 #   otbr-agent writes frame counters every ~1000 frames (~480 writes/day).
 #   To protect the JFFS2 flash, we run from tmpfs (/tmp/thread) and only
-#   sync back to flash (/userdata/thread) once per day + on clean shutdown.
+#   sync back to flash (/userdata/thread) once Thread is up + on clean shutdown.
 #   On power loss, only frame counters are lost — OpenThread handles this
 #   by jumping ahead on next boot.
 
@@ -30,7 +30,6 @@ REST_PORT="8081"
 FLASH_DIR="/userdata/thread"
 RAM_DIR="/tmp/thread"
 SYNC_PID="/tmp/otbr-sync.pid"
-SYNC_INTERVAL=86400  # seconds (24 hours)
 
 case "$1" in
 start)
@@ -65,8 +64,19 @@ start)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
 
-    # Daily sync loop: tmpfs → flash (background)
-    ( while sleep $SYNC_INTERVAL; do cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; done ) &
+    # Sync dataset to flash once Thread is up (background)
+    (
+        for _ in $(seq 1 30); do
+            state=$(/userdata/usr/bin/ot-ctl state 2>/dev/null | tr -d '\r\n')
+            case "$state" in
+                leader|router|child)
+                    cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
+                    break
+                    ;;
+            esac
+            sleep 2
+        done
+    ) &
     echo $! > "$SYNC_PID"
     ;;
 

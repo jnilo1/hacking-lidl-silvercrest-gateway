@@ -16,11 +16,11 @@
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
 case "$1" in
 deconfig)
-    ip addr flush dev "$interface"
+    ip -4 addr flush dev "$interface"
     echo "Interface $interface deconfigured, waiting for DHCP..."
     ;;
 renew | bound)
-    ip addr flush dev "$interface"
+    ip -4 addr flush dev "$interface"
     ip addr add "$ip/$mask" broadcast "$broadcast" dev "$interface"
     echo "IP assigned to $interface: $ip"
     echo "$ip" >/var/run/current_eth0_ip
@@ -54,7 +54,7 @@ renew | bound)
 leasefail)
     # Backup configuration in case of DHCP failure
     echo "DHCP failed after 3 attempts, falling back to IP 192.168.1.254"
-    ip addr flush dev "$interface"
+    ip -4 addr flush dev "$interface"
     ip addr add 192.168.1.254/24 dev "$interface"
     echo "192.168.1.254" >/var/run/current_eth0_ip
 
