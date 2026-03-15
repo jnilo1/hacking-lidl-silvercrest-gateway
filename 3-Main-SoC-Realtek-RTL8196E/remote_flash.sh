@@ -81,7 +81,27 @@ if bootloader_reachable; then
 elif ssh_reachable; then
     echo "Gateway is running Linux at ${LINUX_IP}."
 
-    # --- step 2: send boothold via SSH ----------------------------------------
+    # --- step 2: preserve config before reboot (userdata only) ----------------
+
+    if [ "$COMPONENT" = "userdata" ]; then
+        echo "Saving gateway config before flash..."
+        SKELETON="${FLASH_DIR}/skeleton"
+        SAVE_TAR=$(mktemp)
+        # shellcheck disable=SC2086
+        ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
+            "tar cf - -C /userdata etc ssh 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
+
+        if [ -s "$SAVE_TAR" ]; then
+            tar xf "$SAVE_TAR" -C "$SKELETON" 2>/dev/null || true
+            echo "  Preserved: etc/ and ssh/ from gateway"
+            CONFIG_PRESERVED=true
+        else
+            echo "  Warning: could not save config from gateway"
+        fi
+        rm -f "$SAVE_TAR"
+    fi
+
+    # --- step 3: send boothold via SSH ----------------------------------------
 
     echo "Sending boothold..."
     # shellcheck disable=SC2086
@@ -121,27 +141,12 @@ echo ""
 cd "$FLASH_DIR"
 export CONFIRM=y
 if [ "$COMPONENT" = "userdata" ]; then
-    # Preserve user config from the running gateway before flashing
-    echo "Saving gateway config before flash..."
-    SKELETON="${FLASH_DIR}/skeleton"
-    SAVE_TAR=$(mktemp)
-    # shellcheck disable=SC2086
-    ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
-        "tar cf - -C /userdata etc ssh 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
-
-    if [ -s "$SAVE_TAR" ]; then
-        # Extract saved config over skeleton (overwrites defaults with user config)
-        tar xf "$SAVE_TAR" -C "$SKELETON" 2>/dev/null || true
-        echo "  Preserved: etc/ and ssh/ from gateway"
-        # Skip network/radio prompts — config is preserved
+    if [ "${CONFIG_PRESERVED:-}" = "true" ]; then
         export NET_MODE="skip"
         export RADIO_MODE="skip"
     else
-        echo "  Warning: could not save config from gateway"
         export NET_MODE="${NET_MODE:-static}"
         export RADIO_MODE="${RADIO_MODE:-zigbee}"
     fi
-    rm -f "$SAVE_TAR"
-    export CONFIRM=y
 fi
 ./"$FLASH_SCRIPT" "$BOOT_IP"
