@@ -76,9 +76,7 @@ bootloader_reachable() {
 
 echo "Checking gateway state..."
 
-if bootloader_reachable; then
-    echo "Gateway is already in bootloader mode."
-elif ssh_reachable; then
+if ssh_reachable; then
     echo "Gateway is running Linux at ${LINUX_IP}."
 
     # --- step 2: preserve config before reboot (userdata only) ----------------
@@ -130,6 +128,8 @@ elif ssh_reachable; then
         exit 1
     fi
     echo "Bootloader is up."
+elif bootloader_reachable && ! ssh_reachable; then
+    echo "Gateway is already in bootloader mode."
 else
     echo "Error: gateway unreachable — neither SSH (${LINUX_IP}:22) nor bootloader (${BOOT_IP})." >&2
     exit 1
