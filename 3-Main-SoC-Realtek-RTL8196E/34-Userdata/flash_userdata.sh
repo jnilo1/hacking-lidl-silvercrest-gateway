@@ -44,52 +44,68 @@ SLEEP_BETWEEN="${SLEEP_BETWEEN:-0.2}"
 
 ETH0_CONF="${SCRIPT_DIR}/skeleton/etc/eth0.conf"
 RADIO_CONF="${SCRIPT_DIR}/skeleton/etc/radio.conf"
+MAC_CONF="${SCRIPT_DIR}/skeleton/etc/mac_address"
+AUTH_KEYS="${SCRIPT_DIR}/skeleton/ssh/authorized_keys"
 
 # Remove generated config files on exit (success or failure) to keep skeleton clean
-cleanup() { rm -f "$ETH0_CONF" "$RADIO_CONF"; }
+cleanup() { rm -f "$ETH0_CONF" "$RADIO_CONF" "$MAC_CONF" "$AUTH_KEYS"; }
 trap cleanup EXIT
 
 # --- Network configuration -------------------------------------------------
 
-if [ -n "${NET_MODE:-}" ]; then
-    net_choice="$NET_MODE"
+# "skip" = config already in skeleton (preserved from gateway by remote_flash.sh)
+if [ "${NET_MODE:-}" = "skip" ]; then
+    echo "→ Network config preserved from gateway"
 else
-    echo "Network configuration for the gateway:"
-    echo "  [1] Static IP (recommended)"
-    echo "  [2] DHCP"
-    read -r -p "Choice [1]: " net_choice
-    net_choice="${net_choice:-1}"
-fi
-
-if [ "$net_choice" = "static" ] || [ "$net_choice" = "1" ]; then
-    if [ -z "${NET_MODE:-}" ]; then
-        read -r -p "IP address [192.168.1.88]: " IPADDR
-        read -r -p "Netmask    [255.255.255.0]: " NETMASK
-        read -r -p "Gateway    [192.168.1.1]:   " GATEWAY
+    if [ -n "${NET_MODE:-}" ]; then
+        net_choice="$NET_MODE"
+    else
+        echo "Network configuration for the gateway:"
+        echo "  [1] Static IP (recommended)"
+        echo "  [2] DHCP"
+        read -r -p "Choice [1]: " net_choice
+        net_choice="${net_choice:-1}"
     fi
-    IPADDR="${IPADDR:-192.168.1.88}"
-    NETMASK="${NETMASK:-255.255.255.0}"
-    GATEWAY="${GATEWAY:-192.168.1.1}"
-    printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
-    echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
 
-    # Update gateway IP in Docker Compose and Z2M config files
-    DOCKER_DIR="${SCRIPT_DIR}/../../2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker"
-    if [ -d "$DOCKER_DIR" ]; then
-        sed -i "s|RCP_HOST=[0-9.]*|RCP_HOST=${IPADDR}|" \
-            "$DOCKER_DIR/docker-compose-otbr-host.yml" 2>/dev/null || true
-        sed -i "s|tcp://[0-9.]*:8888|tcp://${IPADDR}:8888|" \
-            "$DOCKER_DIR/z2m/configuration.yaml" 2>/dev/null || true
+    if [ "$net_choice" = "static" ] || [ "$net_choice" = "1" ]; then
+        if [ -z "${NET_MODE:-}" ]; then
+            read -r -p "IP address [192.168.1.88]: " IPADDR
+            read -r -p "Netmask    [255.255.255.0]: " NETMASK
+            read -r -p "Gateway    [192.168.1.1]:   " GATEWAY
+        fi
+        IPADDR="${IPADDR:-192.168.1.88}"
+        NETMASK="${NETMASK:-255.255.255.0}"
+        GATEWAY="${GATEWAY:-192.168.1.1}"
+        printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
+        # Optional DNS/domain (defaults: gateway IP, no search domain)
+        if [ -z "${NET_MODE:-}" ]; then
+            read -r -p "DNS server [$GATEWAY]: " DNS
+            read -r -p "Search domain []: " DOMAIN
+        fi
+        [ -n "${DNS:-}" ] && echo "DNS=$DNS" >> "$ETH0_CONF"
+        [ -n "${DOMAIN:-}" ] && echo "DOMAIN=$DOMAIN" >> "$ETH0_CONF"
+        echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+
+        # Update gateway IP in Docker Compose and Z2M config files
+        DOCKER_DIR="${SCRIPT_DIR}/../../2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker"
+        if [ -d "$DOCKER_DIR" ]; then
+            sed -i "s|RCP_HOST=[0-9.]*|RCP_HOST=${IPADDR}|" \
+                "$DOCKER_DIR/docker-compose-otbr-host.yml" 2>/dev/null || true
+            sed -i "s|tcp://[0-9.]*:8888|tcp://${IPADDR}:8888|" \
+                "$DOCKER_DIR/z2m/configuration.yaml" 2>/dev/null || true
+        fi
+    else
+        rm -f "$ETH0_CONF"
+        echo "→ DHCP"
     fi
-else
-    rm -f "$ETH0_CONF"
-    echo "→ DHCP"
 fi
 echo ""
 
 # --- Radio mode configuration ----------------------------------------------
 
-if [ -n "${RADIO_MODE:-}" ]; then
+if [ "${RADIO_MODE:-}" = "skip" ]; then
+    echo "→ Radio config preserved from gateway"
+elif [ -n "${RADIO_MODE:-}" ]; then
     radio_choice="$RADIO_MODE"
 else
     echo "Radio mode (EFR32 firmware must match):"
@@ -99,12 +115,14 @@ else
     radio_choice="${radio_choice:-1}"
 fi
 
-if [ "$radio_choice" = "thread" ] || [ "$radio_choice" = "2" ]; then
-    echo "MODE=otbr" > "$RADIO_CONF"
-    echo "→ Thread Border Router (otbr-agent)"
-else
-    rm -f "$RADIO_CONF"
-    echo "→ Zigbee (serialgateway)"
+if [ "${RADIO_MODE:-}" != "skip" ]; then
+    if [ "${radio_choice:-}" = "thread" ] || [ "${radio_choice:-}" = "2" ]; then
+        echo "MODE=otbr" > "$RADIO_CONF"
+        echo "→ Thread Border Router (otbr-agent)"
+    else
+        rm -f "$RADIO_CONF"
+        echo "→ Zigbee (serialgateway)"
+    fi
 fi
 echo ""
 

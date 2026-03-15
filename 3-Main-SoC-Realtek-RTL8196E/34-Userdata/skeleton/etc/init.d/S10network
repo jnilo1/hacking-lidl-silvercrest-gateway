@@ -11,6 +11,8 @@
 #   IPADDR=192.168.1.100
 #   NETMASK=255.255.255.0
 #   GATEWAY=192.168.1.1
+#   DNS=192.168.1.1
+#   DOMAIN=home.lan
 # A /userdata/etc/eth0.bak file is provided as an example
 # These variables will be used to configure the eth0 interface with a static IP.
 #
@@ -62,6 +64,14 @@ start)
         ip link set eth0 up
         ip route add default via "$GATEWAY"
         echo "$IPADDR" >/var/run/current_eth0_ip
+        # Generate resolv.conf from eth0.conf (DNS and DOMAIN are optional)
+        : > /var/resolv.conf
+        [ -n "${DOMAIN:-}" ] && echo "search $DOMAIN" >> /var/resolv.conf
+        if [ -n "${DNS:-}" ]; then
+            for ns in $DNS; do echo "nameserver $ns" >> /var/resolv.conf; done
+        else
+            echo "nameserver $GATEWAY" >> /var/resolv.conf
+        fi
     else
         echo "No static IP configuration found, starting DHCP client on eth0"
         ip link set eth0 up

@@ -121,8 +121,48 @@ echo ""
 cd "$FLASH_DIR"
 export CONFIRM=y
 if [ "$COMPONENT" = "userdata" ]; then
-    # Defaults: static IP 192.168.1.88, Zigbee mode (serialgateway / uart-ncp-hw)
-    export NET_MODE="${NET_MODE:-static}"
-    export RADIO_MODE="${RADIO_MODE:-zigbee}"
+    # Preserve user config from the running gateway before flashing
+    echo "Saving gateway config before flash..."
+    SAVE_DIR=$(mktemp -d)
+    SKELETON="${FLASH_DIR}/skeleton"
+    # shellcheck disable=SC2086
+    for f in etc/eth0.conf etc/mac_address etc/radio.conf; do
+        ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" "cat /userdata/$f 2>/dev/null" \
+            > "$SAVE_DIR/$f" 2>/dev/null || true
+        [ -s "$SAVE_DIR/$f" ] || rm -f "$SAVE_DIR/$f"
+    done
+    # shellcheck disable=SC2086
+    ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" "cat /userdata/ssh/authorized_keys 2>/dev/null" \
+        > "$SAVE_DIR/authorized_keys" 2>/dev/null || true
+    [ -s "$SAVE_DIR/authorized_keys" ] || rm -f "$SAVE_DIR/authorized_keys"
+
+    # Inject saved config into skeleton before build
+    for f in etc/eth0.conf etc/mac_address etc/radio.conf; do
+        if [ -f "$SAVE_DIR/$f" ]; then
+            mkdir -p "$SKELETON/$(dirname "$f")"
+            cp "$SAVE_DIR/$f" "$SKELETON/$f"
+            echo "  Preserved: $f"
+        fi
+    done
+    if [ -f "$SAVE_DIR/authorized_keys" ]; then
+        mkdir -p "$SKELETON/ssh"
+        cp "$SAVE_DIR/authorized_keys" "$SKELETON/ssh/authorized_keys"
+        echo "  Preserved: ssh/authorized_keys"
+    fi
+    rm -rf "$SAVE_DIR"
+
+    # Skip network/radio prompts — config is preserved from gateway
+    # flash_userdata.sh will use existing eth0.conf/radio.conf in skeleton
+    if [ -f "$SKELETON/etc/eth0.conf" ]; then
+        export NET_MODE="skip"
+    else
+        export NET_MODE="${NET_MODE:-static}"
+    fi
+    if [ -f "$SKELETON/etc/radio.conf" ]; then
+        export RADIO_MODE="skip"
+    else
+        export RADIO_MODE="${RADIO_MODE:-zigbee}"
+    fi
+    export CONFIRM=y
 fi
 ./"$FLASH_SCRIPT" "$BOOT_IP"
