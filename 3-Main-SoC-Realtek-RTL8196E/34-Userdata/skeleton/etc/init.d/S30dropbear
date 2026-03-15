@@ -43,8 +43,8 @@ generate_keys() {
     }
 }
 # Fix permissions required by dropbear for pubkey authentication
+# Note: /root is 750 in rootfs (squashfs, read-only) — no chmod needed
 fix_permissions() {
-    chmod 750 /root 2>/dev/null || true
     chmod 700 /userdata/ssh 2>/dev/null || true
     chmod 600 /userdata/ssh/authorized_keys 2>/dev/null || true
 }
