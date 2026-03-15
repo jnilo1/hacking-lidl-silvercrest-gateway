@@ -189,17 +189,14 @@ cd "$BUILD_DIR"
 if [ ! -f .config ]; then
     echo "Setting up .config (driver: ${DRIVER_LABEL})..."
     if [ "$DRIVER" = "new" ]; then
-        sed \
-            -e 's/^CONFIG_RTL819X=y$/# CONFIG_RTL819X is not set/' \
-            -e '/^# CONFIG_RTL819X is not set$/a CONFIG_RTL8196E_ETH=y' \
-            "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
-        echo "CONFIG_KERNEL_LZMA=y" >> .config
+        # Config already has RTL8196E_ETH=y, RTL819X unset, KERNEL_LZMA=y
+        cp "${SCRIPT_DIR}/config-5.10.246-realtek.txt" .config
     else
-        # Legacy: ensure RTL8196E_ETH is not set
+        # Legacy: swap driver selection
         sed \
+            -e 's/^# CONFIG_RTL819X is not set$/CONFIG_RTL819X=y/' \
             -e 's/^CONFIG_RTL8196E_ETH=y$/# CONFIG_RTL8196E_ETH is not set/' \
             "${SCRIPT_DIR}/config-5.10.246-realtek.txt" > .config
-        echo "CONFIG_KERNEL_LZMA=y" >> .config
     fi
     make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
     echo ""
