@@ -6,6 +6,29 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.0.1] - 2026-03-16
+
+### Bug fixes
+- **DHCP wipes IPv6**: `udhcpc.script` uses `ip -4 addr flush` to preserve IPv6 link-local
+- **Thread dataset not persisted**: S70otbr syncs to flash once Thread is up (was daily)
+- **`tr: not found` in S70otbr**: replaced with shell parameter expansion
+- **`/root` permissions**: fixed to 750 in rootfs skeleton (read-only squashfs)
+- **SSH probe timeout**: `SSH_TIMEOUT` env var (default 2s) for slow networks
+- **Auto-flash timeout**: 10s → 180s (flash write takes ~2 min)
+- **`resolv.conf` overwritten by S15hostname**: removed, handled by S10network
+- **Kernel .config warnings**: removed duplicate config entries
+
+### Improvements
+- **Config preservation on reflash**: saves user config via SSH before flashing
+  (eth0.conf, mac_address, radio.conf, passwd, TZ, hostname, dropbear keys,
+  SSH keys, Thread credentials). Prompts skipped when config is preserved
+- **Warning on bootloader-mode reflash**: ask confirmation when config cannot be saved
+- **DNS/domain in eth0.conf**: S10network reads optional `DNS` and `DOMAIN` fields
+- **SSH ControlMaster**: single password prompt instead of two
+- **SSH auth check**: fail fast on bad password
+
+---
+
 ## [2.0.0] - 2026-03-13
 
 ### 30-Backup-Restore
