@@ -140,6 +140,16 @@ if ssh_reachable; then
     echo "Bootloader is up."
 elif bootloader_reachable && ! ssh_reachable; then
     echo "Gateway is already in bootloader mode."
+    if [ "$COMPONENT" = "userdata" ]; then
+        echo ""
+        echo "WARNING: User config (network, password, SSH keys) cannot be saved."
+        echo "The flash image will use default settings."
+        read -r -p "Continue without saving config? [y/N] " r
+        if [[ ! "$r" =~ ^[yY]$ ]]; then
+            echo "Aborted. Reboot the gateway to Linux first, then re-run."
+            exit 0
+        fi
+    fi
 else
     echo "Error: gateway unreachable — neither SSH (${LINUX_IP}:22) nor bootloader (${BOOT_IP})." >&2
     exit 1

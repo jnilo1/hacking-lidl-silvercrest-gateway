@@ -204,6 +204,17 @@ else
     fi
 
     # ARP resolved + no SSH = bootloader (either V2 with ping or old without).
+    echo ""
+    echo "WARNING: Gateway is already in bootloader mode."
+    echo "User config (network, password, SSH keys) cannot be saved."
+    echo "The flash image will use default settings."
+    if [ "${CONFIRM:-}" != "y" ]; then
+        read -r -p "Continue without saving config? [y/N] " r
+        if [[ ! "$r" =~ ^[yY]$ ]]; then
+            echo "Aborted. Reboot the gateway to Linux first, then re-run."
+            exit 0
+        fi
+    fi
 fi
 
 # Detect bootloader type: V2 custom responds to ping, older ones don't.
