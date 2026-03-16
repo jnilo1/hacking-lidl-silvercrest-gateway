@@ -89,7 +89,7 @@ ______________________________________________________________________
 
 | Script | Description |
 |--------|-------------|
-| [`flash_install_rtl8196e.sh`](./flash_install_rtl8196e.sh) | **Install custom firmware** — builds fullflash.bin, uploads via TFTP, auto-flashes (V2) or guides FLW (older bootloaders) |
+| [`flash_install_rtl8196e.sh`](./flash_install_rtl8196e.sh) | **Install custom firmware** — builds fullflash.bin, uploads via TFTP, auto-flashes (V2) or guides FLW (older bootloaders). On upgrade, preserves user config via SSH |
 | [`build_fullflash.sh`](./build_fullflash.sh) | Build a complete 16 MiB flash image from all 4 partitions |
 | [`backup_gateway.sh`](./backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
 | [`restore_gateway.sh`](./restore_gateway.sh) | Restore a fullflash.bin backup — guides through TFTP + FLW |
@@ -107,7 +107,7 @@ ______________________________________________________________________
 | [`33-Rootfs/flash_rootfs.sh`](./3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh) | Flash rootfs only — gateway must be in bootloader mode |
 | [`34-Userdata/build_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/build_userdata.sh) | Build the JFFS2 userdata partition |
 | [`34-Userdata/flash_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh) | Flash userdata only — gateway must be in bootloader mode |
-| [`remote_flash.sh`](./3-Main-SoC-Realtek-RTL8196E/remote_flash.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed) |
+| [`remote_flash.sh`](./3-Main-SoC-Realtek-RTL8196E/remote_flash.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed). For userdata, preserves user config (network, password, SSH keys, etc.) |
 
 > **`remote_flash.sh` vs individual `flash_*.sh`**: The individual scripts require the gateway
 > to already be in bootloader mode. `remote_flash.sh` automates the full cycle: SSH → boothold

@@ -21,8 +21,8 @@ recommended script for both first-time installs and upgrades.
 
 The script:
 1. Detects the gateway state (Linux running, bootloader, or unreachable)
-2. If custom firmware is running: automatic boothold + reboot to bootloader
-3. Asks for network configuration (static IP or DHCP) and radio mode (Zigbee or Thread)
+2. If custom firmware is running: saves user config via SSH (network, password, SSH keys, radio mode, Thread credentials), then automatic boothold + reboot to bootloader
+3. If config was saved, skips network/radio prompts (reuses existing config). Otherwise asks for static IP or DHCP and radio mode (Zigbee or Thread)
 4. Builds `fullflash.bin` via `build_fullflash.sh` (assembles all 4 partitions)
 5. Optionally backs up the current flash
 6. Uploads fullflash.bin via TFTP
@@ -57,6 +57,11 @@ Flashes a single partition via SSH + boothold + TFTP. Connects to the running
 gateway, sends it to bootloader mode, waits, then runs the appropriate flash
 script. No serial console needed.
 
+For **userdata**, the script saves user config via SSH before flashing (eth0.conf,
+mac_address, radio.conf, passwd, TZ, hostname, dropbear host keys, SSH keys,
+Thread credentials). The config is injected into the new image so it survives
+the reflash — no prompts needed.
+
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
 ./remote_flash.sh <bootloader|kernel|rootfs|userdata> [LINUX_IP] [BOOT_IP]
@@ -88,22 +93,6 @@ The script:
 | rcp-uart-802154.gbl | `25-RCP-UART-HW/firmware/` | Multi-PAN RCP for zigbee2mqtt (EmberZNet 8.x via cpcd) |
 | ot-rcp.gbl | `26-OT-RCP/firmware/` | OpenThread RCP for otbr-agent |
 | z3-router-7.5.1.gbl | `27-Router/firmware/` | Zigbee 3.0 standalone router |
-
-### `remote_flash.sh` — Remote flash without serial console
-
-Automates the full workflow over SSH: connects to the gateway, sends `boothold` to
-reboot into bootloader, waits for it to come up, then runs the appropriate flash script.
-
-```bash
-cd 3-Main-SoC-Realtek-RTL8196E
-./remote_flash.sh bootloader                # Flash bootloader remotely
-./remote_flash.sh kernel                    # Flash kernel (auto-reboots)
-./remote_flash.sh rootfs                    # Flash rootfs
-./remote_flash.sh userdata                  # Flash userdata (defaults: static IP, Zigbee)
-RADIO_MODE=thread ./remote_flash.sh userdata  # Flash userdata in Thread/OTBR mode
-```
-
-Requires the custom firmware already running (SSH access to the gateway).
 
 ## Prerequisites
 
