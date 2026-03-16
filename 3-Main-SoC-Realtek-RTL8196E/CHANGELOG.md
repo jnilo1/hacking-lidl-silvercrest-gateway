@@ -26,6 +26,8 @@ rootfs (33-), and userdata (34-).
 - **DNS/domain in eth0.conf**: S10network reads optional `DNS` and `DOMAIN` fields
 - **SSH ControlMaster**: single password prompt instead of two
 - **SSH auth check**: fail fast on bad password
+- **Clean git checkout after flash**: `build_fullflash.sh` and `flash_userdata.sh`
+  restore `userdata.bin` and skeleton after build so `git pull` is not blocked
 
 ---
 
