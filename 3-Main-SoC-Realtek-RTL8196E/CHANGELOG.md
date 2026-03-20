@@ -18,6 +18,14 @@ rootfs (33-), and userdata (34-).
   clean `stop` for otbr-agent and all other init scripts.
 
 ### Improvements
+- **`userdata.bin` and `rootfs.bin` removed from git**: both binaries are now
+  rebuilt on the fly by the build/flash scripts (skeletons and build tools are
+  in git). `build_fullflash.sh` and `create_fullflash.sh` auto-rebuild
+  `rootfs.bin` if missing. Skeleton backup/restore traps simplified.
+- **`create_fullflash.sh` aligned**: now prompts for network/radio configuration
+  and rebuilds userdata via `build_userdata.sh --jffs2-only` before assembly,
+  matching `build_fullflash.sh` behavior.
+- **Dropbear 2025.89**: updated from 2025.88.
 - **EFR32 build scripts**: all firmware build scripts (bootloader, NCP, RCP,
   OT-RCP, Router) now consistently output exactly two files in `firmware/`:
   `.gbl` (for UART/Xmodem flashing) and `.s37` (for J-Link). Removed `.hex`,
@@ -62,7 +70,7 @@ rootfs (33-), and userdata (34-).
 - **SSH ControlMaster**: single password prompt instead of two
 - **SSH auth check**: fail fast on bad password
 - **Clean git checkout after flash**: `build_fullflash.sh` and `flash_userdata.sh`
-  restore `userdata.bin` and skeleton after build so `git pull` is not blocked
+  restore skeleton after build so `git pull` is not blocked
 - **`flash_remote.sh` refactored** (renamed from `remote_flash.sh`):
   - `LINUX_IP` is now required (no more hardcoded default)
   - Dual-port SSH probe: port 2333 → Tuya error with redirect to `flash_install_rtl8196e.sh`

@@ -1,25 +1,31 @@
 #!/bin/bash
-# build_fullflash.sh — Build a complete 16 MiB flash image for the gateway
-#
-# Assembles bootloader + kernel + rootfs + userdata into a single fullflash.bin
-# that can be written to the SPI NOR flash via TFTP + FLW.
+# create_fullflash.sh — Assemble and optionally flash a 16 MiB image
 #
 # Rebuilds userdata with the chosen network/radio configuration, then assembles
-# all 4 partitions, verifies magic bytes, and outputs fullflash.bin.
+# bootloader + kernel + rootfs + userdata into fullflash.bin. Optionally uploads
+# the image via TFTP and guides you through the FLW serial console command.
 #
-# Usage: ./build_fullflash.sh [-q] [--help]
+# Steps:
+#   1. Asks for network/radio configuration (or uses env vars)
+#   2. Rebuilds userdata.bin via build_userdata.sh
+#   3. Assembles all 4 partitions into fullflash.bin
+#   4. (with --flash) Uploads fullflash.bin to the gateway via TFTP
+#   5. You type FLW on the serial console to write it to flash (~2 min)
 #
-# Options:
-#   -q, --quiet   Suppress non-essential output (banners, image sizes, assembly
-#                 details, verification line-by-line). Keeps: config → lines,
-#                 errors, and a single summary line. Used by flash_install.
+# Prerequisites for --flash:
+#   - Serial console connected (3.3V UART, 38400 baud)
+#   - Gateway in bootloader mode (<RealTek> prompt)
+#   - Ethernet cable between host and gateway (same L2 segment)
+#   - tftp-hpa client installed (sudo apt install tftp-hpa)
+#
+# Usage: ./create_fullflash.sh [--flash] [--boot-ip IP] [--output FILE]
 #
 # Environment variables (for non-interactive use):
-#   NET_MODE    - "static", "dhcp", or "skip" (config already injected by caller)
+#   NET_MODE    - "static", "dhcp", or "skip"
 #   IPADDR      - Static IP address (default: 192.168.1.88)
 #   NETMASK     - Netmask (default: 255.255.255.0)
 #   GATEWAY     - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE  - "zigbee", "thread", or "skip" (config already injected)
+#   RADIO_MODE  - "zigbee", "thread", or "skip"
 #
 # J. Nilo - March 2026
 
@@ -35,7 +41,8 @@ USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
 
 OUTPUT="${SCRIPT_DIR}/fullflash.bin"
-QUIET=0
+BOOT_IP="${BOOT_IP:-192.168.1.6}"
+DO_FLASH=false
 
 FLASH_SIZE=$((16 * 1024 * 1024))  # 16 MiB
 
@@ -45,20 +52,25 @@ OFF_KERNEL=0x020000    # kernel    1920 KiB
 OFF_ROOTFS=0x200000    # rootfs    2048 KiB
 OFF_USERDATA=0x400000  # userdata  12288 KiB
 
+CVIMG_HDR=16  # cvimg header size
+
 # --- argument parsing --------------------------------------------------------
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -q|--quiet) QUIET=1 ;;
+        --flash|-f) DO_FLASH=true ;;
+        --boot-ip) shift; BOOT_IP="$1" ;;
+        --output|-o) shift; OUTPUT="$1" ;;
         --help|-h)
-            echo "Usage: $0 [-q|--quiet] [--help]"
+            echo "Usage: $0 [--flash] [--boot-ip IP] [--output FILE]"
             echo ""
-            echo "Builds a complete 16 MiB flash image (fullflash.bin)."
-            echo "Asks for network and radio configuration, rebuilds userdata,"
-            echo "then assembles all 4 partitions into a single image."
+            echo "Rebuilds userdata with network/radio config, then assembles a"
+            echo "16 MiB flash image. With --flash, uploads it via TFTP."
             echo ""
             echo "Options:"
-            echo "  -q, --quiet   Suppress non-essential output"
+            echo "  --flash         Upload via TFTP after assembly"
+            echo "  --boot-ip IP    Gateway IP in bootloader (default: 192.168.1.6)"
+            echo "  --output FILE   Output path (default: fullflash.bin)"
             echo ""
             echo "Environment: NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
             exit 0
@@ -70,13 +82,11 @@ done
 
 # --- check source images ----------------------------------------------------
 
-log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
-
-log ""
-log "========================================="
-log "  BUILD FULLFLASH"
-log "========================================="
-log ""
+echo ""
+echo "========================================="
+echo "  CREATE FULLFLASH"
+echo "========================================="
+echo ""
 
 MISSING=0
 for f in "$BOOTLOADER_IMG" "$KERNEL_IMG"; do
@@ -92,13 +102,9 @@ fi
 
 # Rebuild rootfs if missing (skeleton is in git, rootfs.bin is not)
 if [ ! -f "$ROOTFS_IMG" ]; then
-    log "rootfs.bin not found — rebuilding..."
+    echo "rootfs.bin not found — rebuilding..."
     ROOTFS_DIR="${RTL_DIR}/33-Rootfs"
-    if [ "$QUIET" -eq 1 ]; then
-        "${ROOTFS_DIR}/build_rootfs.sh" >/dev/null
-    else
-        "${ROOTFS_DIR}/build_rootfs.sh"
-    fi
+    "${ROOTFS_DIR}/build_rootfs.sh"
 fi
 
 # --- build userdata ----------------------------------------------------------
@@ -106,7 +112,7 @@ fi
 ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
 RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
 
-# Save skeleton + userdata.bin before config injection, restore after build
+# Save skeleton before config injection, restore after build
 SKEL_BACKUP=$(mktemp -d)
 cp -a "${USERDATA_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
 cp -a "${USERDATA_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
@@ -179,21 +185,15 @@ trap restore_skeleton EXIT
             echo "→ Zigbee"
         fi
     fi
-    log ""
+    echo ""
 
-    log "Building userdata..."
-    if [ "$QUIET" -eq 1 ]; then
-        "${USERDATA_DIR}/build_userdata.sh" --jffs2-only -q
-    else
-        "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
-    fi
-    log ""
+    echo "Building userdata..."
+    "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
+    echo ""
 
     # Skeleton is restored by the EXIT trap (restore_skeleton)
 
 # --- check sizes -------------------------------------------------------------
-
-CVIMG_HDR=16  # cvimg header size
 
 boot_data=$(($(stat -c%s "$BOOTLOADER_IMG") - CVIMG_HDR))
 kernel_data=$(stat -c%s "$KERNEL_IMG")           # kept with header
@@ -205,12 +205,12 @@ kernel_max=$((OFF_ROOTFS - OFF_KERNEL))    # 1920 KiB
 rootfs_max=$((OFF_USERDATA - OFF_ROOTFS))  # 2048 KiB
 userdata_max=$((FLASH_SIZE - OFF_USERDATA)) # 12288 KiB
 
-log "Image sizes (data written to flash):"
-log "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
-log "  kernel.img:   $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
-log "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
-log "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
-log ""
+echo "Image sizes (data written to flash):"
+echo "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
+echo "  kernel.img:   $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
+echo "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
+echo "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
+echo ""
 
 OVERFLOW=0
 if [ $boot_data -gt $boot_max ]; then
@@ -233,50 +233,44 @@ if [ $OVERFLOW -eq 1 ]; then exit 1; fi
 
 # --- assemble fullflash.bin --------------------------------------------------
 
-log "Assembling fullflash.bin (16 MiB)..."
+echo "Assembling fullflash.bin (16 MiB)..."
 
 # Start with 16 MiB of 0xFF (erased NOR flash)
 dd if=/dev/zero bs=1M count=16 2>/dev/null | tr '\0' '\377' > "$OUTPUT"
 
 # boot+cfg @ 0x000000 — strip 16-byte cvimg header
-#   On flash: raw bootloader code (starts with 0bf0...)
 tail -c +17 "$BOOTLOADER_IMG" | dd of="$OUTPUT" bs=1 conv=notrunc 2>/dev/null
 
 # kernel @ 0x020000 — KEEP cs6c header (bootloader scans for it at boot)
-#   On flash: cs6c header + compressed kernel
 dd if="$KERNEL_IMG" of="$OUTPUT" bs=1 seek=$((OFF_KERNEL)) conv=notrunc 2>/dev/null
 
 # rootfs @ 0x200000 — strip 16-byte cvimg header
-#   On flash: raw squashfs (starts with hsqs)
 tail -c +17 "$ROOTFS_IMG" | dd of="$OUTPUT" bs=1 seek=$((OFF_ROOTFS)) conv=notrunc 2>/dev/null
 
 # userdata @ 0x400000 — strip 16-byte cvimg header
-#   On flash: raw JFFS2 (starts with 1985)
 tail -c +17 "$USERDATA_IMG" | dd of="$OUTPUT" bs=1 seek=$((OFF_USERDATA)) conv=notrunc 2>/dev/null
 
 # --- verify ------------------------------------------------------------------
 
-log ""
-log "Verifying..."
+echo ""
+echo "Verifying..."
 
 ERRORS=0
 
-# Check total size
 actual_size=$(stat -c%s "$OUTPUT")
 if [ "$actual_size" -ne "$FLASH_SIZE" ]; then
     echo "  FAIL: size is $actual_size (expected $FLASH_SIZE)" >&2
     ERRORS=1
 else
-    log "  Size: 16 MiB [OK]"
+    echo "  Size: 16 MiB [OK]"
 fi
 
-# Check magic bytes at each partition offset
 check_magic() {
     local label="$1" offset="$2" expected="$3"
     local nbytes=$(( ${#expected} / 2 ))
     actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null | xxd -p)
     if [ "$actual" = "$expected" ]; then
-        log "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
+        echo "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
     else
         echo "  ${label} @ $(printf '0x%06X' $offset): $actual (expected $expected) [FAIL]" >&2
         ERRORS=1
@@ -295,14 +289,74 @@ if [ $ERRORS -ne 0 ]; then
     exit 1
 fi
 
-ff_md5=$(md5sum "$OUTPUT" | awk '{print $1}')
-log ""
-log "========================================="
-log "  FULLFLASH READY"
-log "========================================="
-log ""
-log "  $(ls -lh "$OUTPUT" | awk '{print $NF, $5}')"
-log "  MD5: ${ff_md5}"
-log ""
+echo ""
+echo "========================================="
+echo "  FULLFLASH READY"
+echo "========================================="
+echo ""
+echo "  $(ls -lh "$OUTPUT" | awk '{print $NF, $5}')"
+echo "  MD5: $(md5sum "$OUTPUT" | awk '{print $1}')"
+echo ""
 
-# In quiet mode, no summary line — the caller handles messaging
+# --- optional flash ----------------------------------------------------------
+
+if [ "$DO_FLASH" != "true" ]; then
+    echo "To flash, re-run with --flash or manually:"
+    echo "  1. Gateway in bootloader mode (<RealTek> prompt)"
+    echo "  2. tftp -m binary ${BOOT_IP} -c put fullflash.bin"
+    echo "  3. On serial console: FLW 0 80500000 01000000"
+    echo "  4. Wait ~2 minutes for the write to complete"
+    echo "  5. J BFC00000  or power cycle"
+    exit 0
+fi
+
+# Check tftp-hpa client
+tftp_usage="$(tftp --help 2>&1 || true)"
+if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; then
+    echo "Error: tftp-hpa client not found (need the -c flag)." >&2
+    echo "Install it with: sudo apt install tftp-hpa" >&2
+    exit 1
+fi
+
+echo "========================================="
+echo "  FLASH VIA TFTP"
+echo "========================================="
+echo ""
+echo "Make sure:"
+echo "  - Serial console is connected (38400 8N1)"
+echo "  - Gateway shows the <RealTek> prompt"
+echo "  - Ethernet cable between this PC and the gateway"
+echo ""
+read -r -p "Ready to upload? [y/N] " r
+if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 0; fi
+
+echo ""
+echo "Uploading fullflash.bin (16 MiB) to ${BOOT_IP}..."
+cd "$SCRIPT_DIR"
+out=$(timeout 300 tftp -m binary "$BOOT_IP" -c put fullflash.bin 2>&1) || true
+
+if echo "$out" | grep -qiE "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+    echo "Error: TFTP transfer failed: $out" >&2
+    exit 1
+fi
+
+echo "Upload OK."
+echo ""
+echo "On the serial console, type:"
+echo ""
+echo "    FLW 0 80500000 01000000"
+echo ""
+echo "Wait for the <RealTek> prompt (~2 minutes)."
+echo "Then: J BFC00000  or power cycle the gateway."
+echo ""
+read -r -p "Flash write succeeded? [y/N] " r
+if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
+
+echo ""
+echo "========================================="
+echo "  INSTALLATION COMPLETE"
+echo "========================================="
+echo ""
+echo "The gateway will boot into Linux."
+echo "SSH: root@192.168.1.88:22 (default, no password)"
+echo ""

@@ -5,7 +5,7 @@
 #   ./build_dropbear.sh [version]
 #
 # Examples:
-#   ./build_dropbear.sh              # Default version (2025.88)
+#   ./build_dropbear.sh              # Default version (2025.89)
 #   ./build_dropbear.sh 2024.86      # Specific version
 #
 # J. Nilo April 2025
@@ -18,7 +18,7 @@ ROOTFS_PART="${SCRIPT_DIR}/.."
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 # Parse version argument
-VERSION="${1:-2025.88}"
+VERSION="${1:-2025.89}"
 SOURCE_DIR="DROPBEAR_${VERSION}"
 INSTALL_DIR="${ROOTFS_PART}/skeleton/bin"
 

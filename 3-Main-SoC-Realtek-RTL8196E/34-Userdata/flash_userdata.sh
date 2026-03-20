@@ -48,12 +48,10 @@ RADIO_CONF="${SCRIPT_DIR}/skeleton/etc/radio.conf"
 SKEL_BACKUP=$(mktemp -d)
 cp -a "${SCRIPT_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
 cp -a "${SCRIPT_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
-cp "${SCRIPT_DIR}/userdata.bin" "$SKEL_BACKUP/userdata.bin" 2>/dev/null || true
 cleanup() {
     rm -rf "${SCRIPT_DIR}/skeleton/etc" "${SCRIPT_DIR}/skeleton/ssh"
     cp -a "$SKEL_BACKUP/etc" "${SCRIPT_DIR}/skeleton/etc"
     [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${SCRIPT_DIR}/skeleton/ssh"
-    [ -f "$SKEL_BACKUP/userdata.bin" ] && cp "$SKEL_BACKUP/userdata.bin" "${SCRIPT_DIR}/userdata.bin"
     rm -rf "$SKEL_BACKUP"
 }
 trap cleanup EXIT
