@@ -6,7 +6,7 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [2.0.1] - 2026-03-16
+## [2.0.1] - 2026-03-17
 
 ### Bug fixes
 - **DHCP wipes IPv6**: `udhcpc.script` uses `ip -4 addr flush` to preserve IPv6 link-local
@@ -17,17 +17,42 @@ rootfs (33-), and userdata (34-).
 - **Auto-flash timeout**: 10s → 180s (flash write takes ~2 min)
 - **`resolv.conf` overwritten by S15hostname**: removed, handled by S10network
 - **Kernel .config warnings**: removed duplicate config entries
+- **motd/version sync**: motd now shows the same version and date as `/etc/version`
 
 ### Improvements
-- **Config preservation on reflash**: saves user config via SSH before flashing
-  (eth0.conf, mac_address, radio.conf, passwd, TZ, hostname, dropbear keys,
-  SSH keys, Thread credentials). Prompts skipped when config is preserved
-- **Warning on bootloader-mode reflash**: ask confirmation when config cannot be saved
+- **`flash_install_rtl8196e.sh` refactored**: two distinct modes of operation:
+  - **First flash** (no argument): gateway must be in bootloader mode, prompts
+    for network/radio config, TFTP probe confirms bootloader presence
+  - **Upgrade** (`LINUX_IP`): connects via SSH, saves user config (eth0.conf,
+    mac_address, radio.conf, passwd, TZ, hostname, dropbear keys, SSH keys,
+    Thread credentials), boothold + reboot, then flash. Prompts skipped
+  - **`-y` / `--yes` flag**: non-interactive mode for fully automated upgrades
+    (firmware >= v2.0.0 with auto-flash support)
+- **Firmware detection via `devmem`**: distinguishes custom firmware from Tuya
+  (even if Tuya SSH port was changed to 22) by checking `devmem` presence
+- **TFTP bootloader probe**: ARP + TFTP PUT distinguishes bootloader from Linux
+  running on `BOOT_IP` — prevents false positive detection
+- **Auto-flash skip for firmware < v2.0.0**: reads `/etc/version` before boothold
+  to skip the 3-minute nc listener on older bootloaders that lack UDP notification
+- **Quiet build mode** (`-q`): `build_fullflash.sh` and `build_userdata.sh`
+  suppress non-essential output (banners, cvimg details, image sizes) when
+  called from `flash_install_rtl8196e.sh`
+- **Removed `--boot-ip` parameter**: `BOOT_IP` is env-var only (always 192.168.1.6)
+- **Config preservation on reflash**: prompts skipped when config is preserved
 - **DNS/domain in eth0.conf**: S10network reads optional `DNS` and `DOMAIN` fields
 - **SSH ControlMaster**: single password prompt instead of two
 - **SSH auth check**: fail fast on bad password
 - **Clean git checkout after flash**: `build_fullflash.sh` and `flash_userdata.sh`
   restore `userdata.bin` and skeleton after build so `git pull` is not blocked
+- **`flash_remote.sh` refactored** (renamed from `remote_flash.sh`):
+  - `LINUX_IP` is now required (no more hardcoded default)
+  - Dual-port SSH probe: port 2333 → Tuya error with redirect to `flash_install_rtl8196e.sh`
+  - `devmem` check after SSH: absent = Tuya/v1.0 → same error
+  - Boothold via `devmem` directly (no dependency on `boothold` binary)
+  - Bootloader wait confirms SSH is down before declaring ready
+  - Removed bootloader-already-up path (use individual flash scripts directly)
+  - Added `-y`/`--yes` flag, `SSH_TIMEOUT` env var, `StrictHostKeyChecking=no`
+  - Renamed to `flash_remote.sh` to match `flash_*.sh` naming convention
 
 ---
 
@@ -104,9 +129,9 @@ rootfs (33-), and userdata (34-).
   custom firmware. Replaces `flash_rtl8196e.sh` as the recommended install method.
 - **`build_fullflash.sh`** (new): assembles bootloader + kernel + rootfs + userdata
   into a verified 16 MiB flash image with correct header stripping per partition
-- **`remote_flash.sh`** (new): fully automated remote flash via SSH — connects to the
+- **`flash_remote.sh`** (new): fully automated remote flash via SSH — connects to the
   gateway, sends `boothold`, waits for bootloader, runs the appropriate flash script.
-  Supports all 4 components: `./remote_flash.sh <bootloader|kernel|rootfs|userdata>`
+  Supports all 4 components: `./flash_remote.sh <bootloader|kernel|rootfs|userdata>`
 - All individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, `flash_rootfs.sh`,
   `flash_userdata.sh`) now wait for bootloader UDP notification ("OK"/"FAIL") instead of
   returning immediately after TFTP upload
@@ -114,7 +139,7 @@ rootfs (33-), and userdata (34-).
   for gcc before attempting to compile cvimg
 - Non-interactive mode via environment variables: `CONFIRM=y` skips "Proceed?" prompt,
   `NET_MODE=static|dhcp` and `RADIO_MODE=zigbee|thread` skip userdata config prompts.
-- Removed `flash_rtl8196e.sh` (superseded by `flash_install_rtl8196e.sh` and `remote_flash.sh`)
+- Removed `flash_rtl8196e.sh` (superseded by `flash_install_rtl8196e.sh` and `flash_remote.sh`)
 
 ### Thread Border Router — OTBR on-device
 - OpenThread Border Router runs natively on the RTL8196E gateway (no Docker, no PC)

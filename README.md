@@ -33,14 +33,27 @@ ______________________________________________________________________
 ```bash
 git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
 cd hacking-lidl-silvercrest-gateway
+
+# First flash — gateway must be in bootloader mode (<RealTek> prompt via serial ESC):
 ./flash_install_rtl8196e.sh
+
+# Upgrade — gateway running Linux (saves config automatically):
+./flash_install_rtl8196e.sh 192.168.1.88
+
+# Fully automated upgrade (firmware >= v2.0.0, no prompts):
+./flash_install_rtl8196e.sh -y 192.168.1.88
 ```
 
-The script builds a complete 16 MiB flash image, detects the gateway (with
-automatic boothold if custom firmware is running), uploads it via TFTP, and
-flashes it. With the V2 bootloader, everything is automatic. For older
-bootloaders (Tuya/V1.2), it guides you through the FLW command on the serial
-console.
+The script builds a complete 16 MiB flash image and uploads it via TFTP.
+
+- **First flash** (no argument): the gateway must already be in bootloader mode
+  (serial console + ESC on power-on). User config cannot be saved — you will be
+  prompted for network and radio settings.
+- **Upgrade** (with `LINUX_IP`): connects via SSH, saves user config (network,
+  password, SSH keys, radio mode), triggers boothold + reboot, then flashes.
+  On firmware >= v2.0.0, the `-y` flag enables fully unattended operation.
+- For older bootloaders (Tuya/V1.2), the script guides you through the FLW
+  command on the serial console.
 
 See [35-Migration](./3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details.
 
@@ -89,7 +102,7 @@ ______________________________________________________________________
 
 | Script | Description |
 |--------|-------------|
-| [`flash_install_rtl8196e.sh`](./flash_install_rtl8196e.sh) | **Install custom firmware** — builds fullflash.bin, uploads via TFTP, auto-flashes (V2) or guides FLW (older bootloaders). On upgrade, preserves user config via SSH |
+| [`flash_install_rtl8196e.sh`](./flash_install_rtl8196e.sh) | **Install custom firmware** — first flash (no arg, bootloader mode) or upgrade (`LINUX_IP`, saves config). `-y` for unattended upgrade (>= v2.0.0) |
 | [`build_fullflash.sh`](./build_fullflash.sh) | Build a complete 16 MiB flash image from all 4 partitions |
 | [`backup_gateway.sh`](./backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
 | [`restore_gateway.sh`](./restore_gateway.sh) | Restore a fullflash.bin backup — guides through TFTP + FLW |
@@ -107,11 +120,11 @@ ______________________________________________________________________
 | [`33-Rootfs/flash_rootfs.sh`](./3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh) | Flash rootfs only — gateway must be in bootloader mode |
 | [`34-Userdata/build_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/build_userdata.sh) | Build the JFFS2 userdata partition |
 | [`34-Userdata/flash_userdata.sh`](./3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh) | Flash userdata only — gateway must be in bootloader mode |
-| [`remote_flash.sh`](./3-Main-SoC-Realtek-RTL8196E/remote_flash.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed). For userdata, preserves user config (network, password, SSH keys, etc.) |
+| [`flash_remote.sh`](./3-Main-SoC-Realtek-RTL8196E/flash_remote.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed). For userdata, preserves user config (network, password, SSH keys, etc.) |
 
-> **`remote_flash.sh` vs individual `flash_*.sh`**: The individual scripts require the gateway
-> to already be in bootloader mode. `remote_flash.sh` automates the full cycle: SSH → boothold
-> → wait for bootloader → flash. Use `remote_flash.sh` during development for one-command
+> **`flash_remote.sh` vs individual `flash_*.sh`**: The individual scripts require the gateway
+> to already be in bootloader mode. `flash_remote.sh` automates the full cycle: SSH → boothold
+> → wait for bootloader → flash. Use `flash_remote.sh` during development for one-command
 > partition updates; use the individual scripts when you are already at the `<RealTek>` prompt.
 
 **Backup utilities** (in `30-Backup-Restore/`):
@@ -144,7 +157,7 @@ Then build and flash:
 # Build the Linux system
 cd 3-Main-SoC-Realtek-RTL8196E/32-Kernel && ./build_kernel.sh
 cd ../33-Rootfs && ./build_rootfs.sh
-cd ../.. && ./flash_install_rtl8196e.sh
+cd ../.. && ./flash_install_rtl8196e.sh <GATEWAY_IP>
 
 # Build and flash a Zigbee firmware
 cd 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW && ./build_ncp.sh

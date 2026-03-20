@@ -180,5 +180,5 @@ echo "Generated images:"
 [ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel.img" 2>/dev/null || true
 cd "$PROJECT_ROOT"
 echo ""
-echo "To flash: ./flash_install_rtl8196e.sh  (or remote_flash.sh for single partitions)"
+echo "To flash: ./flash_install_rtl8196e.sh  (or flash_remote.sh for single partitions)"
 echo ""

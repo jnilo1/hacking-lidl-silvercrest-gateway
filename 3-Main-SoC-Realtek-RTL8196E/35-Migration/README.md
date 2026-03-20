@@ -16,22 +16,39 @@ Builds a complete 16 MiB flash image and installs it on the gateway. This is the
 recommended script for both first-time installs and upgrades.
 
 ```bash
-./flash_install_rtl8196e.sh [--boot-ip ADDRESS]
+./flash_install_rtl8196e.sh [-y] [LINUX_IP]
 ```
 
+**First flash** (no argument) — the gateway must already be in bootloader mode:
+- Connect a serial console (3.3V UART, 38400 8N1, line wrap ON)
+- Power cycle the gateway, press ESC to get the `<RealTek>` prompt
+- Then run `./flash_install_rtl8196e.sh`
+- User config cannot be saved — you will be prompted for network (static IP or
+  DHCP) and radio mode (Zigbee or Thread)
+
+**Upgrade** (with `LINUX_IP`) — the gateway must be running Linux:
+- Run `./flash_install_rtl8196e.sh 192.168.1.88` (replace with your gateway IP)
+- The script connects via SSH, saves user config (network, password, SSH keys,
+  radio mode, Thread credentials), then triggers boothold + reboot to bootloader
+- Saved config is injected into the new image — no prompts needed
+
+**Fully automated upgrade** (firmware >= v2.0.0) — no prompts, no serial needed:
+- Run `./flash_install_rtl8196e.sh -y 192.168.1.88`
+- The `-y` flag skips all confirmation prompts
+- Auto-flash + UDP notification: the script uploads, waits for the bootloader to
+  confirm, and reports success — no serial console required
+
 The script:
-1. Detects the gateway state (Linux running, bootloader, or unreachable)
-2. If custom firmware is running: saves user config via SSH (network, password, SSH keys, radio mode, Thread credentials), then automatic boothold + reboot to bootloader
-3. If config was saved, skips network/radio prompts (reuses existing config). Otherwise asks for static IP or DHCP and radio mode (Zigbee or Thread)
-4. Builds `fullflash.bin` via `build_fullflash.sh` (assembles all 4 partitions)
-5. Optionally backs up the current flash
-6. Uploads fullflash.bin via TFTP
-7. V2 bootloader: auto-flashes and reboots automatically
-8. Older bootloaders (Tuya/V1.2): guides you through FLW on the serial console
+1. Detects firmware type via SSH (custom vs Tuya, using `devmem` presence)
+2. Saves user config if custom firmware is running
+3. Builds `fullflash.bin` via `build_fullflash.sh` (assembles all 4 partitions)
+4. Uploads fullflash.bin via TFTP
+5. Firmware >= v2.0.0: auto-flashes and reboots automatically
+6. Older firmware / Tuya: guides you through FLW on the serial console
 
 Environment variables for non-interactive use:
 ```bash
-NET_MODE=static RADIO_MODE=zigbee CONFIRM=y ./flash_install_rtl8196e.sh
+NET_MODE=static RADIO_MODE=zigbee ./flash_install_rtl8196e.sh -y
 ```
 
 ### `build_fullflash.sh` — Build the flash image
@@ -51,11 +68,13 @@ standalone.
 | rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
 | userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |
 
-### `remote_flash.sh` — Per-partition flash (for developers)
+### `flash_remote.sh` — Per-partition flash (for developers)
 
 Flashes a single partition via SSH + boothold + TFTP. Connects to the running
 gateway, sends it to bootloader mode, waits, then runs the appropriate flash
-script. No serial console needed.
+script. No serial console needed. Requires custom firmware with `devmem`
+(>= v1.2.1). Does NOT work on Tuya/stock firmware or v1.0 — use
+`flash_install_rtl8196e.sh` for those.
 
 For **userdata**, the script saves user config via SSH before flashing (eth0.conf,
 mac_address, radio.conf, passwd, TZ, hostname, dropbear host keys, SSH keys,
@@ -64,8 +83,11 @@ the reflash — no prompts needed.
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
-./remote_flash.sh <bootloader|kernel|rootfs|userdata> [LINUX_IP] [BOOT_IP]
+./flash_remote.sh [-y] <bootloader|kernel|rootfs|userdata> <LINUX_IP>
 ```
+
+Environment variables: `BOOT_IP` (default: 192.168.1.6), `SSH_USER`, `SSH_TIMEOUT`,
+`NET_MODE`, `RADIO_MODE`, `CONFIRM`.
 
 The individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, etc.)
 can also be used directly when the gateway is already in bootloader mode.
@@ -99,7 +121,7 @@ The script:
 ### Hardware
 
 - **Serial adapter** connected to gateway (38400 8N1) — required for initial RTL8196E flash;
-  not needed for subsequent updates via `remote_flash.sh`
+  not needed for subsequent updates via `flash_remote.sh`
 - **Ethernet connection** between PC and gateway (same L2 segment for TFTP)
 
 ### Software

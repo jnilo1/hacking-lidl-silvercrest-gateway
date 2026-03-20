@@ -91,23 +91,23 @@ cd 3-Main-SoC-Realtek-RTL8196E
 
 #### Remote Flashing (no serial console)
 
-`remote_flash.sh` handles everything over the network: SSH into the gateway, reboot to bootloader, wait, and flash — no serial console needed.
+`flash_remote.sh` handles everything over the network: SSH into the gateway, reboot to bootloader, wait, and flash — no serial console needed.
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
-./remote_flash.sh rootfs                    # Flash rootfs remotely
-./remote_flash.sh kernel                    # Flash kernel (auto-reboots)
-./remote_flash.sh bootloader                # Flash bootloader
-./remote_flash.sh userdata                  # Flash userdata (defaults: static IP, Zigbee)
+./flash_remote.sh rootfs 192.168.1.88                    # Flash rootfs remotely
+./flash_remote.sh kernel 192.168.1.88                    # Flash kernel (auto-reboots)
+./flash_remote.sh bootloader 192.168.1.88                # Flash bootloader
+./flash_remote.sh userdata 192.168.1.88                  # Flash userdata (defaults: static IP, Zigbee)
 ```
 
 Override defaults via environment variables:
 
 ```bash
-./remote_flash.sh userdata                              # Static 192.168.1.88, Zigbee
-RADIO_MODE=thread ./remote_flash.sh userdata            # Static 192.168.1.88, Thread/OTBR
-IPADDR=10.0.0.50 ./remote_flash.sh userdata             # Custom IP, Zigbee
-NET_MODE=dhcp RADIO_MODE=thread ./remote_flash.sh userdata  # DHCP, Thread/OTBR
+./flash_remote.sh userdata 192.168.1.88                              # Static IP, Zigbee
+RADIO_MODE=thread ./flash_remote.sh userdata 192.168.1.88            # Static IP, Thread/OTBR
+IPADDR=10.0.0.50 ./flash_remote.sh userdata 192.168.1.88             # Custom IP, Zigbee
+NET_MODE=dhcp RADIO_MODE=thread ./flash_remote.sh userdata 192.168.1.88  # DHCP, Thread/OTBR
 ```
 
 The individual flash scripts also support non-interactive use directly:

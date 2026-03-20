@@ -60,7 +60,7 @@ trap cleanup EXIT
 
 # --- Network configuration -------------------------------------------------
 
-# "skip" = config already in skeleton (preserved from gateway by remote_flash.sh)
+# "skip" = config already in skeleton (preserved from gateway by flash_remote.sh)
 if [ "${NET_MODE:-}" = "skip" ]; then
     echo "→ Network config preserved from gateway"
 else

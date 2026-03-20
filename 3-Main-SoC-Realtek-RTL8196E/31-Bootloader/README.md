@@ -25,7 +25,7 @@ Flashing: 76%
 
 **Ping support** — The bootloader responds to ICMP Echo Requests. A simple `ping 192.168.1.6` confirms the board is alive and reachable before attempting a TFTP transfer.
 
-**Post-flash notification** — After flashing, the bootloader sends a UDP packet (port 9999) to the TFTP client with `OK` or `FAIL`. This enables fully automated flashing without serial console confirmation — `flash_install_rtl8196e.sh` and `remote_flash.sh` use this.
+**Post-flash notification** — After flashing, the bootloader sends a UDP packet (port 9999) to the TFTP client with `OK` or `FAIL`. This enables fully automated flashing without serial console confirmation — `flash_install_rtl8196e.sh` and `flash_remote.sh` use this.
 
 **Risk-free testing** — The build generates a `test.bin` image that runs entirely from RAM without touching flash. Load it via TFTP, jump to it, and test your bootloader changes live — no risk of bricking. See the [Testing Guide](doc/TESTING.md) for the full workflow.
 
