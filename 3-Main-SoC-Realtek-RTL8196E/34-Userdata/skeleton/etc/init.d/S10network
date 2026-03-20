@@ -19,9 +19,6 @@
 # J. Nilo - Nov 2025
 #
 
-ip link set lo up
-ip addr add 127.0.0.1/8 dev lo
-
 # Convert dotted netmask (255.255.255.0) to CIDR prefix length (24)
 mask2cidr() {
     local n=0 oct
@@ -38,6 +35,9 @@ mask2cidr() {
 case "$1" in
 start)
     echo "Starting network setup"
+
+    ip link set lo up
+    ip addr add 127.0.0.1/8 dev lo 2>/dev/null
 
     # Reuse persisted MAC if available, else generate a stable local MAC (02:...)
     MACFILE="/userdata/etc/mac_address"
@@ -86,13 +86,14 @@ stop)
     echo "Stopping network"
 
     if [ -f /var/run/udhcpc0.pid ]; then
-        kill "$(cat /var/run/udhcpc0.pid)"
+        kill "$(cat /var/run/udhcpc0.pid)" 2>/dev/null
         rm -f /var/run/udhcpc0.pid
     else
-        killall udhcpc
+        killall udhcpc 2>/dev/null
     fi
 
-    ip link set eth0 down
+    ip addr flush dev eth0 2>/dev/null
+    ip link set eth0 down 2>/dev/null
     ;;
 restart)
     echo "Restarting network"
