@@ -381,16 +381,18 @@ if [ "$BOOTLOADER_TYPE" = "v2" ]; then
     fi
     echo "Upload OK."
 
-    # Auto-flash with UDP notification only works on firmware >= v2.0.0
-    # (commit 4e556a1 added auto-flash + UDP notify to the bootloader binary).
-    # Older bootloaders (v1.x) respond to ping (detected as "v2") but do NOT
-    # have auto-flash — waiting for nc would hang 3 minutes for nothing.
+    # Auto-flash with UDP notification:
+    # - Upgrade path (SSH): FW_VERSION >= 2.0 confirms bootloader has auto-flash
+    # - First flash (no SSH): V2 bootloader → try auto-flash (3 min timeout,
+    #   falls back to manual FLW if bootloader is a pre-v2.0.0 V2.3 without it)
     has_autoflash=false
     if [ -n "$FW_VERSION" ]; then
         fw_major="${FW_VERSION%%.*}"
         if [ "$fw_major" -ge 2 ] 2>/dev/null; then
             has_autoflash=true
         fi
+    elif [ "$BOOTLOADER_TYPE" = "v2" ]; then
+        has_autoflash=true
     fi
 
     result=""
