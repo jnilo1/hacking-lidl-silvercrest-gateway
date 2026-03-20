@@ -47,6 +47,12 @@ fi
 
 cd "${SCRIPT_DIR}"
 
+# Rebuild dropbear if binary is missing (symlinks are in git, binary is not)
+if [ ! -f skeleton/bin/dropbearmulti ]; then
+    echo "dropbearmulti not found — rebuilding..."
+    "${SCRIPT_DIR}/dropbear/build_dropbear.sh"
+fi
+
 echo "========================================="
 echo "  BUILDING ROOT FILESYSTEM"
 echo "========================================="
