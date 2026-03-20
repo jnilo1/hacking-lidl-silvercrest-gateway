@@ -2,13 +2,14 @@
 # build_userdata.sh — Build JFFS2 userdata partition for RTL8196E
 #
 # This script:
-#   - Builds nano editor + serialgateway
+#   - Builds nano editor + serialgateway (unless --jffs2-only)
 #   - Creates JFFS2 filesystem from skeleton/ directory
 #   - Converts to RTL bootloader format with cvimg
 #
 # Usage:
-#   ./build_userdata.sh                       # Build nano + serialgateway
+#   ./build_userdata.sh                       # Build nano + serialgateway + JFFS2
 #   ./build_userdata.sh --jffs2-only          # Build JFFS2 only (no compile)
+#   ./build_userdata.sh --jffs2-only -q       # Quiet mode (used by build_fullflash)
 #
 # Available components:
 #   +-----------------+----------------------------------------------+-------------+
@@ -34,6 +35,7 @@ PROJECT_ROOT="${SCRIPT_DIR}/.."
 INSTALL_DIR="${SCRIPT_DIR}/skeleton/usr/bin"
 
 BUILD_COMPONENTS=1
+QUIET=0
 
 # Parse arguments
 for arg in "$@"; do
@@ -41,11 +43,15 @@ for arg in "$@"; do
         --jffs2-only)
             BUILD_COMPONENTS=0
             ;;
+        -q|--quiet)
+            QUIET=1
+            ;;
         --help|-h)
             echo "Usage: $0 [options]"
             echo ""
             echo "Options:"
             echo "  --jffs2-only     Build JFFS2 only (assumes binaries exist)"
+            echo "  -q, --quiet      Suppress non-essential output"
             echo "  --help, -h       Show this help"
             echo ""
             echo "Components built:"
@@ -93,6 +99,8 @@ fi
 
 cd "${SCRIPT_DIR}"
 
+log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
+
 # Build components if requested
 if [ "$BUILD_COMPONENTS" -eq 1 ]; then
     echo "========================================="
@@ -132,10 +140,10 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
     echo ""
 fi
 
-echo "========================================="
-echo "  BUILDING USERDATA PARTITION"
-echo "========================================="
-echo ""
+log "========================================="
+log "  BUILDING USERDATA PARTITION"
+log "========================================="
+log ""
 
 # Clean old images
 rm -f userdata.raw.jffs2 userdata.jffs2 userdata.bin
@@ -147,9 +155,11 @@ if [ ! -d "$SKELETON_DIR" ]; then
     exit 1
 fi
 
-echo "Binaries installed:"
-ls -lh "$INSTALL_DIR" 2>/dev/null || echo "  (none)"
-echo ""
+log "Binaries installed:"
+if [ "$QUIET" -eq 0 ]; then
+    ls -lh "$INSTALL_DIR" 2>/dev/null || echo "  (none)"
+fi
+log ""
 
 # JFFS2 image creation with sumtool optimization
 # Partition mtd3 spans 0x400000-0x1000000 -> 0xC00000 bytes (12MB).
@@ -160,7 +170,7 @@ ERASEBLOCK_HEX=0x10000
 PARTITION_SIZE_HEX=0xC00000
 JFFS2_PAD_HEX=$((PARTITION_SIZE_HEX - 2))
 
-echo "Generating JFFS2 (big endian, 64KB eraseblocks, zlib, padded to ${JFFS2_PAD_HEX} bytes)..."
+log "Generating JFFS2 (big endian, 64KB eraseblocks, zlib, padded to ${JFFS2_PAD_HEX} bytes)..."
 # Force zlib-only compression - requires CONFIG_JFFS2_ZLIB=y in kernel
 fakeroot mkfs.jffs2 \
   -r "$SKELETON_DIR" \
@@ -172,32 +182,43 @@ fakeroot mkfs.jffs2 \
   --pad=${JFFS2_PAD_HEX} \
   -X zlib
 
-echo "JFFS2 image created"
-echo ""
+log "JFFS2 image created"
+log ""
 
 # Convert to RTL format
-echo "Converting to RTL format (signature r6cr)..."
-$CVIMG_TOOL \
-    -i userdata.jffs2 \
-    -o userdata.bin \
-    -e 0x80c00000 \
-    -b 0x400000 \
-    -s r6cr
+log "Converting to RTL format (signature r6cr)..."
+if [ "$QUIET" -eq 1 ]; then
+    $CVIMG_TOOL \
+        -i userdata.jffs2 \
+        -o userdata.bin \
+        -e 0x80c00000 \
+        -b 0x400000 \
+        -s r6cr >/dev/null
+else
+    $CVIMG_TOOL \
+        -i userdata.jffs2 \
+        -o userdata.bin \
+        -e 0x80c00000 \
+        -b 0x400000 \
+        -s r6cr
+fi
 
 # Remove intermediate file
 rm -f userdata.jffs2
 
-echo ""
-echo "========================================="
-echo "  BUILD SUMMARY"
-echo "========================================="
-if [ "$BUILD_COMPONENTS" -eq 1 ]; then
+log ""
+log "========================================="
+log "  BUILD SUMMARY"
+log "========================================="
+if [ "$BUILD_COMPONENTS" -eq 1 ] && [ "$QUIET" -eq 0 ]; then
     echo "  Editor: nano (vi -> nano symlink)"
     echo "  Serial: serialgateway"
 fi
-echo ""
-ls -lh userdata.bin
-echo ""
-echo "Userdata image ready: userdata.bin ($(ls -lh userdata.bin | awk '{print $5}'))"
-echo ""
-echo "To flash: ./flash_userdata.sh"
+log ""
+if [ "$QUIET" -eq 0 ]; then
+    ls -lh userdata.bin
+    echo ""
+fi
+log "Userdata image ready: userdata.bin ($(ls -lh userdata.bin | awk '{print $5}'))"
+log ""
+log "To flash: ./flash_userdata.sh"

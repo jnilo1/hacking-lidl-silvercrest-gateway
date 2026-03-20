@@ -1,57 +1,93 @@
 #!/bin/bash
 # flash_install_rtl8196e.sh — Install custom firmware on Lidl Silvercrest Gateway
 #
-# Builds a fullflash.bin image (via build_fullflash.sh) and uploads it to the
-# gateway via TFTP. The gateway must be in bootloader mode (<RealTek> prompt).
+# Builds a fullflash.bin image (via build_fullflash.sh) and flashes it to the
+# gateway via TFTP.
+#
+# Two modes of operation:
+#   - Upgrade: pass LINUX_IP — the script connects via SSH, saves user config,
+#     detects firmware type (custom vs Tuya via devmem), and triggers boothold
+#     automatically (custom) or guides the user to serial (Tuya).
+#   - First flash: no argument — the gateway must already be in bootloader mode
+#     (<RealTek> prompt via serial ESC).
+#
+# Interactive vs non-interactive:
+#   By default the script is interactive: it prompts for backup, flash
+#   confirmation, and (on first flash) network/radio configuration.
+#   Pass -y (or CONFIRM=y) for non-interactive mode — all prompts are skipped.
+#   This enables unattended remote upgrades over SSH.
+#   Note: if auto-flash fails and falls back to manual FLW, a terminal (tty)
+#   is still required for serial console guidance.
 #
 # Works with any bootloader version:
-#   - V2 custom bootloader: auto-flashes on receiving a 16 MiB file
+#   - V2 custom bootloader (>= v2.0): auto-flashes on receiving a 16 MiB file
 #   - Older bootloaders (Tuya, V1.2): guided LOADADDR + FLW via serial console
 #
 # Prerequisites:
-#   - Serial console connected (3.3V UART, 38400 baud)
-#   - Gateway in bootloader mode (press ESC during boot or use boothold)
 #   - Ethernet cable between host and gateway
 #   - tftp-hpa client installed (sudo apt install tftp-hpa)
+#   - Serial console (3.3V UART, 38400 8N1, line wrap ON) — needed to enter
+#     bootloader mode (first flash / Tuya) and for older bootloaders that
+#     require manual flash commands (the script will guide you)
 #
-# Usage: ./flash_install_rtl8196e.sh [--boot-ip IP] [--help]
+# Usage: ./flash_install_rtl8196e.sh [-y] [LINUX_IP] [--help]
 #
-# Environment variables (for non-interactive use):
+# Arguments:
+#   LINUX_IP        Gateway IP when running Linux (for upgrade with config save)
+#                   Omit for first-time flash (gateway must be in bootloader mode)
+#
+# Options:
+#   -y, --yes       Non-interactive mode: skip all confirmation prompts
+#
+# Environment variables:
 #   BOOT_IP     - Gateway IP in bootloader (default: 192.168.1.6)
+#   SSH_TIMEOUT - TCP probe timeout in seconds (default: 2)
 #   NET_MODE    - "static" or "dhcp" (skip network prompt)
 #   IPADDR      - Static IP address (default: 192.168.1.88)
 #   NETMASK     - Netmask (default: 255.255.255.0)
 #   GATEWAY     - Default gateway (default: 192.168.1.1)
 #   RADIO_MODE  - "zigbee" or "thread" (skip radio prompt)
-#   CONFIRM     - Set to "y" to skip confirmation prompts
+#   CONFIRM     - Set to "y" to skip confirmation prompts (same as -y)
 #
 # J. Nilo - March 2026
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-LINUX_IP="${LINUX_IP:-192.168.1.88}"
+LINUX_IP=""
+FW_VERSION=""
 BOOT_IP="${BOOT_IP:-192.168.1.6}"
+SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
 
 # --- argument parsing --------------------------------------------------------
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --boot-ip|--ip) shift; BOOT_IP="$1" ;;
+        -y|--yes) CONFIRM="y" ;;
         --help|-h)
-            echo "Usage: $0 [--boot-ip IP] [--help]"
+            echo "Usage: $0 [-y] [LINUX_IP] [--help]"
             echo ""
             echo "Installs custom firmware on the Lidl Silvercrest Gateway."
-            echo "The gateway must be in bootloader mode (<RealTek> prompt)."
+            echo ""
+            echo "Arguments:"
+            echo "  LINUX_IP       Gateway IP when running Linux (upgrade with config save)"
+            echo "                 Omit for first-time flash (gateway must be in bootloader)"
             echo ""
             echo "Options:"
-            echo "  --boot-ip IP   Gateway IP in bootloader (default: 192.168.1.6)"
+            echo "  -y, --yes      Non-interactive mode (skip all prompts)"
             echo ""
-            echo "Environment: BOOT_IP, NET_MODE, RADIO_MODE, CONFIRM,"
+            echo "Environment: BOOT_IP, SSH_TIMEOUT, NET_MODE, RADIO_MODE, CONFIRM,"
             echo "  IPADDR, NETMASK, GATEWAY"
             exit 0
             ;;
-        *) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
+        --*) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
+        *)
+            if [ -n "$LINUX_IP" ]; then
+                echo "Error: unexpected argument '$1' (LINUX_IP already set to '$LINUX_IP')." >&2
+                exit 1
+            fi
+            LINUX_IP="$1"
+            ;;
     esac
     shift
 done
@@ -67,7 +103,9 @@ if ! command -v tftp >/dev/null 2>&1 || ! echo "$tftp_usage" | grep -q '\-c'; th
 fi
 
 
-# --- detect bootloader (early — fail fast before building) -------------------
+# --- detect gateway state (early — fail fast before building) ----------------
+# If LINUX_IP is provided, probe SSH to determine firmware type and save config.
+# Otherwise, check if bootloader is already reachable at BOOT_IP.
 
 echo ""
 echo "========================================="
@@ -84,25 +122,55 @@ if [ -z "${IFACE:-}" ]; then
     exit 1
 fi
 
-# Check if Linux is running (SSH on BOOT_IP or LINUX_IP) — means NOT in bootloader
+# Detect gateway state based on whether LINUX_IP was provided
 LINUX_RUNNING=""
-if timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/22" 2>/dev/null; then
-    LINUX_RUNNING="custom:${BOOT_IP}:22"
-elif timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/2333" 2>/dev/null; then
-    LINUX_RUNNING="tuya:${BOOT_IP}:2333"
-elif [ "$LINUX_IP" != "$BOOT_IP" ]; then
-    if timeout 1 bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
-        LINUX_RUNNING="custom:${LINUX_IP}:22"
+if [ -n "$LINUX_IP" ]; then
+    echo "Probing SSH on ${LINUX_IP}..."
+    if timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/22" 2>/dev/null; then
+        LINUX_RUNNING="${LINUX_IP}:22"
+    elif timeout "$SSH_TIMEOUT" bash -c "echo >/dev/tcp/$LINUX_IP/2333" 2>/dev/null; then
+        LINUX_RUNNING="${LINUX_IP}:2333"
+    else
+        echo "Error: cannot reach gateway at ${LINUX_IP} (no SSH on port 22 or 2333)." >&2
+        echo "Check the Ethernet cable, or if the gateway is already in bootloader mode" >&2
+        echo "re-run without argument:  $0" >&2
+        exit 1
     fi
 fi
 
 if [ -n "$LINUX_RUNNING" ]; then
-    fw_type="${LINUX_RUNNING%%:*}"
-    fw_host="$(echo "$LINUX_RUNNING" | cut -d: -f2)"
-    fw_port="$(echo "$LINUX_RUNNING" | cut -d: -f3)"
-    echo "Linux detected at ${fw_host}:${fw_port} (${fw_type} firmware)."
+    fw_host="${LINUX_RUNNING%%:*}"
+    fw_port="${LINUX_RUNNING##*:}"
+    echo "Linux detected at ${fw_host}:${fw_port}."
+
+    if [ "$fw_port" = "2333" ]; then
+        # Port 2333 is exclusively Tuya/Lidl — no SSH needed
+        fw_type="tuya"
+    else
+        # Port 22 — could be custom or Tuya; SSH in to check
+        SSH_SOCK="/tmp/flash_install_ssh_$$"
+        FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10 -p $fw_port"
+
+        # Verify SSH access before proceeding
+        # shellcheck disable=SC2086
+        if ! ssh $FI_SSH_OPTS "root@${fw_host}" "true" 2>/dev/null; then
+            echo "Error: SSH authentication failed." >&2
+            exit 1
+        fi
+
+        # Detect firmware type: devmem present = custom firmware (can boothold)
+        # devmem absent = Tuya firmware (even if SSH port was changed to 22)
+        # shellcheck disable=SC2086
+        if ssh $FI_SSH_OPTS "root@${fw_host}" "command -v devmem" >/dev/null 2>&1; then
+            fw_type="custom"
+        else
+            fw_type="tuya"
+        fi
+    fi
+    echo "Firmware type: ${fw_type}"
 
     # --- propose backup (while Linux is still running) -----------------------
+    # Skipped in non-interactive mode (-y / CONFIRM=y)
     if [ "${CONFIRM:-}" != "y" ]; then
         echo ""
         echo "It is recommended to back up the flash before installing."
@@ -114,16 +182,6 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
 
     if [ "$fw_type" = "custom" ]; then
-        SSH_SOCK="/tmp/flash_install_ssh_$$"
-        FI_SSH_OPTS="-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=10 -o ControlMaster=auto -o ControlPath=$SSH_SOCK -o ControlPersist=10"
-
-        # Verify SSH access before proceeding
-        # shellcheck disable=SC2086
-        if ! ssh $FI_SSH_OPTS "root@${fw_host}" "true" 2>/dev/null; then
-            echo "Error: SSH authentication failed." >&2
-            exit 1
-        fi
-
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
         echo "Saving gateway config..."
@@ -141,6 +199,14 @@ if [ -n "$LINUX_RUNNING" ]; then
         fi
         rm -f "$SAVE_TAR"
 
+        # Read firmware version to determine auto-flash capability
+        # shellcheck disable=SC2086
+        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
+        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+) ]]; then
+            FW_VERSION="${BASH_REMATCH[1]}"
+            echo "  Firmware version: v${FW_VERSION}"
+        fi
+
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
@@ -149,17 +215,17 @@ if [ -n "$LINUX_RUNNING" ]; then
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."
         echo "To enter bootloader mode:"
-        echo "  - Connect serial console (3.3V UART, 38400 baud)"
+        echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
         echo "  - Power cycle the gateway"
         echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-        echo "  - Then re-run:  $0 --boot-ip <BOOTLOADER_IP>"
-        echo ""
-        echo "Note: the bootloader IP is usually 192.168.1.6 (default)."
-        echo "It may differ from the Linux IP (${fw_host})."
+        echo "  - Then re-run:  $0"
         echo ""
         exit 1
     fi
 
+    # --- wait for bootloader after boothold + reboot -------------------------
+    # Poll ARP table until BOOT_IP appears AND SSH on LINUX_IP is down
+    # (confirms Linux has shut down and bootloader is running).
     echo "Waiting for bootloader at ${BOOT_IP}..."
     tries=0
     while [ $tries -lt 30 ]; do
@@ -168,9 +234,8 @@ if [ -n "$LINUX_RUNNING" ]; then
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-            # Confirm it's really bootloader (SSH must be down now)
-            if ! timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/22" 2>/dev/null && \
-               ! timeout 1 bash -c "echo >/dev/tcp/$BOOT_IP/2333" 2>/dev/null; then
+            # Confirm Linux is down (SSH must be unreachable on LINUX_IP)
+            if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
                 break
             fi
         fi
@@ -182,45 +247,65 @@ if [ -n "$LINUX_RUNNING" ]; then
         exit 1
     fi
 else
-    # No Linux (SSH) — check if bootloader is reachable via ARP
+    # No LINUX_IP given — check if bootloader is reachable via ARP
     ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
     bash -c "echo -n X >/dev/udp/$BOOT_IP/69" 2>/dev/null || true
     sleep 0.3
 
     nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
     if ! echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-        echo "Bootloader not detected at ${BOOT_IP}."
+        echo "Gateway not detected at ${BOOT_IP}."
         echo ""
-        echo "To enter bootloader mode:"
-        echo "  - Connect serial console (3.3V UART, 38400 baud)"
+        echo "For first-time flash:"
+        echo "  - Connect serial console (3.3V UART, 38400 8N1, line wrap ON)"
         echo "  - Power cycle the gateway"
         echo "  - Press ESC repeatedly during boot to get the <RealTek> prompt"
-        echo "  - Then re-run:  $0 --boot-ip <BOOTLOADER_IP>"
+        echo "  - Then re-run:  $0"
         echo ""
-        echo "Note: the bootloader IP is usually 192.168.1.6 (default)."
-        echo "It may differ from the Linux IP (${BOOT_IP})."
+        echo "For upgrade (with config save):"
+        echo "  - Run:  $0 <GATEWAY_IP>   (e.g. $0 192.168.1.88)"
         echo ""
         exit 1
     fi
 
-    # ARP resolved + no SSH = bootloader (either V2 with ping or old without).
+    # ARP resolved — but is it really bootloader? Probe TFTP to confirm.
+    # Use PUT (not GET): bootloader ACKs a WRQ immediately, but silently drops
+    # RRQ (prints error on serial only, no UDP response → tftp-hpa hangs).
+    # timeout returns 124 when no TFTP server responds; 0 when bootloader ACKs.
+    probe_file=$(mktemp)
+    echo -n X > "$probe_file"
+    probe_rc=0
+    timeout 3 tftp -m binary "$BOOT_IP" -c put "$probe_file" >/dev/null 2>&1 || probe_rc=$?
+    rm -f "$probe_file"
+    if [ $probe_rc -eq 124 ]; then
+        echo "Device at ${BOOT_IP} is not in bootloader mode (no TFTP server)."
+        echo "If the gateway is running Linux, run:  $0 <GATEWAY_IP>"
+        exit 1
+    fi
+
+    # ARP resolved + TFTP responding = bootloader.
     echo ""
-    echo "WARNING: Gateway is already in bootloader mode."
-    echo "User config (network, password, SSH keys) cannot be saved."
-    echo "The flash image will use default settings."
+    echo "Bootloader detected. No config files/variables will be imported"
+    echo "You will be prompted for network and radio settings."
     if [ "${CONFIRM:-}" != "y" ]; then
-        read -r -p "Continue without saving config? [y/N] " r
+        read -r -p "Proceed? [y/N] " r
         if [[ ! "$r" =~ ^[yY]$ ]]; then
-            echo "Aborted. Reboot the gateway to Linux first, then re-run."
+            echo "Aborted."
             exit 0
         fi
     fi
 fi
 
-# Detect bootloader type: V2 custom responds to ping, older ones don't.
-BOOTLOADER_TYPE="old"
-if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
+# Detect bootloader type:
+#   - Custom firmware always has V2.3 bootloader — no need to ping.
+#   - First flash (no LINUX_IP): probe with ping (V2 responds, older don't).
+if [ "${fw_type:-}" = "custom" ]; then
     BOOTLOADER_TYPE="v2"
+else
+    BOOTLOADER_TYPE="old"
+    if ping -c 1 -W 2 "$BOOT_IP" >/dev/null 2>&1; then
+        BOOTLOADER_TYPE="v2"
+    fi
 fi
 
 echo "Bootloader detected at ${BOOT_IP} (type: ${BOOTLOADER_TYPE})."
@@ -240,9 +325,12 @@ if [ -z "$LINUX_RUNNING" ] && [ "${CONFIRM:-}" != "y" ]; then
 fi
 
 # --- build fullflash.bin -----------------------------------------------------
+# Called with -q (quiet): only config → lines, errors, and a summary are shown.
+# Run build_fullflash.sh without -q for full verbose output.
 
 echo ""
-"${SCRIPT_DIR}/build_fullflash.sh"
+echo "Generating disk image... be patient"
+"${SCRIPT_DIR}/build_fullflash.sh" -q
 
 FULLFLASH="${SCRIPT_DIR}/fullflash.bin"
 if [ ! -f "$FULLFLASH" ]; then
@@ -258,6 +346,7 @@ if [ "$ff_size" -ne "$FLASH_SIZE" ]; then
 fi
 
 # --- confirm -----------------------------------------------------------------
+# Last chance to abort. Skipped in non-interactive mode (-y / CONFIRM=y).
 
 echo ""
 echo "WARNING: This will overwrite the ENTIRE flash chip (16 MiB)."
@@ -273,11 +362,6 @@ if [ "${CONFIRM:-}" != "y" ]; then
 fi
 
 # --- flash (step by step) ----------------------------------------------------
-
-if [ ! -t 0 ]; then
-    echo "Error: this script requires an interactive terminal (serial console guidance)." >&2
-    exit 1
-fi
 
 check_tftp_error() {
     echo "$1" | grep -qiE \
@@ -295,25 +379,41 @@ if [ "$BOOTLOADER_TYPE" = "v2" ]; then
         echo "Error: TFTP transfer failed: $out" >&2
         exit 1
     fi
-    echo "Upload OK. Waiting for auto-flash (up to 3 minutes)..."
+    echo "Upload OK."
 
-    # Wait for UDP notification (OK or FAIL) on port 9999
-    # V2.3+ bootloaders auto-flash and notify within seconds.
-    # Older V2 bootloaders send FAIL or nothing.
-    # Flash takes ~2 minutes — timeout must cover the full write cycle.
+    # Auto-flash with UDP notification only works on firmware >= v2.0.0
+    # (commit 4e556a1 added auto-flash + UDP notify to the bootloader binary).
+    # Older bootloaders (v1.x) respond to ping (detected as "v2") but do NOT
+    # have auto-flash — waiting for nc would hang 3 minutes for nothing.
+    has_autoflash=false
+    if [ -n "$FW_VERSION" ]; then
+        fw_major="${FW_VERSION%%.*}"
+        if [ "$fw_major" -ge 2 ] 2>/dev/null; then
+            has_autoflash=true
+        fi
+    fi
+
     result=""
-    if command -v nc >/dev/null 2>&1; then
-        notify_file=$(mktemp)
-        (timeout 180 nc -u -l -p 9999 > "$notify_file" 2>/dev/null) &
-        nc_pid=$!
+    if [ "$has_autoflash" = true ]; then
+        echo "Waiting for auto-flash (up to 3 minutes)..."
 
-        while kill -0 "$nc_pid" 2>/dev/null; do
-            [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
-            sleep 0.5
-        done
-        wait "$nc_pid" 2>/dev/null || true
-        result=$(tr -d '\0' < "$notify_file" 2>/dev/null || true)
-        rm -f "$notify_file"
+        # Wait for UDP notification (OK or FAIL) on port 9999
+        # Flash takes ~2 minutes — timeout must cover the full write cycle.
+        if command -v nc >/dev/null 2>&1; then
+            notify_file=$(mktemp)
+            (timeout 180 nc -u -l -p 9999 > "$notify_file" 2>/dev/null) &
+            nc_pid=$!
+
+            while kill -0 "$nc_pid" 2>/dev/null; do
+                [ -s "$notify_file" ] && { kill "$nc_pid" 2>/dev/null; break; }
+                sleep 0.5
+            done
+            wait "$nc_pid" 2>/dev/null || true
+            result=$(tr -d '\0' < "$notify_file" 2>/dev/null || true)
+            rm -f "$notify_file"
+        fi
+    else
+        echo "Firmware < v2.0.0 (or unknown) — no auto-flash support."
     fi
 
     if [ "$result" = "OK" ]; then
@@ -323,36 +423,44 @@ if [ "$BOOTLOADER_TYPE" = "v2" ]; then
         echo "========================================="
         echo ""
         echo "Flash write succeeded. The gateway will reboot automatically."
-        echo "SSH: root@${LINUX_IP}:22 (no password) in ~30 seconds."
+        echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
     else
-        # Auto-flash failed or no notification — fallback to manual FLW
+        # Auto-flash failed or no notification — fallback to manual FLW.
+        # This path requires an interactive terminal for serial console guidance.
         if [ "$result" = "FAIL" ]; then
             echo "Auto-flash reported FAIL. Falling back to manual flash."
         else
             echo "No auto-flash notification. Falling back to manual flash."
         fi
+        if [ ! -t 0 ]; then
+            echo "Error: manual flash requires an interactive terminal (serial console guidance)." >&2
+            exit 1
+        fi
         echo ""
-        echo "The image is in the gateway's RAM. On the serial console, type:"
+        echo "The image is in the gateway's RAM. On the serial console (38400 8N1, line wrap ON), type:"
         echo ""
-        echo "    FLW 0 80500000 01000000 0"
+        echo "    FLW 0 80500000 01000000"
         echo ""
-        echo "Wait for the <RealTek> prompt (takes ~2 minutes)."
+        echo "Answer (Y)es when prompted on the serial console and..."
+        echo "... wait 2mn until you see the <RealTek> prompt."
         echo ""
-        read -r -p "Flash Write Succeeded? [y/N] " r
-        if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
-
+        echo "Then, on the serial console, type:"
         echo ""
-        echo "On the serial console, type:  reboot"
+        echo "    J BFC00000"
+        echo ""
+        echo "Or do a hard reset / power cycle."
         echo ""
         echo "========================================="
         echo "  INSTALLATION COMPLETE"
         echo "========================================="
         echo ""
-        echo "SSH: root@${LINUX_IP}:22 (no password) in ~30 seconds."
+        echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
     fi
 
 else
     # --- Older bootloader: LOADADDR + upload + FLW ----------------------------
+    # No auto-flash on older bootloaders — requires serial console interaction.
+    # Abort early if stdin is not a terminal (pipe, cron, ssh without tty).
     if [ ! -t 0 ]; then
         echo "Error: this script requires an interactive terminal." >&2
         exit 1
@@ -373,23 +481,22 @@ else
     echo ""
     echo "--- Step 2: write to flash ---"
     echo ""
-    echo "On the serial console, type:"
+    echo "On the serial console (38400 8N1, line wrap ON), type:"
     echo ""
-    echo "    FLW 0 80500000 01000000 0"
+    echo "    FLW 0 80500000 01000000"
     echo ""
-    echo "Wait for the <RealTek> prompt (takes ~2 minutes)."
+    echo "Answer (Y)es when prompted on the serial console and..."
+    echo "... wait 2mn until you see the <RealTek> prompt."
     echo ""
-    read -r -p "Flash Write Succeeded? [y/N] " r
-    if [[ ! "$r" =~ ^[yY]$ ]]; then echo "Aborted."; exit 1; fi
-
+    echo "Then, on the serial console, type:"
     echo ""
-    echo "--- Step 3: reboot ---"
+    echo "    J BFC00000"
     echo ""
-    echo "On the serial console, type:  reboot"
+    echo "Or do a hard reset / power cycle."
     echo ""
     echo "========================================="
     echo "  INSTALLATION COMPLETE"
     echo "========================================="
     echo ""
-    echo "SSH: root@${LINUX_IP}:22 (no password) in ~30 seconds."
+    echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
 fi

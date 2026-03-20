@@ -4,16 +4,22 @@
 # Assembles bootloader + kernel + rootfs + userdata into a single fullflash.bin
 # that can be written to the SPI NOR flash via TFTP + FLW.
 #
-# Optionally rebuilds userdata with the chosen network/radio configuration.
+# Rebuilds userdata with the chosen network/radio configuration, then assembles
+# all 4 partitions, verifies magic bytes, and outputs fullflash.bin.
 #
-# Usage: ./build_fullflash.sh [--help]
+# Usage: ./build_fullflash.sh [-q] [--help]
+#
+# Options:
+#   -q, --quiet   Suppress non-essential output (banners, image sizes, assembly
+#                 details, verification line-by-line). Keeps: config → lines,
+#                 errors, and a single summary line. Used by flash_install.
 #
 # Environment variables (for non-interactive use):
-#   NET_MODE    - "static" or "dhcp" (skip network prompt)
+#   NET_MODE    - "static", "dhcp", or "skip" (config already injected by caller)
 #   IPADDR      - Static IP address (default: 192.168.1.88)
 #   NETMASK     - Netmask (default: 255.255.255.0)
 #   GATEWAY     - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE  - "zigbee" or "thread" (skip radio prompt)
+#   RADIO_MODE  - "zigbee", "thread", or "skip" (config already injected)
 #
 # J. Nilo - March 2026
 
@@ -29,6 +35,7 @@ USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
 
 OUTPUT="${SCRIPT_DIR}/fullflash.bin"
+QUIET=0
 
 FLASH_SIZE=$((16 * 1024 * 1024))  # 16 MiB
 
@@ -42,12 +49,16 @@ OFF_USERDATA=0x400000  # userdata  12288 KiB
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        -q|--quiet) QUIET=1 ;;
         --help|-h)
-            echo "Usage: $0 [--help]"
+            echo "Usage: $0 [-q|--quiet] [--help]"
             echo ""
             echo "Builds a complete 16 MiB flash image (fullflash.bin)."
             echo "Asks for network and radio configuration, rebuilds userdata,"
             echo "then assembles all 4 partitions into a single image."
+            echo ""
+            echo "Options:"
+            echo "  -q, --quiet   Suppress non-essential output"
             echo ""
             echo "Environment: NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
             exit 0
@@ -59,11 +70,13 @@ done
 
 # --- check source images ----------------------------------------------------
 
-echo ""
-echo "========================================="
-echo "  BUILD FULLFLASH"
-echo "========================================="
-echo ""
+log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
+
+log ""
+log "========================================="
+log "  BUILD FULLFLASH"
+log "========================================="
+log ""
 
 MISSING=0
 for f in "$BOOTLOADER_IMG" "$KERNEL_IMG" "$ROOTFS_IMG"; do
@@ -157,11 +170,15 @@ trap restore_skeleton EXIT
             echo "→ Zigbee"
         fi
     fi
-    echo ""
+    log ""
 
-    echo "Building userdata..."
-    "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
-    echo ""
+    log "Building userdata..."
+    if [ "$QUIET" -eq 1 ]; then
+        "${USERDATA_DIR}/build_userdata.sh" --jffs2-only -q
+    else
+        "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
+    fi
+    log ""
 
     # Skeleton is restored by the EXIT trap (restore_skeleton)
 
@@ -179,12 +196,12 @@ kernel_max=$((OFF_ROOTFS - OFF_KERNEL))    # 1920 KiB
 rootfs_max=$((OFF_USERDATA - OFF_ROOTFS))  # 2048 KiB
 userdata_max=$((FLASH_SIZE - OFF_USERDATA)) # 12288 KiB
 
-echo "Image sizes (data written to flash):"
-echo "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
-echo "  kernel.img:   $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
-echo "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
-echo "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
-echo ""
+log "Image sizes (data written to flash):"
+log "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
+log "  kernel.img:   $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
+log "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
+log "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
+log ""
 
 OVERFLOW=0
 if [ $boot_data -gt $boot_max ]; then
@@ -207,7 +224,7 @@ if [ $OVERFLOW -eq 1 ]; then exit 1; fi
 
 # --- assemble fullflash.bin --------------------------------------------------
 
-echo "Assembling fullflash.bin (16 MiB)..."
+log "Assembling fullflash.bin (16 MiB)..."
 
 # Start with 16 MiB of 0xFF (erased NOR flash)
 dd if=/dev/zero bs=1M count=16 2>/dev/null | tr '\0' '\377' > "$OUTPUT"
@@ -230,8 +247,8 @@ tail -c +17 "$USERDATA_IMG" | dd of="$OUTPUT" bs=1 seek=$((OFF_USERDATA)) conv=n
 
 # --- verify ------------------------------------------------------------------
 
-echo ""
-echo "Verifying..."
+log ""
+log "Verifying..."
 
 ERRORS=0
 
@@ -241,7 +258,7 @@ if [ "$actual_size" -ne "$FLASH_SIZE" ]; then
     echo "  FAIL: size is $actual_size (expected $FLASH_SIZE)" >&2
     ERRORS=1
 else
-    echo "  Size: 16 MiB [OK]"
+    log "  Size: 16 MiB [OK]"
 fi
 
 # Check magic bytes at each partition offset
@@ -250,7 +267,7 @@ check_magic() {
     local nbytes=$(( ${#expected} / 2 ))
     actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null | xxd -p)
     if [ "$actual" = "$expected" ]; then
-        echo "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
+        log "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
     else
         echo "  ${label} @ $(printf '0x%06X' $offset): $actual (expected $expected) [FAIL]" >&2
         ERRORS=1
@@ -269,11 +286,14 @@ if [ $ERRORS -ne 0 ]; then
     exit 1
 fi
 
-echo ""
-echo "========================================="
-echo "  FULLFLASH READY"
-echo "========================================="
-echo ""
-echo "  $(ls -lh "$OUTPUT" | awk '{print $NF, $5}')"
-echo "  MD5: $(md5sum "$OUTPUT" | awk '{print $1}')"
-echo ""
+ff_md5=$(md5sum "$OUTPUT" | awk '{print $1}')
+log ""
+log "========================================="
+log "  FULLFLASH READY"
+log "========================================="
+log ""
+log "  $(ls -lh "$OUTPUT" | awk '{print $NF, $5}')"
+log "  MD5: ${ff_md5}"
+log ""
+
+# In quiet mode, no summary line — the caller handles messaging
