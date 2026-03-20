@@ -1,2 +1,2 @@
-# Only keep .gbl files in firmware/
+# Only keep .gbl and .s37 files in firmware/
 *.tar

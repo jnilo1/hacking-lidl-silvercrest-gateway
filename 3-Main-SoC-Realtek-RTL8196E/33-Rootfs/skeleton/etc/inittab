@@ -6,3 +6,4 @@
 ::sysinit:/etc/init.d/rcS
 ttyS0::askfirst:/bin/login
 #ttyS0::respawn:-/bin/sh
+::shutdown:/userdata/etc/init.d/rcK

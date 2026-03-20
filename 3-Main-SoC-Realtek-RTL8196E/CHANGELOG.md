@@ -6,6 +6,25 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.0.2] - 2026-03-20
+
+### Bug fixes
+- **Thread dataset lost on reboot**: S70otbr sync loop only ran 60s after boot —
+  networks created later were never persisted. Replaced with a persistent daemon
+  that polls `ot-ctl dataset active -x` every 30s and syncs to flash only when
+  the dataset changes. Traps SIGTERM for a final sync on shutdown.
+- **No shutdown hooks**: added `::shutdown:` entry to rootfs inittab, calling a
+  new `rcK` script that stops all services in reverse order on reboot — ensures
+  clean `stop` for otbr-agent and all other init scripts.
+
+### Improvements
+- **EFR32 build scripts**: all firmware build scripts (bootloader, NCP, RCP,
+  OT-RCP, Router) now consistently output exactly two files in `firmware/`:
+  `.gbl` (for UART/Xmodem flashing) and `.s37` (for J-Link). Removed `.hex`,
+  `.bin`, and intermediate `.s37` variants.
+
+---
+
 ## [2.0.1] - 2026-03-17
 
 ### Bug fixes

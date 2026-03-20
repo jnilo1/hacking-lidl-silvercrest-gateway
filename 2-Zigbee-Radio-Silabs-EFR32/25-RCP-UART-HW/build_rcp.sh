@@ -199,14 +199,17 @@ SRC_BASE="build/debug/${PROJECT_NAME}"
 OUT_BASE="${PROJECT_NAME}"
 
 if [ -f "${SRC_BASE}.s37" ]; then
-    # Create .gbl file using commander (the only format needed for flashing)
+    rm -f "${OUTPUT_DIR}"/*.s37 "${OUTPUT_DIR}"/*.gbl "${OUTPUT_DIR}"/*.hex "${OUTPUT_DIR}"/*.bin 2>/dev/null
+
+    # Copy .s37 for J-Link flashing
+    cp "${SRC_BASE}.s37" "${OUTPUT_DIR}/${OUT_BASE}.s37"
+
+    # Create .gbl file using commander for UART flashing
     if command -v commander >/dev/null 2>&1; then
         echo "Creating .gbl file..."
         commander gbl create "${OUTPUT_DIR}/${OUT_BASE}.gbl" --app "${SRC_BASE}.s37"
-        echo "  - Created ${OUT_BASE}.gbl"
     else
-        echo "WARNING: commander not found, copying .s37 instead"
-        cp "${SRC_BASE}.s37" "${OUTPUT_DIR}/${OUT_BASE}.s37"
+        echo "WARNING: commander not found, cannot create .gbl file"
     fi
 fi
 
@@ -225,12 +228,12 @@ if [ -f "${SRC_BASE}.out" ]; then
     arm-none-eabi-size "${SRC_BASE}.out"
 fi
 echo ""
-echo "Output file:"
-ls -lh "${OUTPUT_DIR}/${OUT_BASE}.gbl" 2>/dev/null || ls -lh "${OUTPUT_DIR}/${OUT_BASE}".*
+echo "Output files:"
+ls -lh "${OUTPUT_DIR}/${OUT_BASE}".{gbl,s37} 2>/dev/null
 echo ""
 echo "Flash commands:"
 echo "  Via UART:   universal-silabs-flasher --device /dev/ttyUSB0 --firmware firmware/${OUT_BASE}.gbl"
-echo "  Via J-Link: commander flash firmware/${OUT_BASE}.gbl --device ${TARGET_DEVICE}"
+echo "  Via J-Link: commander flash firmware/${OUT_BASE}.s37 --device ${TARGET_DEVICE}"
 echo ""
 echo "Host setup (Linux):"
 echo "  1. Build and install cpcd (see cpcd/README.md)"

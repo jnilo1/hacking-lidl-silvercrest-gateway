@@ -13,12 +13,10 @@
 #   ./build_bootloader.sh           # Build bootloader
 #   ./build_bootloader.sh clean     # Clean build directory
 #
-# Output (same as Simplicity Studio):
-#   firmware/bootloader-uart-xmodem-X.Y.Z.s37          (main stage)
-#   firmware/bootloader-uart-xmodem-X.Y.Z-crc.s37      (main stage with CRC)
-#   firmware/bootloader-uart-xmodem-X.Y.Z-combined.s37 (first_stage + main-crc)
+# Output:
 #   firmware/bootloader-uart-xmodem-X.Y.Z.gbl          (for XMODEM upload)
-#   firmware/first_stage.s37                           (first stage bootloader)
+#   firmware/bootloader-uart-xmodem-X.Y.Z.s37          (main stage with CRC, matches .gbl content)
+#   firmware/bootloader-uart-xmodem-X.Y.Z-combined.s37 (first_stage + main-crc, for J-Link)
 #
 # J. Nilo - December 2025
 
@@ -252,28 +250,21 @@ commander gbl create "artifact/bootloader-uart-xmodem.gbl" \
     --bootloader "artifact/bootloader-uart-xmodem-crc.s37"
 
 # =========================================
-# Copy to firmware directory with version suffix
+# Copy to firmware directory (only .gbl and .s37)
 # =========================================
 echo ""
 echo "  Copying artifacts to firmware/..."
-
-# Main stage
-cp "artifact/bootloader-uart-xmodem.s37" "${OUTPUT_DIR}/${OUTPUT_NAME}.s37"
-
-# Main stage with CRC
-cp "artifact/bootloader-uart-xmodem-crc.s37" "${OUTPUT_DIR}/${OUTPUT_NAME}-crc.s37"
-
-# Combined (first_stage + main-crc)
-if [ -f "artifact/bootloader-uart-xmodem-combined.s37" ]; then
-    cp "artifact/bootloader-uart-xmodem-combined.s37" "${OUTPUT_DIR}/${OUTPUT_NAME}-combined.s37"
-fi
+rm -f "${OUTPUT_DIR}"/*.s37 "${OUTPUT_DIR}"/*.gbl "${OUTPUT_DIR}"/*.hex "${OUTPUT_DIR}"/*.bin 2>/dev/null
 
 # GBL for XMODEM upload
 cp "artifact/bootloader-uart-xmodem.gbl" "${OUTPUT_DIR}/${OUTPUT_NAME}.gbl"
 
-# First stage (copy separately)
-if [ -f "autogen/first_stage.s37" ]; then
-    cp "autogen/first_stage.s37" "${OUTPUT_DIR}/first_stage.s37"
+# Main stage with CRC (.s37 equivalent of .gbl content)
+cp "artifact/bootloader-uart-xmodem-crc.s37" "${OUTPUT_DIR}/${OUTPUT_NAME}.s37"
+
+# Combined (first_stage + main-crc) for J-Link full flash
+if [ -f "artifact/bootloader-uart-xmodem-combined.s37" ]; then
+    cp "artifact/bootloader-uart-xmodem-combined.s37" "${OUTPUT_DIR}/${OUTPUT_NAME}-combined.s37"
 fi
 
 # =========================================
@@ -290,19 +281,15 @@ echo ""
 echo "Bootloader size:"
 arm-none-eabi-size build/debug/bootloader-uart-xmodem.out
 echo ""
-echo "Output files (same as Simplicity Studio artifact/):"
+echo "Output files:"
 ls -lh "${OUTPUT_DIR}/"
 echo ""
-echo "Files for flashing:"
-echo "  ${OUTPUT_NAME}.s37          - Main stage bootloader"
-echo "  ${OUTPUT_NAME}-crc.s37      - Main stage with CRC (for serial upload)"
-echo "  ${OUTPUT_NAME}-combined.s37 - First stage + Main stage (for J-Link)"
-echo "  ${OUTPUT_NAME}.gbl          - GBL image (for XMODEM upload)"
-echo "  first_stage.s37             - First stage only (requires J-Link)"
-echo ""
-echo "Flash combined image via J-Link:"
+echo "Flash via J-Link (full bootloader):"
 echo "  commander flash firmware/${OUTPUT_NAME}-combined.s37 --device ${TARGET_DEVICE}"
 echo ""
 echo "Upload via XMODEM (if bootloader already installed):"
 echo "  Use firmware/${OUTPUT_NAME}.gbl"
+echo ""
+echo "Stage 2 only (matches .gbl content):"
+echo "  firmware/${OUTPUT_NAME}.s37"
 echo ""

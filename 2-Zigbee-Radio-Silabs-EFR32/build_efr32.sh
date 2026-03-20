@@ -165,11 +165,11 @@ echo "  BUILD COMPLETE"
 echo "========================================="
 echo ""
 echo "Generated firmware:"
-[ $BUILD_BOOTLOADER -eq 1 ] && ls -lh "${SCRIPT_DIR}"/23-Bootloader-UART-Xmodem/firmware/*.gbl 2>/dev/null || true
-[ $BUILD_NCP -eq 1 ]        && ls -lh "${SCRIPT_DIR}"/24-NCP-UART-HW/firmware/*.gbl 2>/dev/null || true
-[ $BUILD_RCP -eq 1 ]        && ls -lh "${SCRIPT_DIR}"/25-RCP-UART-HW/firmware/rcp-uart-802154.gbl 2>/dev/null || true
-[ $BUILD_OT_RCP -eq 1 ]     && ls -lh "${SCRIPT_DIR}"/26-OT-RCP/firmware/*.gbl 2>/dev/null || true
-[ $BUILD_ROUTER -eq 1 ]     && ls -lh "${SCRIPT_DIR}"/27-Router/firmware/*.gbl 2>/dev/null || true
+[ $BUILD_BOOTLOADER -eq 1 ] && ls -lh "${SCRIPT_DIR}"/23-Bootloader-UART-Xmodem/firmware/*.{gbl,s37} 2>/dev/null || true
+[ $BUILD_NCP -eq 1 ]        && ls -lh "${SCRIPT_DIR}"/24-NCP-UART-HW/firmware/*.{gbl,s37} 2>/dev/null || true
+[ $BUILD_RCP -eq 1 ]        && ls -lh "${SCRIPT_DIR}"/25-RCP-UART-HW/firmware/*.{gbl,s37} 2>/dev/null || true
+[ $BUILD_OT_RCP -eq 1 ]     && ls -lh "${SCRIPT_DIR}"/26-OT-RCP/firmware/*.{gbl,s37} 2>/dev/null || true
+[ $BUILD_ROUTER -eq 1 ]     && ls -lh "${SCRIPT_DIR}"/27-Router/firmware/*.{gbl,s37} 2>/dev/null || true
 cd "$PROJECT_ROOT"
 echo ""
 echo "To flash: ./flash_efr32.sh"

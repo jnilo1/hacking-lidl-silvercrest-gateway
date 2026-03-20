@@ -212,14 +212,17 @@ SRC_BASE="build/debug/${PROJECT_NAME}"
 OUT_BASE="${PROJECT_NAME}"
 
 if [ -f "${SRC_BASE}.s37" ]; then
-    cp "${SRC_BASE}.s37" "${OUTPUT_DIR}/${OUT_BASE}.s37"
-    cp "${SRC_BASE}.hex" "${OUTPUT_DIR}/${OUT_BASE}.hex" 2>/dev/null || true
-    cp "${SRC_BASE}.bin" "${OUTPUT_DIR}/${OUT_BASE}.bin" 2>/dev/null || true
+    rm -f "${OUTPUT_DIR}"/*.s37 "${OUTPUT_DIR}"/*.gbl "${OUTPUT_DIR}"/*.hex "${OUTPUT_DIR}"/*.bin 2>/dev/null
 
-    # Create .gbl file using commander if available
+    # Copy .s37 for J-Link flashing
+    cp "${SRC_BASE}.s37" "${OUTPUT_DIR}/${OUT_BASE}.s37"
+
+    # Create .gbl file using commander for UART flashing
     if command -v commander >/dev/null 2>&1; then
         echo "Creating .gbl file..."
-        commander gbl create "${OUTPUT_DIR}/${OUT_BASE}.gbl" --app "${OUTPUT_DIR}/${OUT_BASE}.s37"
+        commander gbl create "${OUTPUT_DIR}/${OUT_BASE}.gbl" --app "${SRC_BASE}.s37"
+    else
+        echo "WARNING: commander not found, cannot create .gbl file"
     fi
 fi
 
@@ -239,7 +242,7 @@ if [ -f "${SRC_BASE}.out" ]; then
 fi
 echo ""
 echo "Output files:"
-ls -lh "${OUTPUT_DIR}/${OUT_BASE}".*
+ls -lh "${OUTPUT_DIR}/${OUT_BASE}".{gbl,s37} 2>/dev/null
 echo ""
 echo "Flash commands:"
 echo "  Via UART/Xmodem: Use universal-silabs-flasher"

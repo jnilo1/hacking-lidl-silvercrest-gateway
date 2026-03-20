@@ -17,3 +17,4 @@ zigbeed-8.2.2/tmp/
 # Keep RCP firmware for users who just want to flash
 !firmware/
 !firmware/*.gbl
+!firmware/*.s37
