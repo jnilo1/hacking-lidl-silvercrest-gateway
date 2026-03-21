@@ -27,10 +27,9 @@ rootfs (33-), and userdata (34-).
   clean `stop` for otbr-agent and all other init scripts.
 
 ### New features
-- **OTBR status LED**: enabled `CONFIG_LEDS_TRIGGER_NETDEV` in kernel config.
-  S70otbr configures the status LED as a netdev trigger on `wpan0` — LED reflects
-  Thread network link state (OFF = no carrier, ON = joined). No impact on
-  serialgateway mode (LED still controlled directly by the application).
+- **OTBR status LED**: S70otbr sync daemon polls `ot-ctl state` every 30s —
+  LED on when Thread network is formed (child/router/leader), off otherwise.
+  Replaces netdev trigger on wpan0 which did not reflect Thread network state.
 
 ### Improvements
 - **Auto-flash on first flash**: `flash_install_rtl8196e.sh` now attempts auto-flash
