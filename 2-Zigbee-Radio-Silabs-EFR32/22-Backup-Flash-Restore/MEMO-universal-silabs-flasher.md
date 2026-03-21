@@ -58,11 +58,15 @@ responds.
 
 ### Patch (`silabs-flasher-probe-methods.patch`)
 
-We add 3 missing entries: EZSP@230400, SPINEL@115200, SPINEL@230400. The
-patch is applied automatically by `flash_efr32.sh` when it installs USF in
-the venv. It uses `patch --dry-run` to verify context before applying — if a
-future USF version changes `const.py`, the patch fails silently and USF is
-installed unpatched.
+The patch replaces the upstream probe table: it adds EZSP@230400,
+SPINEL@115200, SPINEL@230400, and **removes all 460800 entries**. The Lidl
+gateway's UART does not work reliably at 460800 baud (see 25-RCP-UART-HW),
+so probing at that speed only wastes ~30 seconds on timeouts.
+
+The patch is applied automatically by `flash_efr32.sh` when it installs USF
+in the venv. It uses `patch --dry-run` to verify context before applying —
+if a future USF version changes `const.py`, the patch fails silently and USF
+is installed unpatched.
 
 The patch allowed **simplifying `flash_efr32.sh`**: instead of manually
 probing, extracting the detected protocol type, and dispatching to a

@@ -65,22 +65,32 @@ start)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
 
-    # Status LED: reflect Thread network state on wpan0
-    echo netdev > /sys/class/leds/status/trigger
-    echo wpan0  > /sys/class/leds/status/device_name
-    echo 1      > /sys/class/leds/status/link
-
-    # Persistent dataset sync daemon (background)
-    # Polls active dataset every 30s, syncs to flash only on change.
-    # Traps SIGTERM for a final sync on reboot/shutdown.
+    # Persistent dataset sync + Status LED daemon (background)
+    # Polls every 30s: syncs dataset to flash on change,
+    # and turns Status LED on when Thread network is formed.
     (
-        trap 'cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
+        trap 'echo 0 > /sys/class/leds/status/brightness
+              cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
+        OT_CTL="/userdata/usr/bin/ot-ctl"
+        LED="/sys/class/leds/status/brightness"
         last_dataset=""
+        last_led=""
         while true; do
             sleep 30
-            dataset=$(/userdata/usr/bin/ot-ctl dataset active -x 2>/dev/null)
+            # LED: on when Thread state is child, router, or leader
+            state=$($OT_CTL state 2>/dev/null)
+            state=${state%%[[:cntrl:]]*}
+            case "$state" in
+                child|router|leader) led=1 ;;
+                *) led=0 ;;
+            esac
+            if [ "$led" != "$last_led" ]; then
+                echo "$led" > "$LED"
+                last_led="$led"
+            fi
+            # Dataset sync
+            dataset=$($OT_CTL dataset active -x 2>/dev/null)
             dataset=${dataset%%[[:cntrl:]]*}
-            # Skip empty, "Done"-only, or error responses
             case "$dataset" in
                 ""|Done*|*Error*) continue ;;
             esac
@@ -96,7 +106,7 @@ start)
 stop)
     echo "Stopping otbr-agent..."
     # Reset LED
-    echo none > /sys/class/leds/status/trigger
+    echo 0 > /sys/class/leds/status/brightness
     # Stop sync loop
     [ -f "$SYNC_PID" ] && kill "$(cat "$SYNC_PID")" 2>/dev/null && rm -f "$SYNC_PID"
     killall otbr-agent 2>/dev/null

@@ -1,0 +1,21 @@
+homeassistant:
+  enabled: true
+mqtt:
+  base_topic: zigbee2mqtt
+  server: mqtt://mosquitto:1883
+serial:
+  port: tcp://192.168.1.88:8888
+  adapter: ember
+frontend:
+  enabled: true
+  port: 8080
+advanced:
+  log_level: info
+  log_output:
+    - console
+version: 4
+devices:
+  '0xa4c138fba55436c2':
+    friendly_name: '0xa4c138fba55436c2'
+  '0xa4c138d9ec1095c4':
+    friendly_name: '0xa4c138d9ec1095c4'

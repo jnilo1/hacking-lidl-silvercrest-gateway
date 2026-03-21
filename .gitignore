@@ -78,9 +78,7 @@ system.map
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/OPUS_REVIEW_PROMPT.md
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/test_rtl8196e_eth.sh
 
-# Compiled binaries in skeleton
-3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/bin/busybox
-3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/bin/dropbearmulti
+# Compiled binaries in skeleton (busybox and dropbearmulti tracked in git)
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/usr/bin/nano
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/usr/bin/serialgateway
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway/src/serialgateway

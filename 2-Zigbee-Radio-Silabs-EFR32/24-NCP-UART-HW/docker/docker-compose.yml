@@ -1,0 +1,75 @@
+# NCP-UART-HW: Zigbee2MQTT + Home Assistant via Ember adapter
+#
+# Stack: Mosquitto + Zigbee2MQTT + Home Assistant
+# The Zigbee stack runs on the EFR32 (NCP mode). Z2M connects via the
+# Ember adapter through serialgateway on the Lidl gateway.
+#
+# See also:
+#   26-OT-RCP/docker/ — Thread/Matter use cases (OT-RCP firmware)
+#
+# Usage:
+#   1. Flash ncp-uart-hw-7.5.1.gbl to the EFR32
+#   2. Ensure serialgateway is running on the gateway (port 8888)
+#   3. Edit z2m/configuration.yaml — set your gateway IP
+#   4. docker compose up -d
+#   5. Access Zigbee2MQTT at http://localhost:8080
+#   6. Access Home Assistant at http://localhost:8123
+#   7. In HA: Settings → Devices → Add Integration → MQTT
+#      → broker: localhost, port: 1883
+
+services:
+  # MQTT broker
+  mosquitto:
+    container_name: mosquitto
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    environment:
+      - TZ=Europe/Paris
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 1883"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+  # Zigbee2MQTT with Ember adapter — connects to NCP via serialgateway
+  zigbee2mqtt:
+    container_name: zigbee2mqtt
+    image: ghcr.io/koenkk/zigbee2mqtt:2.7.2
+    environment:
+      - TZ=Europe/Paris
+    volumes:
+      - z2m_data:/app/data
+      - ./z2m/configuration.yaml:/app/data/configuration.yaml
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+
+  # Home Assistant — integrates with Z2M via MQTT autodiscovery
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    restart: unless-stopped
+    privileged: true
+    volumes:
+      - ha_config:/config
+      - /run/dbus:/run/dbus:ro
+    environment:
+      - TZ=Europe/Paris
+
+volumes:
+  mosquitto_data:
+  mosquitto_log:
+  z2m_data:
+  ha_config:
