@@ -1,15 +1,15 @@
 #!/bin/sh
 # boothold — reboot gateway into <RealTek> bootloader prompt
 #
-# Writes the HOLD magic word (0x484F4C44) to physical address 0x01FFFFFC
+# Writes the HOLD magic word (0x484F4C44) to physical address 0x003FFFFC
 # via devmem, then reboots.  The bootloader detects the flag and enters
 # download mode instead of booting Linux.  The flag is one-shot: the next
 # reboot boots Linux normally.
 #
-# The address is in the last page of 32MB DRAM, excluded from the kernel's
-# memory map (DT reg size 0x01FFF000) to prevent KSEG0/KSEG1 cache
-# coherency conflicts.
+# The address is in a 4KB page (0x003FF000) declared as reserved-memory
+# with no-map in the device tree — the kernel never allocates it, avoiding
+# KSEG0/KSEG1 cache coherency conflicts.
 #
 # Requires root (devmem accesses /dev/mem).
 
-devmem 0x01FFFFFC 32 0x484F4C44 && reboot
+devmem 0x003FFFFC 32 0x484F4C44 && reboot

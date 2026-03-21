@@ -16,6 +16,17 @@
 		reg = <0x00000000 0x02000000>;  /* 32MB */
 	};
 
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		boothold@3ff000 {
+			reg = <0x003FF000 0x1000>;  /* 4KB reserved for boothold flag */
+			no-map;
+		};
+	};
+
 	leds {
 		compatible = "gpio-leds";
 

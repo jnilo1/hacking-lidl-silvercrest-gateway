@@ -1,3 +1,3 @@
 // version header file
 
-static char B_VERSION[] = "V2.3";
+static char B_VERSION[] = "V2.4";

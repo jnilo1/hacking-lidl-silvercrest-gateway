@@ -12,9 +12,9 @@ rootfs (33-), and userdata (34-).
 - **`boothold` fails on running system**: the kernel's page allocator actively
   uses the page at physical `0x003FFFFC` (KSEG0 cached), overwriting the HOLD
   magic written by `devmem` (KSEG1 uncached) within milliseconds. Fixed by
-  moving the flag to the last 4 bytes of DRAM (`0x01FFFFFC`), with the kernel's
-  DT memory reduced by 4 KB (`0x01FFF000`) to exclude that page from allocation.
-  Bootloader, `boothold` script, and flash scripts updated to the new address.
+  declaring the page as `reserved-memory` with `no-map` in the device tree —
+  the kernel never allocates it, eliminating the cache coherency conflict.
+  Address kept at `0x003FFFFC` (top of DRAM is unsafe: btcode stack).
 - **Thread dataset lost on reboot**: S70otbr sync loop only ran 60s after boot —
   networks created later were never persisted. Replaced with a persistent daemon
   that polls `ot-ctl dataset active -x` every 30s and syncs to flash only when

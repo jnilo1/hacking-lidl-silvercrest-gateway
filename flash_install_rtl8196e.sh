@@ -210,7 +210,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "devmem 0x01FFFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+            "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
     else
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."
