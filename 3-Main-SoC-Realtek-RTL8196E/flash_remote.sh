@@ -239,3 +239,13 @@ if [ "$COMPONENT" = "userdata" ]; then
     fi
 fi
 ./"$FLASH_SCRIPT" "$BOOT_IP"
+
+echo ""
+if [ "$COMPONENT" = "kernel" ]; then
+    echo "The gateway will reboot automatically."
+    echo "SSH: root@${LINUX_IP}:22 in ~30 seconds."
+else
+    echo "Flash complete. Reboot the gateway to boot into Linux:"
+    echo "  - Serial console: J BFC00000"
+    echo "  - Or hard reset (power cycle)"
+fi
