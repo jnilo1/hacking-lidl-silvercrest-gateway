@@ -15,6 +15,9 @@ rootfs (33-), and userdata (34-).
   declaring the page as `reserved-memory` with `no-map` in the device tree —
   the kernel never allocates it, eliminating the cache coherency conflict.
   Address kept at `0x003FFFFC` (top of DRAM is unsafe: btcode stack).
+  Bootloader V2.4: BOOTHOLD_RAM uses KSEG1 (`0xA03FFFFC`) so the clear
+  bypasses the write-back cache and reaches DRAM — prevents false boot-hold
+  after power cycle.
 - **Thread dataset lost on reboot**: S70otbr sync loop only ran 60s after boot —
   networks created later were never persisted. Replaced with a persistent daemon
   that polls `ot-ctl dataset active -x` every 30s and syncs to flash only when
