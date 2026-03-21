@@ -76,8 +76,8 @@ start)
         LED="/sys/class/leds/status/brightness"
         last_dataset=""
         last_led=""
+        sleep 5  # let otbr-agent start before first poll
         while true; do
-            sleep 30
             # LED: on when Thread state is child, router, or leader
             state=$(wget -qO- "$REST/node/state" 2>/dev/null)
             case "$state" in
@@ -91,12 +91,13 @@ start)
             # Dataset sync
             dataset=$(wget -qO- "$REST/node/dataset/active" 2>/dev/null)
             case "$dataset" in
-                "") continue ;;
+                "") ;;
+                "$last_dataset") ;;
+                *) cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
+                   last_dataset="$dataset" ;;
             esac
-            if [ "$dataset" != "$last_dataset" ]; then
-                cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
-                last_dataset="$dataset"
-            fi
+            # Poll fast (5s) until Thread is up, then slow (30s)
+            [ "$led" = "1" ] && sleep 30 || sleep 5
         done
     ) &
     echo $! > "$SYNC_PID"
