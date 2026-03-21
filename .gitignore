@@ -10,8 +10,9 @@ node_modules/
 *.hex
 *.s37
 
-# Exception: pre-built firmware files (only .gbl for UART flashing)
+# Exception: pre-built firmware files (.gbl for UART flashing, .s37 for J-Link)
 !2-Zigbee-Radio-Silabs-EFR32/*/firmware/*.gbl
+!2-Zigbee-Radio-Silabs-EFR32/*/firmware/*.s37
 # Exception: bootloader flash image
 !3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot.bin
 *.img
@@ -87,4 +88,3 @@ system.map
 # packages
 packages/
 CLAUDE.md
-2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/firmware/ot-rcp.s37
