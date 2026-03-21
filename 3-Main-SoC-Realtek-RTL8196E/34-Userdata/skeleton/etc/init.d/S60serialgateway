@@ -21,6 +21,10 @@ start)
     ;;
 
 stop)
+    # Skip if radio is configured for OTBR (serialgateway was never started)
+    if [ -f /userdata/etc/radio.conf ] && grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
+        exit 0
+    fi
 
     echo "🔴 Stopping serialgateway..."
     killall serialgateway

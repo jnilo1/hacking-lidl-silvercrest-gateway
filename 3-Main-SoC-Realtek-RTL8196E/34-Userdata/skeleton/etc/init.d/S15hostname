@@ -16,35 +16,48 @@
 #
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
 
-# Set system hostname
-HOSTNAME=$(cat /etc/hostname)
-hostname -F /etc/hostname
+case "$1" in
+start)
+    # Set system hostname
+    HOSTNAME=$(cat /etc/hostname)
+    hostname -F /etc/hostname
 
-# Read IP assigned to eth0
-CURRENT_IP=$(cat /var/run/current_eth0_ip 2>/dev/null || echo "")
+    # Read IP assigned to eth0
+    CURRENT_IP=$(cat /var/run/current_eth0_ip 2>/dev/null || echo "")
 
-# Check if IP is valid
-if [ -z "$CURRENT_IP" ]; then
-    echo "⚠️  Warning: eth0 has no IP address configured"
-    # Use the default IP as fallback if none is set
-    CURRENT_IP="192.168.1.254"
-elif [ "$CURRENT_IP" = "192.168.1.254" ]; then
-    echo "ℹ️  Note: Using fallback IP address 192.168.1.254"
-else
-    echo "🏷️  Hostname set to $HOSTNAME at $CURRENT_IP"
-fi
+    # Check if IP is valid
+    if [ -z "$CURRENT_IP" ]; then
+        echo "⚠️  Warning: eth0 has no IP address configured"
+        # Use the default IP as fallback if none is set
+        CURRENT_IP="192.168.1.254"
+    elif [ "$CURRENT_IP" = "192.168.1.254" ]; then
+        echo "ℹ️  Note: Using fallback IP address 192.168.1.254"
+    else
+        echo "🏷️  Hostname set to $HOSTNAME at $CURRENT_IP"
+    fi
 
-# Write /var/hosts (symlinked from /etc/hosts to avoid jffs2 writes)
-cat >/var/hosts <<EOF
+    # Write /var/hosts (symlinked from /etc/hosts to avoid jffs2 writes)
+    cat >/var/hosts <<EOF
 127.0.0.1         localhost
 $CURRENT_IP       $HOSTNAME
 EOF
 
-# resolv.conf is set by S10network (static: from eth0.conf, DHCP: from udhcpc)
+    # resolv.conf is set by S10network (static: from eth0.conf, DHCP: from udhcpc)
 
-# Clean-up
-if [ -f /var/run/current_eth0_ip ]; then
-    rm /var/run/current_eth0_ip
-fi
+    # Clean-up
+    if [ -f /var/run/current_eth0_ip ]; then
+        rm /var/run/current_eth0_ip
+    fi
+    ;;
+
+stop)
+    # Nothing to clean up
+    ;;
+
+*)
+    echo "Usage: $0 {start|stop}"
+    exit 1
+    ;;
+esac
 
 exit 0

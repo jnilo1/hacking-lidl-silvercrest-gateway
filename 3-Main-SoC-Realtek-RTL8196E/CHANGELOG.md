@@ -6,9 +6,15 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [2.0.2] - 2026-03-20
+## [2.1.0] - 2026-03-21
 
 ### Bug fixes
+- **`boothold` fails on running system**: the kernel's page allocator actively
+  uses the page at physical `0x003FFFFC` (KSEG0 cached), overwriting the HOLD
+  magic written by `devmem` (KSEG1 uncached) within milliseconds. Fixed by
+  moving the flag to the last 4 bytes of DRAM (`0x01FFFFFC`), with the kernel's
+  DT memory reduced by 4 KB (`0x01FFF000`) to exclude that page from allocation.
+  Bootloader, `boothold` script, and flash scripts updated to the new address.
 - **Thread dataset lost on reboot**: S70otbr sync loop only ran 60s after boot —
   networks created later were never persisted. Replaced with a persistent daemon
   that polls `ot-ctl dataset active -x` every 30s and syncs to flash only when
@@ -17,7 +23,18 @@ rootfs (33-), and userdata (34-).
   new `rcK` script that stops all services in reverse order on reboot — ensures
   clean `stop` for otbr-agent and all other init scripts.
 
+### New features
+- **OTBR status LED**: enabled `CONFIG_LEDS_TRIGGER_NETDEV` in kernel config.
+  S70otbr configures the status LED as a netdev trigger on `wpan0` — LED reflects
+  Thread network link state (OFF = no carrier, ON = joined). No impact on
+  serialgateway mode (LED still controlled directly by the application).
+
 ### Improvements
+- **Auto-flash on first flash**: `flash_install_rtl8196e.sh` now attempts auto-flash
+  when `BOOTLOADER_TYPE=v2` even without SSH (first flash, `FW_VERSION` unknown).
+  Worst case (old V2.3 without auto-flash): 3-min timeout then fallback to manual FLW.
+- **EFR32 flash prompt**: at the end of `flash_install_rtl8196e.sh`, interactive mode
+  now offers to launch `flash_efr32.sh` to flash the Zigbee/Thread radio firmware.
 - **`userdata.bin` and `rootfs.bin` removed from git**: both binaries are now
   rebuilt on the fly by the build/flash scripts (skeletons and build tools are
   in git). `build_fullflash.sh` and `create_fullflash.sh` auto-rebuild

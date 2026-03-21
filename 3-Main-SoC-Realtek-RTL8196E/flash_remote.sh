@@ -181,7 +181,7 @@ fi
 echo "Sending boothold + reboot..."
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
-    "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+    "devmem 0x01FFFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
 
 # --- step 5: wait for bootloader -------------------------------------------
 # Poll ARP table until BOOT_IP appears AND SSH on LINUX_IP is down

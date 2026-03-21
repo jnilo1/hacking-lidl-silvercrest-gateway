@@ -30,9 +30,14 @@ unsigned int gCHKKEY_CNT = 0;
  * and restores normal boot.
  * The flag is one-shot: the bootloader clears it before entering
  * download mode.
+ *
+ * Address 0x81FFFFFC = last 4 bytes of 32 MB DRAM (physical 0x01FFFFFC).
+ * The kernel's DT memory node is sized to 0x01FFF000 (32 MB - 4 KB),
+ * so this page is outside the kernel's managed memory — no page
+ * allocator, no cache lines, no KSEG0/KSEG1 coherency conflict.
  */
 #define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_RAM    ((volatile unsigned long *)0x803FFFFC)
+#define BOOTHOLD_RAM    ((volatile unsigned long *)0x81FFFFFC)
 
 void goToDownMode(void);
 

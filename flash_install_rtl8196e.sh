@@ -210,7 +210,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+            "devmem 0x01FFFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
     else
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."
@@ -501,4 +501,14 @@ else
     echo "========================================="
     echo ""
     echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
+fi
+
+# --- Optional: flash EFR32 radio firmware -----------------------------------
+if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then
+    echo ""
+    printf "Flash EFR32 radio firmware now? [y/N] "
+    read -r ans
+    if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
+        "${SCRIPT_DIR}/flash_efr32.sh" "${LINUX_IP:-${IPADDR:-192.168.1.88}}"
+    fi
 fi

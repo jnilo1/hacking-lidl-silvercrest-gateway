@@ -65,6 +65,11 @@ start)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
 
+    # Status LED: reflect Thread network state on wpan0
+    echo netdev > /sys/class/leds/status/trigger
+    echo wpan0  > /sys/class/leds/status/device_name
+    echo 1      > /sys/class/leds/status/link
+
     # Persistent dataset sync daemon (background)
     # Polls active dataset every 30s, syncs to flash only on change.
     # Traps SIGTERM for a final sync on reboot/shutdown.
@@ -90,6 +95,8 @@ start)
 
 stop)
     echo "Stopping otbr-agent..."
+    # Reset LED
+    echo none > /sys/class/leds/status/trigger
     # Stop sync loop
     [ -f "$SYNC_PID" ] && kill "$(cat "$SYNC_PID")" 2>/dev/null && rm -f "$SYNC_PID"
     killall otbr-agent 2>/dev/null

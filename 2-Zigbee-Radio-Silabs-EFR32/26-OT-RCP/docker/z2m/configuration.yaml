@@ -14,3 +14,8 @@ advanced:
   log_output:
     - console
 version: 4
+devices:
+  '0xa4c138fba55436c2':
+    friendly_name: '0xa4c138fba55436c2'
+  '0xa4c138d9ec1095c4':
+    friendly_name: '0xa4c138d9ec1095c4'

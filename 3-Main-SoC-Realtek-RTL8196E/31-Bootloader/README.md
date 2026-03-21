@@ -59,7 +59,7 @@ boothold          # script installed in /userdata/usr/bin/
 Or directly:
 
 ```bash
-devmem 0x003FFFFC 32 0x484F4C44 && reboot
+devmem 0x01FFFFFC 32 0x484F4C44 && reboot
 ```
 
 The gateway reboots and stops at the `<RealTek>` prompt automatically. The flag is one-shot — the next reboot will boot Linux normally.
