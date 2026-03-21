@@ -64,24 +64,24 @@ start)
     # Reduce log level from info to warn (0=none 1=crit 2=warn 3=note 4=info)
     sleep 2
     /userdata/usr/bin/ot-ctl log level 2 >/dev/null 2>&1 || true
+    # Note: log level has no REST API equivalent, ot-ctl is used once at startup
 
     # Persistent dataset sync + Status LED daemon (background)
-    # Polls every 30s: syncs dataset to flash on change,
-    # and turns Status LED on when Thread network is formed.
+    # Polls the REST API every 30s (avoids ot-ctl broken pipe warnings).
+    # Syncs dataset to flash on change, turns LED on when Thread is formed.
     (
         trap 'echo 0 > /sys/class/leds/status/brightness
               cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
-        OT_CTL="/userdata/usr/bin/ot-ctl"
+        REST="http://127.0.0.1:${REST_PORT}"
         LED="/sys/class/leds/status/brightness"
         last_dataset=""
         last_led=""
         while true; do
             sleep 30
             # LED: on when Thread state is child, router, or leader
-            state=$($OT_CTL state 2>/dev/null)
-            state=${state%%[[:cntrl:]]*}
+            state=$(wget -qO- "$REST/node/state" 2>/dev/null)
             case "$state" in
-                child|router|leader) led=1 ;;
+                *child*|*router*|*leader*) led=1 ;;
                 *) led=0 ;;
             esac
             if [ "$led" != "$last_led" ]; then
@@ -89,10 +89,9 @@ start)
                 last_led="$led"
             fi
             # Dataset sync
-            dataset=$($OT_CTL dataset active -x 2>/dev/null)
-            dataset=${dataset%%[[:cntrl:]]*}
+            dataset=$(wget -qO- "$REST/node/dataset/active" 2>/dev/null)
             case "$dataset" in
-                ""|Done*|*Error*) continue ;;
+                "") continue ;;
             esac
             if [ "$dataset" != "$last_dataset" ]; then
                 cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
