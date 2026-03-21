@@ -78,6 +78,9 @@ Other formats (.s37, .hex, .bin) are generated in `build/` but not saved.
 
 ### Customization
 
+> **UART baud rate:** Only **115200** (default) and **230400** are reliable on
+> this gateway. 460800+ causes UART overruns. See [25-RCP-UART-HW](../25-RCP-UART-HW/README.md#baudrate-and-network-considerations) for details.
+
 Edit `patches/z3-router.slcp` to modify network parameters:
 
 ```yaml

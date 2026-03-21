@@ -137,6 +137,10 @@ Add integration with:
 
 ## Customization
 
+> **UART baud rate:** Only **115200** (default) and **230400** are reliable on
+> this gateway. 460800+ causes UART overruns due to the 16-byte FIFO and
+> userspace latency. See [25-RCP-UART-HW](../25-RCP-UART-HW/README.md#baudrate-and-network-considerations) for details.
+
 The build process applies patches to optimize the firmware for the Lidl Gateway. See [patches/README.md](./patches/README.md) for details.
 
 ### Network Parameters
