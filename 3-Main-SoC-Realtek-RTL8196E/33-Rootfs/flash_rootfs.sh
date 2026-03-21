@@ -31,9 +31,8 @@ if ! command -v nc >/dev/null 2>&1; then
 fi
 
 if [ ! -f "$IMAGE" ]; then
-    echo "Error: rootfs.bin not found"
-    echo "Run ./build_rootfs.sh first"
-    exit 1
+    echo "rootfs.bin not found — building it..."
+    "${SCRIPT_DIR}/build_rootfs.sh"
 fi
 
 SIZE=$(stat -c%s "$IMAGE" 2>/dev/null || stat -f%z "$IMAGE")
