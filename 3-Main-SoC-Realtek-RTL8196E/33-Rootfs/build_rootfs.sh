@@ -65,6 +65,9 @@ mkdir -p skeleton/dev
 # Clean old images
 rm -f rootfs.sqfs rootfs.bin
 
+# Fix /root permissions for Dropbear pubkey auth (git doesn't preserve dir modes)
+chmod 750 skeleton/root
+
 echo "📦 Generating SquashFS with device nodes..."
 fakeroot mksquashfs skeleton rootfs.sqfs \
   -nopad -noappend -all-root \
