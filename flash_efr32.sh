@@ -104,6 +104,19 @@ echo ""
 
 # --- 1. Check / install universal-silabs-flasher ---------------------------
 
+PATCH_FILE="$SCRIPT_DIR/silabs-flasher-probe-methods.patch"
+PATCH_HASH_FILE="${VENV_DIR}/.patch-hash"
+
+# Reinstall if probe-methods patch has changed since last install
+if [ -x "${VENV_DIR}/bin/universal-silabs-flasher" ] && [ -f "$PATCH_FILE" ]; then
+    current_hash=$(md5sum "$PATCH_FILE" 2>/dev/null | awk '{print $1}')
+    applied_hash=$(cat "$PATCH_HASH_FILE" 2>/dev/null || true)
+    if [ "$current_hash" != "$applied_hash" ]; then
+        echo "Probe methods patch changed — reinstalling USF..."
+        rm -rf "$VENV_DIR"
+    fi
+fi
+
 if [ -x "${VENV_DIR}/bin/universal-silabs-flasher" ]; then
     FLASHER="${VENV_DIR}/bin/universal-silabs-flasher"
     echo "universal-silabs-flasher: venv (${VENV_DIR})"
@@ -118,8 +131,10 @@ else
     # Patch USF to probe Spinel/EZSP at 115200/230400 (upstream only probes
     # Spinel at 460800 and EZSP at 115200/460800 — misses our common bauds)
     USF_CONST=$(find "$VENV_DIR" -path '*/universal_silabs_flasher/const.py' -print -quit)
-    if [ -n "$USF_CONST" ] && patch --dry-run -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null 2>&1; then
-        patch -f "$USF_CONST" "$SCRIPT_DIR/silabs-flasher-probe-methods.patch" >/dev/null
+    if [ -n "$USF_CONST" ] && [ -f "$PATCH_FILE" ] && \
+       patch --dry-run -f "$USF_CONST" "$PATCH_FILE" >/dev/null 2>&1; then
+        patch -f "$USF_CONST" "$PATCH_FILE" >/dev/null
+        md5sum "$PATCH_FILE" | awk '{print $1}' > "$PATCH_HASH_FILE"
         echo "Installed (patched probe methods)."
     else
         echo "Installed."
