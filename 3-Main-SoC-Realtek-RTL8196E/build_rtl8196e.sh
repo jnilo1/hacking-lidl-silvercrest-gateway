@@ -66,7 +66,7 @@ else
                 echo "  bootloader Build bootloader"
                 echo "  kernel     Build Linux kernel"
                 echo "  rootfs     Build root filesystem (BusyBox, Dropbear)"
-                echo "  userdata   Build user partition (nano, serialgateway, otbr-agent)"
+                echo "  userdata   Build user partition (boothold, nano, serialgateway, otbr-agent)"
                 echo ""
                 echo "Examples:"
                 echo "  $0                     # Build all"
@@ -113,8 +113,9 @@ echo ""
 # Track step number
 STEP=0
 TOTAL=$((BUILD_BOOTLOADER + BUILD_KERNEL + BUILD_ROOTFS + BUILD_USERDATA))
-# Rootfs has 2 sub-steps (busybox + dropbear)
+# Rootfs has 2 sub-steps (busybox + dropbear), userdata has 1 (boothold)
 [ $BUILD_ROOTFS -eq 1 ] && TOTAL=$((TOTAL + 2))
+[ $BUILD_USERDATA -eq 1 ] && TOTAL=$((TOTAL + 1))
 
 # Build bootloader
 if [ $BUILD_BOOTLOADER -eq 1 ]; then
@@ -150,6 +151,13 @@ fi
 
 # Build userdata
 if [ $BUILD_USERDATA -eq 1 ]; then
+    STEP=$((STEP + 1))
+    echo ""
+    echo "========================================="
+    echo "  ${STEP}/${TOTAL} BUILDING BOOTHOLD"
+    echo "========================================="
+    cd "${SCRIPT_DIR}/34-Userdata/boothold" && ./build_boothold.sh
+
     STEP=$((STEP + 1))
     echo ""
     echo "========================================="
