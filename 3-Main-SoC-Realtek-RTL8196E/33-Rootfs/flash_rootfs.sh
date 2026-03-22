@@ -76,6 +76,7 @@ if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
     fi
 fi
 
+echo ""
 echo "Flashing rootfs.bin (${SIZE} bytes) to ${TARGET_IP}..."
 echo ""
 if [ "${CONFIRM:-}" != "y" ]; then
