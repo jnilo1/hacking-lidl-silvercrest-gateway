@@ -72,8 +72,8 @@ standalone.
 
 Flashes a single partition via SSH + boothold + TFTP. Connects to the running
 gateway, sends it to bootloader mode, waits, then runs the appropriate flash
-script. No serial console needed. Requires custom firmware with `devmem`
-(>= v1.2.1). Does NOT work on Tuya/stock firmware or v1.0 — use
+script. No serial console needed. Requires custom firmware >= v2.1.1 (with
+the `boothold` binary). Does NOT work on Tuya/stock firmware or v1.0 — use
 `flash_install_rtl8196e.sh` for those.
 
 For **userdata**, the script saves user config via SSH before flashing (eth0.conf,
@@ -103,7 +103,7 @@ The gateway must be running with SSH access (custom firmware already installed).
 
 The script:
 1. Presents a firmware selection menu
-2. Installs `universal-silabs-flasher` in a venv if needed
+2. Installs `universal-silabs-flasher` in a venv if needed (auto-reinstalls if probe-methods patch changes)
 3. SSHes into the gateway to restart serialgateway in flash mode (retries up to 3 times)
 4. Flashes the selected firmware via EZSP/Xmodem over `socket://IP:8888`
 5. Reboots the gateway
