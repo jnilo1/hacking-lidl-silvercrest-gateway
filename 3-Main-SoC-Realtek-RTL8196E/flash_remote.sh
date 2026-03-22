@@ -165,9 +165,9 @@ if [ "$COMPONENT" = "userdata" ]; then
     [ -d "$SKELETON/ssh" ] && cp -a "$SKELETON/ssh" "$SKEL_BACKUP/ssh"
     [ -d "$SKELETON/thread" ] && cp -a "$SKELETON/thread" "$SKEL_BACKUP/thread"
     cleanup_skeleton() {
-        cp -a "$SKEL_BACKUP/etc" "$SKELETON/etc"
-        [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "$SKELETON/ssh"
-        [ -d "$SKEL_BACKUP/thread" ] && cp -a "$SKEL_BACKUP/thread" "$SKELETON/thread"
+        rsync -a --delete "$SKEL_BACKUP/etc/" "$SKELETON/etc/"
+        rsync -a --delete "$SKEL_BACKUP/ssh/" "$SKELETON/ssh/" 2>/dev/null
+        rsync -a --delete "$SKEL_BACKUP/thread/" "$SKELETON/thread/" 2>/dev/null
         rm -rf "$SKEL_BACKUP"
     }
     trap cleanup_skeleton EXIT

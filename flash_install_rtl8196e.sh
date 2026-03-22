@@ -184,7 +184,6 @@ if [ -n "$LINUX_RUNNING" ]; then
     if [ "$fw_type" = "custom" ]; then
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
-        echo "Saving gateway config..."
         USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
 
         # Backup skeleton before injecting gateway config — restore on exit
@@ -192,13 +191,10 @@ if [ -n "$LINUX_RUNNING" ]; then
         cp -a "$USERDATA_SKEL/etc" "$FI_SKEL_BACKUP/etc"
         [ -d "$USERDATA_SKEL/ssh" ] && cp -a "$USERDATA_SKEL/ssh" "$FI_SKEL_BACKUP/ssh"
         [ -d "$USERDATA_SKEL/thread" ] && cp -a "$USERDATA_SKEL/thread" "$FI_SKEL_BACKUP/thread"
-        cleanup_skeleton() {
-            cp -a "$FI_SKEL_BACKUP/etc" "$USERDATA_SKEL/etc"
-            [ -d "$FI_SKEL_BACKUP/ssh" ] && cp -a "$FI_SKEL_BACKUP/ssh" "$USERDATA_SKEL/ssh"
-            [ -d "$FI_SKEL_BACKUP/thread" ] && cp -a "$FI_SKEL_BACKUP/thread" "$USERDATA_SKEL/thread"
-            rm -rf "$FI_SKEL_BACKUP"
-        }
-        trap cleanup_skeleton EXIT
+        trap 'rsync -a --delete "$FI_SKEL_BACKUP/etc/" "$USERDATA_SKEL/etc/"
+              rsync -a --delete "$FI_SKEL_BACKUP/ssh/" "$USERDATA_SKEL/ssh/" 2>/dev/null
+              rsync -a --delete "$FI_SKEL_BACKUP/thread/" "$USERDATA_SKEL/thread/" 2>/dev/null
+              rm -rf "$FI_SKEL_BACKUP"' EXIT
 
         SAVE_TAR=$(mktemp)
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
@@ -207,7 +203,7 @@ if [ -n "$LINUX_RUNNING" ]; then
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
         if [ -s "$SAVE_TAR" ]; then
             tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
-            echo "  Preserved user config from gateway"
+            echo "Gateway config saved."
             export NET_MODE="skip"
             export RADIO_MODE="skip"
         fi
@@ -216,9 +212,9 @@ if [ -n "$LINUX_RUNNING" ]; then
         # Read firmware version to determine auto-flash capability
         # shellcheck disable=SC2086
         fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+) ]]; then
+        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
             FW_VERSION="${BASH_REMATCH[1]}"
-            echo "  Firmware version: v${FW_VERSION}"
+            echo "Firmware version: v${FW_VERSION}"
         fi
 
         echo "Sending boothold + reboot..."
@@ -528,6 +524,9 @@ else
     echo ""
     echo "SSH: root@${LINUX_IP:-${IPADDR:-192.168.1.88}}:22 (no password) in ~30 seconds."
 fi
+
+# --- Restore skeleton if we injected gateway config -------------------------
+# Skeleton restore is handled by the EXIT trap set above
 
 # --- Optional: flash EFR32 radio firmware -----------------------------------
 if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then

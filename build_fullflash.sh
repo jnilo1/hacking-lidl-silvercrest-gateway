@@ -111,16 +111,15 @@ SKEL_BACKUP=$(mktemp -d)
 cp -a "${USERDATA_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
 cp -a "${USERDATA_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
 restore_skeleton() {
-    rm -rf "${USERDATA_DIR}/skeleton/etc" "${USERDATA_DIR}/skeleton/ssh"
-    cp -a "$SKEL_BACKUP/etc" "${USERDATA_DIR}/skeleton/etc"
-    [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${USERDATA_DIR}/skeleton/ssh"
+    rsync -a --delete "$SKEL_BACKUP/etc/" "${USERDATA_DIR}/skeleton/etc/"
+    rsync -a --delete "$SKEL_BACKUP/ssh/" "${USERDATA_DIR}/skeleton/ssh/" 2>/dev/null
     rm -rf "$SKEL_BACKUP"
 }
 trap restore_skeleton EXIT
 
     # Network config — "skip" means config already injected by caller
     if [ "${NET_MODE:-}" = "skip" ]; then
-        echo "→ Network config preserved from gateway"
+        : # config already in skeleton (preserved by caller)
     else
         if [ "${NET_MODE:-}" = "static" ] || [ "${NET_MODE:-}" = "dhcp" ]; then
             net_choice="${NET_MODE}"
@@ -157,7 +156,7 @@ trap restore_skeleton EXIT
 
     # Radio config
     if [ "${RADIO_MODE:-}" = "skip" ]; then
-        echo "→ Radio config preserved from gateway"
+        : # config already in skeleton (preserved by caller)
     else
         if [ "${RADIO_MODE:-}" = "zigbee" ] || [ "${RADIO_MODE:-}" = "thread" ]; then
             radio_choice="${RADIO_MODE}"
