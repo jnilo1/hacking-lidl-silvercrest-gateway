@@ -178,7 +178,9 @@ trap restore_skeleton EXIT
             echo "→ Zigbee"
         fi
     fi
-    log ""
+
+    echo ""
+    echo "Generating disk image... be patient"
 
     log "Building userdata..."
     if [ "$QUIET" -eq 1 ]; then

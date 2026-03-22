@@ -169,6 +169,16 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
     echo "Firmware type: ${fw_type}"
 
+    # Read firmware version early (used for display and auto-flash detection)
+    if [ "$fw_type" = "custom" ]; then
+        # shellcheck disable=SC2086
+        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
+        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
+            FW_VERSION="${BASH_REMATCH[1]}"
+            echo "Firmware version: v${FW_VERSION}"
+        fi
+    fi
+
     # --- propose backup (while Linux is still running) -----------------------
     # Skipped in non-interactive mode (-y / CONFIRM=y)
     if [ "${CONFIRM:-}" != "y" ]; then
@@ -208,14 +218,6 @@ if [ -n "$LINUX_RUNNING" ]; then
             export RADIO_MODE="skip"
         fi
         rm -f "$SAVE_TAR"
-
-        # Read firmware version to determine auto-flash capability
-        # shellcheck disable=SC2086
-        fw_ver_line=$(ssh $FI_SSH_OPTS "root@${fw_host}" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-            FW_VERSION="${BASH_REMATCH[1]}"
-            echo "Firmware version: v${FW_VERSION}"
-        fi
 
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
@@ -350,8 +352,6 @@ fi
 # Called with -q (quiet): only config → lines, errors, and a summary are shown.
 # Run build_fullflash.sh without -q for full verbose output.
 
-echo ""
-echo "Generating disk image... be patient"
 "${SCRIPT_DIR}/build_fullflash.sh" -q
 
 FULLFLASH="${SCRIPT_DIR}/fullflash.bin"
