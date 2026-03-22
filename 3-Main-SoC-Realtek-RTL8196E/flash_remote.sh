@@ -189,12 +189,13 @@ if [ "$COMPONENT" = "userdata" ]; then
     rm -f "$SAVE_TAR"
 fi
 
-# --- step 4: send boothold via devmem + reboot ------------------------------
+# --- step 4: send boothold + reboot ------------------------------------------
 
 echo "Sending boothold + reboot..."
+# boothold writes HOLD to DRAM via pwrite+O_SYNC (bypasses write-back cache)
+# BusyBox reboot signals init and returns — SSH session closes cleanly
 # shellcheck disable=SC2086
-ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
-    "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" "boothold && reboot" 2>/dev/null || true
 # Close ControlMaster socket — gateway is rebooting, stale connection
 # would interfere with shutdown detection
 ssh -O exit -o ControlPath="$SSH_SOCK" "${SSH_USER}@${LINUX_IP}" 2>/dev/null || true

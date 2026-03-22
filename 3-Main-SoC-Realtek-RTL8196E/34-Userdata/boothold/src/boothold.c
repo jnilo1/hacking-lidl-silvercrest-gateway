@@ -1,11 +1,15 @@
 /*
- * boothold — Write HOLD magic to DRAM and reboot into bootloader
+ * boothold — Write HOLD magic to DRAM for bootloader entry
  *
  * Writes 0x484F4C44 ("HOLD") to physical address 0x003FFFFC via /dev/mem
- * with O_SYNC, then reboots.  The bootloader (V2.4+) reads this address
- * via KSEG1 (uncached, directly from DRAM) and enters download mode if
- * it finds the magic word.  The flag is one-shot: the bootloader clears
- * it before entering download mode.
+ * with O_SYNC.  The bootloader (V2.4+) reads this address via KSEG1
+ * (uncached, directly from DRAM) and enters download mode if it finds
+ * the magic word.  The flag is one-shot: the bootloader clears it before
+ * entering download mode.
+ *
+ * Does NOT reboot — the caller handles that (e.g. `boothold && reboot`).
+ * This allows SSH scripts to use BusyBox reboot which returns cleanly,
+ * unlike the reboot() syscall which blocks the SSH session.
  *
  * Why not use BusyBox devmem?
  *
@@ -39,7 +43,6 @@
 #include <unistd.h>
 #include <stdint.h>
 #include <arpa/inet.h>
-#include <sys/reboot.h>
 
 #define HOLD_PHYS   0x003FFFFC
 #define HOLD_MAGIC  0x484F4C44  /* "HOLD" */
@@ -79,12 +82,6 @@ int main(void)
 
 	close(fd);
 
-	printf("Boot hold set. Rebooting...\n");
-	fflush(stdout);
-	usleep(100000);  /* 100ms — let UART drain before reboot */
-	sync();
-	reboot(RB_AUTOBOOT);
-
-	perror("reboot");
-	return 1;
+	printf("Boot hold set.\n");
+	return 0;
 }

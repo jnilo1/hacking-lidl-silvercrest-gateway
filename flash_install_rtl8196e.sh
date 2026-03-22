@@ -221,8 +221,7 @@ if [ -n "$LINUX_RUNNING" ]; then
 
         echo "Sending boothold + reboot..."
         # shellcheck disable=SC2086
-        ssh $FI_SSH_OPTS "root@${fw_host}" \
-            "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+        ssh $FI_SSH_OPTS "root@${fw_host}" "boothold && reboot" 2>/dev/null || true
         # Close ControlMaster socket — gateway is rebooting
         ssh -O exit -o ControlPath="$SSH_SOCK" "root@${fw_host}" 2>/dev/null || true
     else
@@ -528,12 +527,30 @@ fi
 # --- Restore skeleton if we injected gateway config -------------------------
 # Skeleton restore is handled by the EXIT trap set above
 
-# --- Optional: flash EFR32 radio firmware -----------------------------------
+# --- EFR32 radio firmware info -----------------------------------------------
 if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then
-    echo ""
-    printf "Flash EFR32 radio firmware now? [y/N] "
-    read -r ans
-    if [ "$ans" = "y" ] || [ "$ans" = "Y" ]; then
-        "${SCRIPT_DIR}/flash_efr32.sh" "${LINUX_IP:-${IPADDR:-192.168.1.88}}"
+    RADIO="${NET_MODE:+${RADIO_MODE}}"
+    # Determine radio mode from radio.conf if not set by env
+    if [ -z "$RADIO" ]; then
+        if [ -f "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" ] && \
+           grep -q '^MODE=otbr' "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" 2>/dev/null; then
+            RADIO="thread"
+        else
+            RADIO="zigbee"
+        fi
     fi
+
+    echo ""
+    echo "Make sure the EFR32 radio firmware matches your configuration."
+    echo "Compatible firmware(s):"
+    echo ""
+    if [ "$RADIO" = "thread" ]; then
+        echo "  ot-rcp.gbl             — OpenThread RCP (required for OTBR)"
+    else
+        echo "  ncp-uart-hw-7.5.1.gbl  — Zigbee NCP for serialgateway + Z2M"
+        echo "  rcp-uart-802154.gbl    — Zigbee RCP for cpcd + zigbeed (Docker)"
+        echo "  z3-router-7.5.1.gbl    — Zigbee 3.0 Router (standalone, no coordinator)"
+    fi
+    echo ""
+    echo "Flash with:  ./flash_efr32.sh ${LINUX_IP:-${IPADDR:-192.168.1.88}}"
 fi
