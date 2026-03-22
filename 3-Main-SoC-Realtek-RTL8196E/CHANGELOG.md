@@ -6,6 +6,38 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.1] - 2026-03-22
+
+### Bug fixes
+- **`boothold` unreliable via SSH**: BusyBox `devmem` writes through KSEG0
+  (cached, write-back) — the HOLD flag could stay in L1 D-cache and be lost
+  on watchdog reset. Replaced with a C binary (`boothold`) that uses
+  `pwrite()` + `O_SYNC` on `/dev/mem` to force the write to DRAM.
+- **JFFS2 decompression errors on fresh userdata flash**: `mkfs.jffs2 -X zlib`
+  enables zlib but does not disable rtime (enabled by default). Added
+  `-x rtime -x lzo` to force zlib-only compression — matches the kernel
+  config (`CONFIG_JFFS2_ZLIB=y`, no rtime/lzo).
+- **Skeleton pollution after flash**: `flash_remote.sh` and
+  `flash_install_rtl8196e.sh` injected gateway config (passwd, eth0.conf,
+  etc.) into the skeleton without cleanup. Added `rsync --delete` restore
+  via EXIT trap — skeleton is always restored to its original state.
+
+### Improvements
+- **Bootloader V2.5**: auto-reboot after flashing all partition types
+  (rootfs, bootloader — was only kernel).
+- **`flash_remote.sh`**: two-phase bootloader detection (wait SSH down,
+  then ARP) prevents false positives during shutdown. ControlMaster socket
+  closed after boothold. Skip redundant boot mode check via
+  `BOOTLOADER_CONFIRMED`. Quiet build mode via `BUILD_QUIET`.
+- **`flash_install_rtl8196e.sh`**: firmware version displayed early (v2.1.0
+  format). EFR32 compatible firmware list shown at end (depends on radio mode).
+  Same two-phase detection and ControlMaster fix.
+- **`build_rootfs.sh`**: quiet mode (`-q`) for auto-build from flash scripts.
+- **S70otbr**: sync daemon uses REST API instead of `ot-ctl` (eliminates
+  broken pipe warnings). Fast poll (5s) until Thread is up, then 30s.
+
+---
+
 ## [2.1.0] - 2026-03-21
 
 ### Bug fixes
