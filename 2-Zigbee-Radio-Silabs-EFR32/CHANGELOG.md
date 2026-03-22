@@ -4,6 +4,16 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.1.1] - 2026-03-22
+
+### flash_efr32.sh
+- **Auto-reinstall USF on patch change**: `flash_efr32.sh` now stores the
+  md5 hash of the applied `silabs-flasher-probe-methods.patch` in the venv.
+  On next launch, if the patch has changed, the venv is removed and USF is
+  reinstalled with the new patch automatically.
+
+---
+
 ## [2.1.0] - 2026-03-21
 
 ### 24-NCP-UART-HW
