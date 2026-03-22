@@ -77,7 +77,6 @@ fi
 
 echo ""
 echo "Flashing kernel.img (${SIZE} bytes) to ${TARGET_IP}..."
-echo "Warning: gateway will reboot automatically after flashing."
 echo ""
 if [ "${CONFIRM:-}" != "y" ]; then
     read -r -p "Proceed? [y/N] " confirm
@@ -125,4 +124,5 @@ else
 fi
 echo ""
 echo "Done."
-echo "Gateway is rebooting with the new kernel."
+echo "Bootloader V2.5+ reboots automatically."
+echo "Older versions: J BFC00000 (serial console) or hard reset."
