@@ -12,7 +12,7 @@ This is the **last missing piece** that makes the entire gateway firmware stack 
 
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.3 - 2026.03.11-19:34+0100 - J. Nilo
+Bootloader: V2.5 - 2026.03.22 - J. Nilo
 ```
 
 **Download progress in %** — The stock bootloader prints endless `.` or `#` characters that flood the serial console during TFTP transfers. This version shows a clean percentage indicator:
@@ -53,13 +53,7 @@ Outputs:
 **From Linux (recommended):**
 
 ```bash
-boothold          # script installed in /userdata/usr/bin/
-```
-
-Or directly:
-
-```bash
-devmem 0x003FFFFC 32 0x484F4C44 && reboot
+boothold && reboot
 ```
 
 The gateway reboots and stops at the `<RealTek>` prompt automatically. The flag is one-shot — the next reboot will boot Linux normally.
@@ -99,7 +93,7 @@ The bootloader identifies each image by its header signature and writes it to th
 
 ### Flashing a complete image (fullflash.bin)
 
-The V2.3+ bootloader also auto-detects raw 16 MiB flash images (produced by
+The V2.5+ bootloader also auto-detects raw 16 MiB flash images (produced by
 `build_fullflash.sh`). It verifies magic bytes at known partition offsets and
 writes the entire image to flash:
 

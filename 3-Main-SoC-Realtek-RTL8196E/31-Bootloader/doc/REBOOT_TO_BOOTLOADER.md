@@ -7,11 +7,12 @@ bootloader prompt, ready for TFTP firmware updates — no need to press
 ESC on the serial console.
 
 ```sh
-devmem 0x003FFFFC 32 0x484F4C44 && reboot
+boothold && reboot
 ```
 
-The flag is **one-shot**: the bootloader clears it before entering
-download mode, so the next reboot boots Linux normally.
+The `boothold` binary writes the HOLD magic to DRAM via `pwrite()` + `O_SYNC`
+(bypasses the CPU write-back cache).  The flag is **one-shot**: the bootloader
+clears it before entering download mode, so the next reboot boots Linux normally.
 
 ---
 
@@ -141,20 +142,18 @@ works.  The 4 KB cost (0.01% of 32 MB) is negligible.
 
 ## Linux-side usage
 
-### With devmem (BusyBox applet)
+### With boothold binary (recommended)
 
 ```sh
-devmem 0x003FFFFC 32 0x484F4C44 && reboot
+boothold && reboot
 ```
 
-Or use the `boothold` script installed in `/userdata/usr/bin/`.
+The `boothold` binary (installed in `/userdata/usr/bin/`) uses `pwrite()` with
+`O_SYNC` on `/dev/mem` to write the HOLD magic directly to DRAM, bypassing the
+CPU write-back cache.
 
-### With /dev/mem (fallback)
-
-```sh
-printf 'HOLD' | dd of=/dev/mem bs=1 seek=$((0x3FFFFC)) conv=notrunc 2>/dev/null
-sync && reboot
-```
+**Do not use `devmem`** — it maps RAM through KSEG0 (cached, write-back) via
+`mmap()`.  The write may stay in the L1 D-cache and be lost on watchdog reset.
 
 ---
 
