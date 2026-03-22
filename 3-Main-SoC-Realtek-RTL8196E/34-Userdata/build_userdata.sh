@@ -170,8 +170,9 @@ ERASEBLOCK_HEX=0x10000
 PARTITION_SIZE_HEX=0xC00000
 JFFS2_PAD_HEX=$((PARTITION_SIZE_HEX - 2))
 
-log "Generating JFFS2 (big endian, 64KB eraseblocks, zlib, padded to ${JFFS2_PAD_HEX} bytes)..."
-# Force zlib-only compression - requires CONFIG_JFFS2_ZLIB=y in kernel
+log "Generating JFFS2 (big endian, 64KB eraseblocks, zlib-only, padded to ${JFFS2_PAD_HEX} bytes)..."
+# Force zlib-only: -X enables zlib, -x disables rtime (on by default in mkfs.jffs2)
+# Kernel has CONFIG_JFFS2_ZLIB=y but NOT rtime/lzo/rubin
 fakeroot mkfs.jffs2 \
   -r "$SKELETON_DIR" \
   -o "${SCRIPT_DIR}/userdata.jffs2" \
@@ -180,7 +181,9 @@ fakeroot mkfs.jffs2 \
   -n \
   --squash \
   --pad=${JFFS2_PAD_HEX} \
-  -X zlib
+  -X zlib \
+  -x rtime \
+  -x lzo
 
 log "JFFS2 image created"
 log ""
