@@ -157,7 +157,6 @@ fi
 
 CONFIG_PRESERVED=""
 if [ "$COMPONENT" = "userdata" ]; then
-    echo "Saving gateway config before flash..."
     SKELETON="${FLASH_DIR}/skeleton"
     SAVE_TAR=$(mktemp)
     # Save only user-configurable files (not init scripts or system files)
@@ -168,10 +167,10 @@ if [ "$COMPONENT" = "userdata" ]; then
 
     if [ -s "$SAVE_TAR" ]; then
         tar xf "$SAVE_TAR" -C "$SKELETON" 2>/dev/null || true
-        echo "  Preserved user config from gateway"
+        echo "Gateway config saved."
         CONFIG_PRESERVED=true
     else
-        echo "  Warning: could not save config from gateway"
+        echo "Warning: could not save config from gateway."
     fi
     rm -f "$SAVE_TAR"
 fi
@@ -182,12 +181,13 @@ echo "Sending boothold + reboot..."
 # shellcheck disable=SC2086
 ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
     "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+# Close ControlMaster socket — gateway is rebooting, stale connection
+# would interfere with shutdown detection
+ssh -O exit -o ControlPath="$SSH_SOCK" "${SSH_USER}@${LINUX_IP}" 2>/dev/null || true
 
 # --- step 5: wait for bootloader -------------------------------------------
-# Poll ARP table until BOOT_IP appears AND SSH on LINUX_IP is down
-# (confirms Linux has shut down and bootloader is running).
-
-echo "Waiting for bootloader at ${BOOT_IP}..."
+# Two-phase wait to avoid ARP false positives (Linux responds to ARP for
+# BOOT_IP via ARP flux while still shutting down).
 
 IFACE="$(ip route get "$BOOT_IP" 2>/dev/null \
     | awk '{for(i=1;i<=NF;i++) if($i=="dev"){print $(i+1); exit}}')"
@@ -196,6 +196,19 @@ if [ -z "${IFACE:-}" ]; then
     exit 1
 fi
 
+# Phase 1: wait for SSH to go down (Linux is shutting down)
+echo "Waiting for shutdown..."
+tries=0
+while [ $tries -lt 15 ]; do
+    if ! timeout 1 bash -c "echo >/dev/tcp/$LINUX_IP/$SSH_PORT" 2>/dev/null; then
+        break
+    fi
+    sleep 1
+    tries=$((tries + 1))
+done
+
+# Phase 2: wait for bootloader ARP
+echo "Waiting for bootloader at ${BOOT_IP}..."
 tries=0
 while [ $tries -lt 30 ]; do
     ip neigh del "$BOOT_IP" dev "$IFACE" 2>/dev/null || true
@@ -203,13 +216,9 @@ while [ $tries -lt 30 ]; do
     sleep 1
     nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
     if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-        # Confirm Linux is down (SSH must be unreachable)
-        if ! timeout 1 bash -c "echo >/dev/tcp/$LINUX_IP/$SSH_PORT" 2>/dev/null; then
-            break
-        fi
+        break
     fi
     tries=$((tries + 1))
-    # Show progress every 5 seconds
     if [ $((tries % 5)) -eq 0 ]; then
         echo "  ...${tries}s"
     fi
@@ -224,8 +233,9 @@ echo "Bootloader is up."
 
 # --- step 6: run flash script -----------------------------------------------
 
-echo ""
 cd "$FLASH_DIR"
+export BUILD_QUIET=1
+export BOOTLOADER_CONFIRMED=1
 if [ "${CONFIRM:-}" = "y" ]; then
     export CONFIRM=y
 fi
@@ -239,13 +249,3 @@ if [ "$COMPONENT" = "userdata" ]; then
     fi
 fi
 ./"$FLASH_SCRIPT" "$BOOT_IP"
-
-echo ""
-if [ "$COMPONENT" = "kernel" ]; then
-    echo "The gateway will reboot automatically."
-    echo "SSH: root@${LINUX_IP}:22 in ~30 seconds."
-else
-    echo "Flash complete. Reboot the gateway to boot into Linux:"
-    echo "  - Serial console: J BFC00000"
-    echo "  - Or hard reset (power cycle)"
-fi

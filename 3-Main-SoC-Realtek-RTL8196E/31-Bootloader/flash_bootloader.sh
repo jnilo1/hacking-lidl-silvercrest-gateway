@@ -95,23 +95,24 @@ check_bootloader_reachable() {
 
 # --- main ------------------------------------------------------------------
 
-echo "Checking if gateway is in boot mode..."
+if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
+    echo "Checking if gateway is in boot mode..."
 
-IFACE="$(get_iface_for_ip "$TARGET_IP")"
-if [ -z "$IFACE" ]; then
-    echo "Error: cannot determine outgoing interface to ${TARGET_IP} (ip route get failed)." >&2
-    exit 1
-fi
+    IFACE="$(get_iface_for_ip "$TARGET_IP")"
+    if [ -z "$IFACE" ]; then
+        echo "Error: cannot determine outgoing interface to ${TARGET_IP} (ip route get failed)." >&2
+        exit 1
+    fi
 
-# Reject if routed — ARP would resolve the gateway, not the target
-if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
-    echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
-    exit 1
-fi
+    if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
+        echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
+        exit 1
+    fi
 
-if ! check_bootloader_reachable "$TARGET_IP" "$IFACE"; then
-    echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
-    exit 1
+    if ! check_bootloader_reachable "$TARGET_IP" "$IFACE"; then
+        echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
+        exit 1
+    fi
 fi
 
 echo "Flashing ${NAME} (${SIZE} bytes) to ${TARGET_IP}..."
@@ -161,4 +162,5 @@ else
 fi
 echo ""
 echo "Done."
-echo "Reboot: J BFC00000  (serial console)  or  hard reset the device"
+echo "Bootloader V2.5+ reboots automatically."
+echo "Older versions: J BFC00000 (serial console) or hard reset."

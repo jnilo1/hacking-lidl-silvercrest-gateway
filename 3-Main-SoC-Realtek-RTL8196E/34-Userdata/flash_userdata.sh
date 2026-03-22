@@ -58,10 +58,8 @@ trap cleanup EXIT
 
 # --- Network configuration -------------------------------------------------
 
-# "skip" = config already in skeleton (preserved from gateway by flash_remote.sh)
-if [ "${NET_MODE:-}" = "skip" ]; then
-    echo "→ Network config preserved from gateway"
-else
+# "skip" = config already in skeleton (preserved by caller)
+if [ "${NET_MODE:-}" != "skip" ]; then
     if [ -n "${NET_MODE:-}" ]; then
         net_choice="$NET_MODE"
     else
@@ -104,15 +102,15 @@ else
         echo "→ DHCP"
     fi
 fi
-echo ""
 
 # --- Radio mode configuration ----------------------------------------------
 
 if [ "${RADIO_MODE:-}" = "skip" ]; then
-    echo "→ Radio config preserved from gateway"
+    : # config already in skeleton (preserved by caller)
 elif [ -n "${RADIO_MODE:-}" ]; then
     radio_choice="$RADIO_MODE"
 else
+    echo ""
     echo "Radio mode (EFR32 firmware must match):"
     echo "  [1] Zigbee — serialgateway on port 8888 (NCP or RCP+zigbeed)"
     echo "  [2] Thread — OTBR border router, REST API on port 8081 (OT-RCP)"
@@ -129,12 +127,15 @@ if [ "${RADIO_MODE:-}" != "skip" ]; then
         echo "→ Zigbee (serialgateway)"
     fi
 fi
-echo ""
 
 # --- Rebuild ---------------------------------------------------------------
 
 echo "Rebuilding userdata..."
-"${SCRIPT_DIR}/build_userdata.sh" --jffs2-only
+if [ "${BUILD_QUIET:-}" = "1" ]; then
+    "${SCRIPT_DIR}/build_userdata.sh" --jffs2-only -q
+else
+    "${SCRIPT_DIR}/build_userdata.sh" --jffs2-only
+fi
 echo ""
 
 # --- helpers ---------------------------------------------------------------
@@ -176,22 +177,24 @@ check_bootloader_reachable() {
 IMAGE="${SCRIPT_DIR}/userdata.bin"
 SIZE=$(stat -c%s "$IMAGE" 2>/dev/null || stat -f%z "$IMAGE")
 
-echo "Checking if gateway is in boot mode..."
+if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
+    echo "Checking if gateway is in boot mode..."
 
-IFACE="$(get_iface_for_ip "$TARGET_IP")"
-if [ -z "$IFACE" ]; then
-    echo "Error: cannot determine outgoing interface to ${TARGET_IP}." >&2
-    exit 1
-fi
+    IFACE="$(get_iface_for_ip "$TARGET_IP")"
+    if [ -z "$IFACE" ]; then
+        echo "Error: cannot determine outgoing interface to ${TARGET_IP}." >&2
+        exit 1
+    fi
 
-if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
-    echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
-    exit 1
-fi
+    if ip route get "$TARGET_IP" 2>/dev/null | grep -qE '\svia\s'; then
+        echo "Error: ${TARGET_IP} is reached via a gateway (routed). Must be on the same L2 segment." >&2
+        exit 1
+    fi
 
-if ! check_bootloader_reachable "$TARGET_IP" "$IFACE"; then
-    echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
-    exit 1
+    if ! check_bootloader_reachable "$TARGET_IP" "$IFACE"; then
+        echo "Error: ${TARGET_IP} unreachable — check cable and that device is in download mode." >&2
+        exit 1
+    fi
 fi
 
 echo "Flashing userdata.bin (${SIZE} bytes) to ${TARGET_IP}..."
@@ -242,4 +245,5 @@ else
 fi
 echo ""
 echo "Done."
-echo "Reboot: J BFC00000  (serial console)  or  hard reset the device"
+echo "Bootloader V2.5+ reboots automatically."
+echo "Older versions: J BFC00000 (serial console) or hard reset."

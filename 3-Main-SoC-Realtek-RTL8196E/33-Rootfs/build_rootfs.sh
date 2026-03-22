@@ -8,12 +8,25 @@
 #
 # Output: rootfs.bin (ready to flash)
 #
+# Usage:
+#   ./build_rootfs.sh              # Normal build
+#   ./build_rootfs.sh -q           # Quiet mode (used by flash_rootfs.sh)
+#
 # J. Nilo - November 2025
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
+
+QUIET=0
+for arg in "$@"; do
+    case "$arg" in
+        -q|--quiet) QUIET=1 ;;
+    esac
+done
+
+log() { [ "$QUIET" -eq 0 ] && echo "$@" || true; }
 
 # Check that fakeroot is installed
 if ! command -v fakeroot >/dev/null 2>&1; then
@@ -53,13 +66,13 @@ if [ ! -f skeleton/bin/dropbearmulti ]; then
     "${SCRIPT_DIR}/dropbear/build_dropbear.sh"
 fi
 
-echo "========================================="
-echo "  BUILDING ROOT FILESYSTEM"
-echo "========================================="
-echo ""
+log "========================================="
+log "  BUILDING ROOT FILESYSTEM"
+log "========================================="
+log ""
 
 # Ensure /dev directory exists in skeleton
-echo "🔧 Preparing /dev structure..."
+log "🔧 Preparing /dev structure..."
 mkdir -p skeleton/dev
 
 # Clean old images
@@ -68,42 +81,62 @@ rm -f rootfs.sqfs rootfs.bin
 # Fix /root permissions for Dropbear pubkey auth (git doesn't preserve dir modes)
 chmod 750 skeleton/root
 
-echo "📦 Generating SquashFS with device nodes..."
-fakeroot mksquashfs skeleton rootfs.sqfs \
-  -nopad -noappend -all-root \
-  -comp xz -b 256k \
-  -p "/dev/console c 600 0 0 5 1" \
-  -p "/dev/null c 666 0 0 1 3" \
-  -p "/dev/zero c 666 0 0 1 5"
-
-echo ""
-echo "🔍 Verifying device nodes in image..."
-if unsquashfs -ll rootfs.sqfs 2>/dev/null | grep -q "dev/console"; then
-    echo "✅ /dev/console found in rootfs"
-    unsquashfs -ll rootfs.sqfs 2>/dev/null | grep "dev/" | head -10
+log "📦 Generating SquashFS with device nodes..."
+if [ "$QUIET" -eq 1 ]; then
+    fakeroot mksquashfs skeleton rootfs.sqfs \
+      -nopad -noappend -all-root \
+      -comp xz -b 256k \
+      -p "/dev/console c 600 0 0 5 1" \
+      -p "/dev/null c 666 0 0 1 3" \
+      -p "/dev/zero c 666 0 0 1 5" -quiet -no-progress
 else
-    echo "⚠️  /dev/console NOT found in rootfs"
+    fakeroot mksquashfs skeleton rootfs.sqfs \
+      -nopad -noappend -all-root \
+      -comp xz -b 256k \
+      -p "/dev/console c 600 0 0 5 1" \
+      -p "/dev/null c 666 0 0 1 3" \
+      -p "/dev/zero c 666 0 0 1 5"
 fi
 
-echo ""
-echo "🔧 Converting to RTL format..."
-$CVIMG_TOOL \
-    -i rootfs.sqfs \
-    -o rootfs.bin \
-    -e 0x80c00000 \
-    -b 0x200000 \
-    -s r6cr
+if [ "$QUIET" -eq 0 ]; then
+    echo ""
+    echo "🔍 Verifying device nodes in image..."
+    if unsquashfs -ll rootfs.sqfs 2>/dev/null | grep -q "dev/console"; then
+        echo "✅ /dev/console found in rootfs"
+        unsquashfs -ll rootfs.sqfs 2>/dev/null | grep "dev/" | head -10
+    else
+        echo "⚠️  /dev/console NOT found in rootfs"
+    fi
+    echo ""
+    echo "🔧 Converting to RTL format..."
+    $CVIMG_TOOL \
+        -i rootfs.sqfs \
+        -o rootfs.bin \
+        -e 0x80c00000 \
+        -b 0x200000 \
+        -s r6cr
+else
+    $CVIMG_TOOL \
+        -i rootfs.sqfs \
+        -o rootfs.bin \
+        -e 0x80c00000 \
+        -b 0x200000 \
+        -s r6cr >/dev/null
+fi
 
 # Remove intermediate file
 rm -f rootfs.sqfs
 
-echo ""
-echo "========================================="
-echo "  BUILD SUMMARY"
-echo "========================================="
-ls -lh rootfs.bin
-
-echo ""
-echo "Rootfs image ready: rootfs.bin ($(ls -lh rootfs.bin | awk '{print $5}'))"
-echo ""
-echo "To flash: ./flash_rootfs.sh"
+log ""
+log "========================================="
+log "  BUILD SUMMARY"
+log "========================================="
+if [ "$QUIET" -eq 0 ]; then
+    ls -lh rootfs.bin
+    echo ""
+    echo "Rootfs image ready: rootfs.bin ($(ls -lh rootfs.bin | awk '{print $5}'))"
+    echo ""
+    echo "To flash: ./flash_rootfs.sh"
+else
+    echo "rootfs.bin built ($(ls -lh rootfs.bin | awk '{print $5}'))"
+fi

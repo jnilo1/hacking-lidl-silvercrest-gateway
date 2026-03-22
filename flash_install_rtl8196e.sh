@@ -224,8 +224,21 @@ if [ -n "$LINUX_RUNNING" ]; then
     fi
 
     # --- wait for bootloader after boothold + reboot -------------------------
-    # Poll ARP table until BOOT_IP appears AND SSH on LINUX_IP is down
-    # (confirms Linux has shut down and bootloader is running).
+    # Two-phase wait to avoid ARP false positives (Linux responds to ARP for
+    # BOOT_IP via ARP flux while still shutting down).
+
+    # Phase 1: wait for SSH to go down (Linux is shutting down)
+    echo "Waiting for shutdown..."
+    tries=0
+    while [ $tries -lt 15 ]; do
+        if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
+            break
+        fi
+        sleep 1
+        tries=$((tries + 1))
+    done
+
+    # Phase 2: wait for bootloader ARP
     echo "Waiting for bootloader at ${BOOT_IP}..."
     tries=0
     while [ $tries -lt 30 ]; do
@@ -234,10 +247,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'; then
-            # Confirm Linux is down (SSH must be unreachable on LINUX_IP)
-            if ! timeout 1 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
-                break
-            fi
+            break
         fi
         tries=$((tries + 1))
     done
