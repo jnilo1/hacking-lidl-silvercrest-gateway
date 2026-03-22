@@ -185,13 +185,27 @@ if [ -n "$LINUX_RUNNING" ]; then
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
         echo "Saving gateway config..."
+        USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
+
+        # Backup skeleton before injecting gateway config — restore on exit
+        FI_SKEL_BACKUP=$(mktemp -d)
+        cp -a "$USERDATA_SKEL/etc" "$FI_SKEL_BACKUP/etc"
+        [ -d "$USERDATA_SKEL/ssh" ] && cp -a "$USERDATA_SKEL/ssh" "$FI_SKEL_BACKUP/ssh"
+        [ -d "$USERDATA_SKEL/thread" ] && cp -a "$USERDATA_SKEL/thread" "$FI_SKEL_BACKUP/thread"
+        cleanup_skeleton() {
+            cp -a "$FI_SKEL_BACKUP/etc" "$USERDATA_SKEL/etc"
+            [ -d "$FI_SKEL_BACKUP/ssh" ] && cp -a "$FI_SKEL_BACKUP/ssh" "$USERDATA_SKEL/ssh"
+            [ -d "$FI_SKEL_BACKUP/thread" ] && cp -a "$FI_SKEL_BACKUP/thread" "$USERDATA_SKEL/thread"
+            rm -rf "$FI_SKEL_BACKUP"
+        }
+        trap cleanup_skeleton EXIT
+
         SAVE_TAR=$(mktemp)
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
         if [ -s "$SAVE_TAR" ]; then
-            USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
             tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
             echo "  Preserved user config from gateway"
             export NET_MODE="skip"

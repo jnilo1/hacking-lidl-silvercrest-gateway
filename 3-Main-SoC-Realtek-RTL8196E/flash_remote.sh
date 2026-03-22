@@ -158,6 +158,20 @@ fi
 CONFIG_PRESERVED=""
 if [ "$COMPONENT" = "userdata" ]; then
     SKELETON="${FLASH_DIR}/skeleton"
+
+    # Backup skeleton before injecting gateway config — restore on exit
+    SKEL_BACKUP=$(mktemp -d)
+    cp -a "$SKELETON/etc" "$SKEL_BACKUP/etc"
+    [ -d "$SKELETON/ssh" ] && cp -a "$SKELETON/ssh" "$SKEL_BACKUP/ssh"
+    [ -d "$SKELETON/thread" ] && cp -a "$SKELETON/thread" "$SKEL_BACKUP/thread"
+    cleanup_skeleton() {
+        cp -a "$SKEL_BACKUP/etc" "$SKELETON/etc"
+        [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "$SKELETON/ssh"
+        [ -d "$SKEL_BACKUP/thread" ] && cp -a "$SKEL_BACKUP/thread" "$SKELETON/thread"
+        rm -rf "$SKEL_BACKUP"
+    }
+    trap cleanup_skeleton EXIT
+
     SAVE_TAR=$(mktemp)
     # Save only user-configurable files (not init scripts or system files)
     SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
