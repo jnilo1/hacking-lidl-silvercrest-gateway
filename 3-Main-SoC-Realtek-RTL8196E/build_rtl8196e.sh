@@ -65,8 +65,8 @@ else
                 echo "  all        Build everything (default)"
                 echo "  bootloader Build bootloader"
                 echo "  kernel     Build Linux kernel"
-                echo "  rootfs     Build root filesystem (BusyBox, Dropbear)"
-                echo "  userdata   Build user partition (boothold, nano, serialgateway, otbr-agent)"
+                echo "  rootfs     Build rootfs components (BusyBox, Dropbear)"
+                echo "  userdata   Build userdata components (boothold)"
                 echo ""
                 echo "Examples:"
                 echo "  $0                     # Build all"
@@ -111,10 +111,13 @@ echo "✅ Toolchain: $(mips-lexra-linux-musl-gcc --version | head -1)"
 echo ""
 
 # Track step number
+# Builds components only — rootfs.bin and userdata.bin are built on the fly
+# by the flash scripts (flash_install, flash_remote, flash_rootfs, flash_userdata)
 STEP=0
-TOTAL=$((BUILD_BOOTLOADER + BUILD_KERNEL + BUILD_ROOTFS + BUILD_USERDATA))
-# Rootfs has 2 sub-steps (busybox + dropbear), userdata has 1 (boothold)
+TOTAL=$((BUILD_BOOTLOADER + BUILD_KERNEL))
+# Rootfs has 2 component builds (busybox + dropbear)
 [ $BUILD_ROOTFS -eq 1 ] && TOTAL=$((TOTAL + 2))
+# Userdata has 1 component build (boothold)
 [ $BUILD_USERDATA -eq 1 ] && TOTAL=$((TOTAL + 1))
 
 # Build bootloader
@@ -141,15 +144,9 @@ if [ $BUILD_ROOTFS -eq 1 ]; then
     echo "========================================="
     cd "${SCRIPT_DIR}/33-Rootfs/dropbear" && ./build_dropbear.sh
 
-    STEP=$((STEP + 1))
-    echo ""
-    echo "========================================="
-    echo "  ${STEP}/${TOTAL} BUILDING ROOTFS IMAGE"
-    echo "========================================="
-    cd "${SCRIPT_DIR}/33-Rootfs" && ./build_rootfs.sh
 fi
 
-# Build userdata
+# Build userdata components
 if [ $BUILD_USERDATA -eq 1 ]; then
     STEP=$((STEP + 1))
     echo ""
@@ -157,13 +154,6 @@ if [ $BUILD_USERDATA -eq 1 ]; then
     echo "  ${STEP}/${TOTAL} BUILDING BOOTHOLD"
     echo "========================================="
     cd "${SCRIPT_DIR}/34-Userdata/boothold" && ./build_boothold.sh
-
-    STEP=$((STEP + 1))
-    echo ""
-    echo "========================================="
-    echo "  ${STEP}/${TOTAL} BUILDING USERDATA"
-    echo "========================================="
-    cd "${SCRIPT_DIR}/34-Userdata" && ./build_userdata.sh
 fi
 
 # Build kernel
@@ -181,12 +171,13 @@ echo "========================================="
 echo "  ✅ BUILD COMPLETE"
 echo "========================================="
 echo ""
-echo "Generated images:"
+echo "Built:"
 [ $BUILD_BOOTLOADER -eq 1 ] && ls -lh "${SCRIPT_DIR}/31-Bootloader/boot.bin" 2>/dev/null || true
-[ $BUILD_ROOTFS -eq 1 ] && ls -lh "${SCRIPT_DIR}/33-Rootfs/rootfs.bin" 2>/dev/null || true
-[ $BUILD_USERDATA -eq 1 ] && ls -lh "${SCRIPT_DIR}/34-Userdata/userdata.bin" 2>/dev/null || true
 [ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel.img" 2>/dev/null || true
+[ $BUILD_ROOTFS -eq 1 ] && echo "  rootfs components: busybox, dropbear → skeleton/bin/"
+[ $BUILD_USERDATA -eq 1 ] && echo "  userdata components: boothold → skeleton/usr/bin/"
 cd "$PROJECT_ROOT"
 echo ""
+echo "rootfs.bin and userdata.bin are built on the fly by the flash scripts."
 echo "To flash: ./flash_install_rtl8196e.sh  (or flash_remote.sh for single partitions)"
 echo ""
