@@ -75,6 +75,7 @@ if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
     fi
 fi
 
+echo ""
 echo "Flashing kernel.img (${SIZE} bytes) to ${TARGET_IP}..."
 echo "Warning: gateway will reboot automatically after flashing."
 echo ""
