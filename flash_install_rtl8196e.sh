@@ -211,6 +211,8 @@ if [ -n "$LINUX_RUNNING" ]; then
         # shellcheck disable=SC2086
         ssh $FI_SSH_OPTS "root@${fw_host}" \
             "devmem 0x003FFFFC 32 0x484F4C44 && reboot" 2>/dev/null || true
+        # Close ControlMaster socket — gateway is rebooting
+        ssh -O exit -o ControlPath="$SSH_SOCK" "root@${fw_host}" 2>/dev/null || true
     else
         echo ""
         echo "Tuya firmware detected. Cannot boothold automatically."
