@@ -235,23 +235,36 @@ Same as use case 2: **Settings → Devices & Services → Thread → Configure**
 - **Lower latency** — OTBR talks directly to the EFR32 via UART, no TCP bridge
 - **Simpler** — no OTBR Docker container to manage, no `network_mode: host` issues
 - **Self-contained** — gateway works even without the host running (Thread mesh stays up)
-- **Flash wear protection** — settings run from tmpfs, synced to flash once per day
-  and on clean shutdown (see `S70otbr` init script)
+- **Flash wear protection** — settings run from tmpfs, synced to flash only when
+  the Thread dataset changes (see `S70otbr` init script)
 
 ---
 
 ## Commissioning a Matter Device (Use Cases 2 & 3)
 
+### Prerequisites (Home Assistant)
+
+Before commissioning, verify in **Settings → Devices & Services**:
+
+1. **Thread** integration — your gateway's Thread network should appear as
+   **"Preferred network"** (click Configure to set it)
+2. **Open Thread Border Router** integration — pointing to the correct OTBR
+   URL (use case 2: `http://localhost:8081`, use case 3: `http://<GATEWAY_IP>:8081`)
+3. **Matter (BETA)** integration — auto-detected or `ws://localhost:5580/ws`
+
 ### Via Home Assistant Companion App (recommended)
 
 1. Install **"Home Assistant"** from the Play Store
 2. Connect to your HA instance: `http://<HOST_IP>:8123`
-3. **Sync Thread credentials** (required after every Thread network change):
+3. Phone must be on **2.4 GHz WiFi** (same subnet as the gateway) with
+   **Bluetooth enabled**
+4. **Sync Thread credentials** (required after every Thread network change):
    Settings → Companion App → Troubleshooting → Sync Thread credentials
-4. **Commission:**
+5. Put the Matter device in **pairing mode** (factory reset if needed)
+6. **Commission:**
    Settings → Devices & Services → Add Device → Add Matter device
-5. Scan the QR code or enter the 11-digit pairing code
-6. The app connects via BLE, transfers Thread credentials, device joins the mesh
+7. Scan the QR code or enter the 11-digit pairing code
+8. The app connects via BLE, transfers Thread credentials, device joins the mesh
 
 ### Via chip-tool (CLI alternative)
 
@@ -303,6 +316,7 @@ docker run --rm --network host --privileged \
 | Xiaomi LYWSD03MMC | Zigbee | ZoH (use case 1) | OK |
 | IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | OTBR on host (use case 2) | OK |
 | IKEA TIMMERFLOTTE temp/hmd sensor | Matter/Thread | OTBR on gateway (use case 3) | OK |
+| IKEA MYGGBET door/window sensor | Matter/Thread | OTBR on gateway (use case 3) | OK |
 | IKEA BILRESA dual button | Matter/Thread | OTBR on gateway (use case 3) | OK |
 | IKEA MYGGSPRAY wrlss mtn sensor | Matter/Thread | OTBR on gateway (use case 3) | OK |
 
