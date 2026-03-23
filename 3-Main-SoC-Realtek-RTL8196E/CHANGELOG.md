@@ -6,6 +6,24 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.2] - 2026-03-23
+
+### Bug fixes
+- **Skeleton pollution / cross-contamination after flash**: `flash_remote.sh`,
+  `flash_install_rtl8196e.sh`, `build_fullflash.sh`, and `create_fullflash.sh`
+  injected gateway config into the skeleton directory, leaving residual files
+  (dropbear keys, radio.conf, thread/) between runs. Flashing one device in
+  OTBR mode then another in Zigbee mode leaked radio.conf. Refactored: all
+  scripts now work on a temporary copy of the skeleton via `SKELETON_DIR`;
+  the original is never modified. Credit: olivluca (#73).
+- **S70otbr redundant flash writes**: sync daemon wrote to flash on first poll
+  (seeded with empty `last_dataset`) and unconditionally on shutdown. Fixed:
+  `last_dataset` seeded from REST API before entering the loop; trap and stop
+  no longer copy — the daemon syncs on dataset change only. Frame counters
+  are ephemeral (OpenThread recovers by jumping ahead). Credit: olivluca (#66).
+
+---
+
 ## [2.1.1] - 2026-03-22
 
 ### Bug fixes
@@ -19,11 +37,8 @@ rootfs (33-), and userdata (34-).
   config (`CONFIG_JFFS2_ZLIB=y`, no rtime/lzo).
 - **Skeleton pollution after flash**: `flash_remote.sh` and
   `flash_install_rtl8196e.sh` injected gateway config (passwd, eth0.conf,
-  etc.) into the skeleton directory, leaving residual files (dropbear keys,
-  radio.conf, thread/) between runs — causing cross-contamination when
-  flashing different devices. Refactored: all scripts now work on a
-  temporary copy of the skeleton via `SKELETON_DIR`; the original is
-  never modified.
+  etc.) into the skeleton without cleanup. Added `rsync --delete` restore
+  via EXIT trap — skeleton is always restored to its original state.
 
 ### Improvements
 - **Bootloader V2.5**: auto-reboot after flashing all partition types
