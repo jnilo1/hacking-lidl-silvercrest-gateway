@@ -4,6 +4,5 @@
 # Full configuration is in /userdata/etc/inittab (loaded after mount)
 #
 ::sysinit:/etc/init.d/rcS
-ttyS0::askfirst:/bin/login
-#ttyS0::respawn:-/bin/sh
+ttyS0::respawn:/sbin/getty -L 38400 ttyS0 vt100
 ::shutdown:/userdata/etc/init.d/rcK

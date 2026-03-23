@@ -1,3 +1,0 @@
-# Boot-time system configuration/initialization script.
-::sysinit:/etc/init.d/rcS
-ttyS0::askfirst:/bin/login
