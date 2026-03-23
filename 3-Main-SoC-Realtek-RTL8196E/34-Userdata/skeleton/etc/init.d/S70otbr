@@ -70,13 +70,13 @@ start)
     # Polls the REST API every 30s (avoids ot-ctl broken pipe warnings).
     # Syncs dataset to flash on change, turns LED on when Thread is formed.
     (
-        trap 'echo 0 > /sys/class/leds/status/brightness
-              cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null; exit 0' TERM INT
+        trap 'echo 0 > /sys/class/leds/status/brightness; exit 0' TERM INT
         REST="http://127.0.0.1:${REST_PORT}"
         LED="/sys/class/leds/status/brightness"
-        last_dataset=""
         last_led=""
         sleep 5  # let otbr-agent start before first poll
+        # Seed last_dataset so first poll doesn't trigger a redundant write
+        last_dataset=$(wget -qO- "$REST/node/dataset/active" 2>/dev/null)
         while true; do
             # LED: on when Thread state is child, router, or leader
             state=$(wget -qO- "$REST/node/state" 2>/dev/null)
@@ -88,7 +88,7 @@ start)
                 echo "$led" > "$LED"
                 last_led="$led"
             fi
-            # Dataset sync
+            # Dataset sync — only write to flash when dataset actually changes
             dataset=$(wget -qO- "$REST/node/dataset/active" 2>/dev/null)
             case "$dataset" in
                 "") ;;
@@ -110,8 +110,6 @@ stop)
     # Stop sync loop
     [ -f "$SYNC_PID" ] && kill "$(cat "$SYNC_PID")" 2>/dev/null && rm -f "$SYNC_PID"
     killall otbr-agent 2>/dev/null
-    # Final sync to flash
-    cp "$RAM_DIR"/* "$FLASH_DIR"/ 2>/dev/null
     ;;
 
 restart)
