@@ -21,6 +21,9 @@ rootfs (33-), and userdata (34-).
   `last_dataset` seeded from REST API before entering the loop; trap and stop
   no longer copy — the daemon syncs on dataset change only. Frame counters
   are ephemeral (OpenThread recovers by jumping ahead). Credit: olivluca (#66).
+- **Serial console backspace**: replaced `askfirst` + `login` with
+  `getty -L 38400 ttyS0 vt100` in rootfs inittab — backspace now works
+  at the login prompt.
 
 ---
 
