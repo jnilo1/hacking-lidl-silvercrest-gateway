@@ -103,19 +103,19 @@ fi
 
 # --- build userdata ----------------------------------------------------------
 
-ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
-RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
+# Work on a temporary copy of the skeleton — never modify the original
+if [ -n "${SKELETON_DIR:-}" ]; then
+    # Caller already prepared a working copy (e.g. flash_install_rtl8196e.sh)
+    SKEL_WORK="$SKELETON_DIR"
+else
+    SKEL_WORK=$(mktemp -d)
+    cp -a "${USERDATA_DIR}/skeleton/." "$SKEL_WORK/"
+    trap 'rm -rf "$SKEL_WORK"' EXIT
+fi
+export SKELETON_DIR="$SKEL_WORK"
 
-# Save skeleton + userdata.bin before config injection, restore after build
-SKEL_BACKUP=$(mktemp -d)
-cp -a "${USERDATA_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
-cp -a "${USERDATA_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
-restore_skeleton() {
-    rsync -a --delete "$SKEL_BACKUP/etc/" "${USERDATA_DIR}/skeleton/etc/"
-    rsync -a --delete "$SKEL_BACKUP/ssh/" "${USERDATA_DIR}/skeleton/ssh/" 2>/dev/null
-    rm -rf "$SKEL_BACKUP"
-}
-trap restore_skeleton EXIT
+ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
+RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
 
     # Network config — "skip" means config already injected by caller
     if [ "${NET_MODE:-}" = "skip" ]; then
@@ -189,8 +189,6 @@ trap restore_skeleton EXIT
         "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
     fi
     log ""
-
-    # Skeleton is restored by the EXIT trap (restore_skeleton)
 
 # --- check sizes -------------------------------------------------------------
 

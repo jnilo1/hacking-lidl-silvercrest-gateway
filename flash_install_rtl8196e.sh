@@ -194,17 +194,12 @@ if [ -n "$LINUX_RUNNING" ]; then
     if [ "$fw_type" = "custom" ]; then
         # Save user config before reboot (will be injected into userdata)
         # Only user-configurable files — not init scripts or system files
+        # Work on a temporary copy of the skeleton — never modify the original
         USERDATA_SKEL="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton"
-
-        # Backup skeleton before injecting gateway config — restore on exit
-        FI_SKEL_BACKUP=$(mktemp -d)
-        cp -a "$USERDATA_SKEL/etc" "$FI_SKEL_BACKUP/etc"
-        [ -d "$USERDATA_SKEL/ssh" ] && cp -a "$USERDATA_SKEL/ssh" "$FI_SKEL_BACKUP/ssh"
-        [ -d "$USERDATA_SKEL/thread" ] && cp -a "$USERDATA_SKEL/thread" "$FI_SKEL_BACKUP/thread"
-        trap 'rsync -a --delete "$FI_SKEL_BACKUP/etc/" "$USERDATA_SKEL/etc/"
-              rsync -a --delete "$FI_SKEL_BACKUP/ssh/" "$USERDATA_SKEL/ssh/" 2>/dev/null
-              rsync -a --delete "$FI_SKEL_BACKUP/thread/" "$USERDATA_SKEL/thread/" 2>/dev/null
-              rm -rf "$FI_SKEL_BACKUP"' EXIT
+        SKEL_WORK=$(mktemp -d)
+        cp -a "$USERDATA_SKEL/." "$SKEL_WORK/"
+        trap 'rm -rf "$SKEL_WORK"' EXIT
+        export SKELETON_DIR="$SKEL_WORK"
 
         SAVE_TAR=$(mktemp)
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
@@ -212,7 +207,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         ssh $FI_SSH_OPTS "root@${fw_host}" \
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
         if [ -s "$SAVE_TAR" ]; then
-            tar xf "$SAVE_TAR" -C "$USERDATA_SKEL" 2>/dev/null || true
+            tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
             echo "Gateway config saved."
             export NET_MODE="skip"
             export RADIO_MODE="skip"
@@ -525,15 +520,13 @@ else
 fi
 
 # --- Restore skeleton if we injected gateway config -------------------------
-# Skeleton restore is handled by the EXIT trap set above
-
 # --- EFR32 radio firmware info -----------------------------------------------
 if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then
     RADIO="${NET_MODE:+${RADIO_MODE}}"
     # Determine radio mode from radio.conf if not set by env
     if [ -z "$RADIO" ]; then
-        if [ -f "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" ] && \
-           grep -q '^MODE=otbr' "${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/radio.conf" 2>/dev/null; then
+        RADIO_CONF="${SKEL_WORK:-${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton}/etc/radio.conf"
+        if [ -f "$RADIO_CONF" ] && grep -q '^MODE=otbr' "$RADIO_CONF" 2>/dev/null; then
             RADIO="thread"
         else
             RADIO="zigbee"

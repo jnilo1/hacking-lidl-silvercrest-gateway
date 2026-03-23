@@ -42,19 +42,20 @@ TRIES="${TRIES:-10}"
 PORT="${PORT:-69}"
 SLEEP_BETWEEN="${SLEEP_BETWEEN:-0.2}"
 
-ETH0_CONF="${SCRIPT_DIR}/skeleton/etc/eth0.conf"
-RADIO_CONF="${SCRIPT_DIR}/skeleton/etc/radio.conf"
-# Save skeleton + userdata.bin before config injection, restore on exit
-SKEL_BACKUP=$(mktemp -d)
-cp -a "${SCRIPT_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
-cp -a "${SCRIPT_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
-cleanup() {
-    rm -rf "${SCRIPT_DIR}/skeleton/etc" "${SCRIPT_DIR}/skeleton/ssh"
-    cp -a "$SKEL_BACKUP/etc" "${SCRIPT_DIR}/skeleton/etc"
-    [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${SCRIPT_DIR}/skeleton/ssh"
-    rm -rf "$SKEL_BACKUP"
-}
-trap cleanup EXIT
+# Work on a temporary copy of the skeleton — never modify the original
+# If SKELETON_DIR is already set by caller (e.g. flash_remote.sh with
+# gateway config injected), use it directly; otherwise create our own.
+if [ -n "${SKELETON_DIR:-}" ]; then
+    SKEL_WORK="$SKELETON_DIR"
+else
+    SKEL_WORK=$(mktemp -d)
+    cp -a "${SCRIPT_DIR}/skeleton/." "$SKEL_WORK/"
+    trap 'rm -rf "$SKEL_WORK"' EXIT
+    export SKELETON_DIR="$SKEL_WORK"
+fi
+
+ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
+RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
 
 # --- Network configuration -------------------------------------------------
 

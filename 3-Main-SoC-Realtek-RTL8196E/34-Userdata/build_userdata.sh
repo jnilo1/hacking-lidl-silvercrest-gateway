@@ -148,8 +148,8 @@ log ""
 # Clean old images
 rm -f userdata.raw.jffs2 userdata.jffs2 userdata.bin
 
-# Use skeleton directory directly
-SKELETON_DIR="${SCRIPT_DIR}/skeleton"
+# Use skeleton directory (callers can override via SKELETON_DIR env var)
+SKELETON_DIR="${SKELETON_DIR:-${SCRIPT_DIR}/skeleton}"
 if [ ! -d "$SKELETON_DIR" ]; then
     echo "skeleton directory not found"
     exit 1

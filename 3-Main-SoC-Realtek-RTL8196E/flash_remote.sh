@@ -157,20 +157,11 @@ fi
 
 CONFIG_PRESERVED=""
 if [ "$COMPONENT" = "userdata" ]; then
-    SKELETON="${FLASH_DIR}/skeleton"
-
-    # Backup skeleton before injecting gateway config — restore on exit
-    SKEL_BACKUP=$(mktemp -d)
-    cp -a "$SKELETON/etc" "$SKEL_BACKUP/etc"
-    [ -d "$SKELETON/ssh" ] && cp -a "$SKELETON/ssh" "$SKEL_BACKUP/ssh"
-    [ -d "$SKELETON/thread" ] && cp -a "$SKELETON/thread" "$SKEL_BACKUP/thread"
-    cleanup_skeleton() {
-        rsync -a --delete "$SKEL_BACKUP/etc/" "$SKELETON/etc/"
-        rsync -a --delete "$SKEL_BACKUP/ssh/" "$SKELETON/ssh/" 2>/dev/null
-        rsync -a --delete "$SKEL_BACKUP/thread/" "$SKELETON/thread/" 2>/dev/null
-        rm -rf "$SKEL_BACKUP"
-    }
-    trap cleanup_skeleton EXIT
+    # Work on a temporary copy of the skeleton — never modify the original
+    SKEL_WORK=$(mktemp -d)
+    cp -a "${FLASH_DIR}/skeleton/." "$SKEL_WORK/"
+    trap 'rm -rf "$SKEL_WORK"' EXIT
+    export SKELETON_DIR="$SKEL_WORK"
 
     SAVE_TAR=$(mktemp)
     # Save only user-configurable files (not init scripts or system files)
@@ -180,7 +171,7 @@ if [ "$COMPONENT" = "userdata" ]; then
         "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
 
     if [ -s "$SAVE_TAR" ]; then
-        tar xf "$SAVE_TAR" -C "$SKELETON" 2>/dev/null || true
+        tar xf "$SAVE_TAR" -C "$SKEL_WORK" 2>/dev/null || true
         echo "Gateway config saved."
         CONFIG_PRESERVED=true
     else

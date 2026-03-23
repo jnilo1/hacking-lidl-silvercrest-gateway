@@ -109,20 +109,14 @@ fi
 
 # --- build userdata ----------------------------------------------------------
 
-ETH0_CONF="${USERDATA_DIR}/skeleton/etc/eth0.conf"
-RADIO_CONF="${USERDATA_DIR}/skeleton/etc/radio.conf"
+# Work on a temporary copy of the skeleton — never modify the original
+SKEL_WORK=$(mktemp -d)
+cp -a "${USERDATA_DIR}/skeleton/." "$SKEL_WORK/"
+trap 'rm -rf "$SKEL_WORK"' EXIT
+export SKELETON_DIR="$SKEL_WORK"
 
-# Save skeleton before config injection, restore after build
-SKEL_BACKUP=$(mktemp -d)
-cp -a "${USERDATA_DIR}/skeleton/etc" "$SKEL_BACKUP/etc"
-cp -a "${USERDATA_DIR}/skeleton/ssh" "$SKEL_BACKUP/ssh" 2>/dev/null || true
-restore_skeleton() {
-    rm -rf "${USERDATA_DIR}/skeleton/etc" "${USERDATA_DIR}/skeleton/ssh"
-    cp -a "$SKEL_BACKUP/etc" "${USERDATA_DIR}/skeleton/etc"
-    [ -d "$SKEL_BACKUP/ssh" ] && cp -a "$SKEL_BACKUP/ssh" "${USERDATA_DIR}/skeleton/ssh"
-    rm -rf "$SKEL_BACKUP"
-}
-trap restore_skeleton EXIT
+ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
+RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
 
     # Network config — "skip" means config already injected by caller
     if [ "${NET_MODE:-}" = "skip" ]; then
@@ -190,8 +184,6 @@ trap restore_skeleton EXIT
     echo "Building userdata..."
     "${USERDATA_DIR}/build_userdata.sh" --jffs2-only
     echo ""
-
-    # Skeleton is restored by the EXIT trap (restore_skeleton)
 
 # --- check sizes -------------------------------------------------------------
 
