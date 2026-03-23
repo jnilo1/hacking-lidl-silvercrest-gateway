@@ -226,7 +226,7 @@ Search for **"Open Thread Border Router"** and add it. Enter the URL:
 
 In Home Assistant: **Settings → Devices & Services → Add Integration**
 
-Search for **"Matter (BETA)"** and add it. This is required to commission
+Search for **"Matter"** and add it. This is required to commission
 Matter devices. It should auto-detect the Matter Server if running, otherwise
 enter `ws://localhost:5580/ws`.
 

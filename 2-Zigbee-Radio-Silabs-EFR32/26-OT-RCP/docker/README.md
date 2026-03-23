@@ -140,7 +140,7 @@ Open http://localhost:8123, create your account, then add integrations
 (**Settings → Devices & Services → Add Integration**):
 
 1. **Open Thread Border Router** — URL: `http://localhost:8081`
-2. **Matter (BETA)** — auto-detects on `localhost:5580` (or manual: `ws://localhost:5580/ws`)
+2. **Matter** — auto-detects on `localhost:5580` (or manual: `ws://localhost:5580/ws`)
 
 #### 5. Set Thread Network as Preferred
 
@@ -220,7 +220,7 @@ Open http://localhost:8123, create your account, then add integrations:
 
 1. **Open Thread Border Router** — URL: `http://192.168.1.88:8081`
    (the gateway's IP, **not** localhost — OTBR runs on the gateway)
-2. **Matter (BETA)** — auto-detects on `localhost:5580`
+2. **Matter** — auto-detects on `localhost:5580`
 
 #### 5. Set Thread Network as Preferred
 
@@ -254,7 +254,7 @@ Before commissioning, verify in **Settings → Devices & Services**:
    **"Preferred network"** (click Configure to set it)
 2. **Open Thread Border Router** integration — pointing to the correct OTBR
    URL (use case 2: `http://localhost:8081`, use case 3: `http://<GATEWAY_IP>:8081`)
-3. **Matter (BETA)** integration — auto-detected or `ws://localhost:5580/ws`
+3. **Matter** integration — auto-detected or `ws://localhost:5580/ws`
 
 ### Via Home Assistant Companion App (recommended)
 
