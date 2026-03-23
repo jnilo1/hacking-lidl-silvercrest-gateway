@@ -183,7 +183,11 @@ curl -s http://192.168.1.88:8081/node | python3 -m json.tool
 
 #### 2. Form the Thread Network (first time only)
 
-On a fresh install, the Thread network is not yet created. Initialize it:
+> **If you use Home Assistant**, skip this step — HA creates the Thread network
+> automatically when you add the OTBR integration (step 4). Just proceed to
+> step 3.
+
+For standalone use (no HA), initialize the network manually:
 
 ```bash
 ssh root@192.168.1.88 "/userdata/usr/bin/ot-ctl dataset init new"
