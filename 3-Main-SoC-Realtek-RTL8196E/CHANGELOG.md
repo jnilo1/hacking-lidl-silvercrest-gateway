@@ -19,8 +19,11 @@ rootfs (33-), and userdata (34-).
   config (`CONFIG_JFFS2_ZLIB=y`, no rtime/lzo).
 - **Skeleton pollution after flash**: `flash_remote.sh` and
   `flash_install_rtl8196e.sh` injected gateway config (passwd, eth0.conf,
-  etc.) into the skeleton without cleanup. Added `rsync --delete` restore
-  via EXIT trap — skeleton is always restored to its original state.
+  etc.) into the skeleton directory, leaving residual files (dropbear keys,
+  radio.conf, thread/) between runs — causing cross-contamination when
+  flashing different devices. Refactored: all scripts now work on a
+  temporary copy of the skeleton via `SKELETON_DIR`; the original is
+  never modified.
 
 ### Improvements
 - **Bootloader V2.5**: auto-reboot after flashing all partition types
