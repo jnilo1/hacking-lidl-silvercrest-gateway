@@ -1,0 +1,23 @@
+--- a/drivers/leds/Kconfig
++++ b/drivers/leds/Kconfig
+@@ -372,6 +372,19 @@
+   defined as platform devices and/or OpenFirmware platform devices.
+   The code to use these bindings can be selected below.
+
++config LEDS_GPIO_PWM
++	tristate "LED Support for GPIO LEDs with software PWM brightness"
++	depends on LEDS_CLASS
++	depends on GPIOLIB
++	depends on HIGH_RES_TIMERS
++	help
++	  This option enables support for LEDs connected to GPIO outputs
++	  with software PWM brightness control (0-255).  Uses hrtimers to
++	  toggle the GPIO at ~1 kHz, giving flicker-free dimming on SoCs
++	  that lack a hardware PWM controller (e.g. Realtek RTL8196E).
++
++	  DTS compatible: "gpio-leds-pwm" (same child-node syntax as
++	  "gpio-leds").  All standard LED triggers work unchanged.
++
+ config LEDS_LP3944
+ 	tristate "LED Support for N.S. LP3944 (Fun Light) I2C chip"
+ 	depends on LEDS_CLASS

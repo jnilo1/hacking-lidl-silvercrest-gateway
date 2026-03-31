@@ -28,12 +28,19 @@
 	};
 
 	leds {
-		compatible = "gpio-leds";
+		compatible = "gpio-leds-pwm";
 
 		status-led {
 			label = "status";
 			gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
 			default-state = "off";
+		};
+
+		lan-led {
+			label = "lan";
+			gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
+			default-state = "off";
+			linux,default-trigger = "netdev";
 		};
 	};
 };
