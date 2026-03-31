@@ -22,25 +22,23 @@ firmware, glow at the same (fairly high) brightness.
 
 The vendor BSP is based on Linux 3.10 but carries over several
 drivers from the older 2.6.30 SDK (Ethernet, GPIO, ASIC layer).
-It handles the two LEDs through completely different subsystems:
 
-### STATUS LED — CPU-driven GPIO
+Both LEDs are managed through the switch ASIC LED controller, configured
+in `LEDMODE_DIRECT` mode 0 (Link / Activity).  A custom kernel driver
+(`leds-rtl8196e.c`) exposes a procfs interface:
 
-Controlled by the GPIO char driver (`rtl_gpio_9xD.c`).  The CPU
-toggles GPIO B3 directly via the `PABCD_DAT` register.  The pin
-multiplexer (`PIN_MUX_SEL2` bits [4:3]) is set to `0b00` (peripheral /
-LED function) by the ASIC init, but the LED behaviour is ultimately
-driven by userspace or kernel timers toggling the GPIO.
+    echo 1 > /proc/led1    # STATUS LED on
+    echo 0 > /proc/led1    # STATUS LED off
 
-### LAN LED — hardware ASIC LED controller
+### Switch ASIC LED controller
 
 The RTL8196E switch core contains a dedicated LED controller at
 register `LEDCREG` (0xBB804300).  During ASIC L2 init
 (`rtl865x_asicL2.c`), the vendor code configures it as:
 
 ```c
-REG32(PIN_MUX_SEL2) &= ~((3<<0) | ...);   // bits [1:0] = 00 → LED function
-REG32(LEDCREG) = (2<<20) | 0;              // LEDMODE_DIRECT, mode 0
+REG32(PIN_MUX_SEL2) &= ~((3<<0) | (3<<3) | ...);  // pins → LED function
+REG32(LEDCREG) = (2<<20) | 0;                       // LEDMODE_DIRECT, mode 0
 ```
 
 - **`LEDMODE_DIRECT`** (bits 21-20 = 0b10): each LED pin is dedicated
@@ -48,11 +46,11 @@ REG32(LEDCREG) = (2<<20) | 0;              // LEDMODE_DIRECT, mode 0
 - **Mode 0 = Link / Activity**: the LED is **solidly ON** whenever the
   Ethernet link is up, and blinks off briefly during traffic.
 
-This yields a high duty cycle (~95 % ON), so the LAN LED appears
-**bright and steady** — matching the STATUS LED.
-
-The ASIC drives the pin entirely in hardware; zero CPU involvement
-after the initial register write.
+Both pads (B2 for LAN, B3 for STATUS) are routed to the ASIC LED
+controller via pin mux (`PIN_MUX_SEL2` bits set to 0b00).  The ASIC
+drives the pins entirely in hardware with the same electrical
+characteristics, which is why both LEDs glow at the **same high
+brightness** — there is no GPIO toggling involved.
 
 ## Linux 5.10 port — the regression
 
