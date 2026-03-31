@@ -18,10 +18,11 @@ is **not** used as a GPIO — it is driven entirely by the ASIC hardware.
 Both LEDs share the same electrical characteristics and, on the stock
 firmware, glow at the same (fairly high) brightness.
 
-## Original Lidl/Tuya firmware (Linux 2.6.30, vendor SDK)
+## Original Lidl/Tuya firmware (Linux 3.10, vendor SDK)
 
-The vendor BSP handles the two LEDs through completely different
-subsystems:
+The vendor BSP is based on Linux 3.10 but carries over several
+drivers from the older 2.6.30 SDK (Ethernet, GPIO, ASIC layer).
+It handles the two LEDs through completely different subsystems:
 
 ### STATUS LED — CPU-driven GPIO
 
