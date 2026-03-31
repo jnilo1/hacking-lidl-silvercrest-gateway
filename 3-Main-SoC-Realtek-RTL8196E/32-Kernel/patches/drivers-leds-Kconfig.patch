@@ -1,9 +1,9 @@
---- a/drivers/leds/Kconfig
-+++ b/drivers/leds/Kconfig
-@@ -372,6 +372,19 @@
-   defined as platform devices and/or OpenFirmware platform devices.
-   The code to use these bindings can be selected below.
-
+--- a/drivers/leds/Kconfig	2026-03-31 18:25:00.866270385 +0200
++++ Kconfig	2026-03-31 18:25:00.869766775 +0200
+@@ -372,6 +372,20 @@
+ 	  defined as platform devices and/or OpenFirmware platform devices.
+ 	  The code to use these bindings can be selected below.
+ 
 +config LEDS_GPIO_PWM
 +	tristate "LED Support for GPIO LEDs with software PWM brightness"
 +	depends on LEDS_CLASS
