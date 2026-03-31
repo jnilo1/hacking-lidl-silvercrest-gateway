@@ -3,20 +3,24 @@
 ## Hardware
 
 The gateway has two front-panel LEDs, active-low, wired to RTL8196E
-pad B3 and B2 respectively:
+dual-function pads that can be routed to either the GPIO controller or
+the switch ASIC LED controller via the `PIN_MUX_SEL_2` register
+(0xB800_0044).
 
-| LED      | Label   | Pad | Function (original firmware)       | Driven by          |
-|----------|---------|-----|------------------------------------|---------------------|
-| STATUS   | status  | B3  | System / WPS indicator             | CPU via GPIO        |
-| LAN      | lan     | B2  | Ethernet link & activity           | Switch ASIC LED controller |
+Source: RTL8196E-CG datasheet Rev 1.0, Table 3 (Shared I/O Pin Mapping)
+and Table 36 (PIN_MUX_SEL_2).
 
-Pin B2 is a **dual-function pad**: it can be routed to either the GPIO
-controller or the switch ASIC LED controller, depending on `PIN_MUX_SEL2`
-bits [1:0] (0b00 = ASIC LED, 0b11 = GPIO).  In the original firmware it
-is **not** used as a GPIO — it is driven entirely by the ASIC hardware.
+| LED    | Label  | Pin | GPIO pad | LED function | PIN_MUX_SEL_2 bits | 00 = LED   | 11 = GPIO |
+|--------|--------|-----|----------|--------------|---------------------|------------|-----------|
+| LAN    | lan    | 117 | GPIOB[2] | LED_PORT0    | [1:0]               | LED_PORT0  | GPIOB2    |
+| STATUS | status | 114 | GPIOB[3] | LED_PORT1    | [4:3]               | LED_PORT1  | GPIOB3    |
 
-Both LEDs share the same electrical characteristics and, on the stock
-firmware, glow at the same (fairly high) brightness.
+Default value at reset: **10b (Reserved)** — neither LED nor GPIO mode.
+Software must explicitly write 00 (LED) or 11 (GPIO) after boot.
+
+In the original firmware, both pads are set to 00 (ASIC LED mode).
+Both LEDs share the same electrical characteristics and glow at the
+same (fairly high) brightness.
 
 ## Original Lidl/Tuya firmware (Linux 3.10, vendor SDK)
 
