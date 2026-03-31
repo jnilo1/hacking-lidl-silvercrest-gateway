@@ -21,6 +21,7 @@
 #include <linux/of.h>
 #include <linux/hrtimer.h>
 #include <linux/slab.h>
+#include <linux/math64.h>
 
 #define PWM_PERIOD_NS	(1000000)	/* 1 ms  = 1 kHz */
 #define MAX_BRIGHTNESS	255
@@ -56,14 +57,14 @@ static enum hrtimer_restart gpio_pwm_timer_fn(struct hrtimer *hr)
 		/* End of ON phase -> turn OFF, schedule OFF duration */
 		gpiod_set_value(led->gpiod, 0);
 		led->phase = true;
-		off_ns = (u64)PWM_PERIOD_NS * (MAX_BRIGHTNESS - bright)
-			 / MAX_BRIGHTNESS;
+		off_ns = div_u64((u64)PWM_PERIOD_NS * (MAX_BRIGHTNESS - bright),
+				 MAX_BRIGHTNESS);
 		hrtimer_forward_now(hr, ns_to_ktime(off_ns));
 	} else {
 		/* End of OFF phase -> turn ON, schedule ON duration */
 		gpiod_set_value(led->gpiod, 1);
 		led->phase = false;
-		on_ns = (u64)PWM_PERIOD_NS * bright / MAX_BRIGHTNESS;
+		on_ns = div_u64((u64)PWM_PERIOD_NS * bright, MAX_BRIGHTNESS);
 		hrtimer_forward_now(hr, ns_to_ktime(on_ns));
 	}
 
@@ -103,8 +104,9 @@ static void gpio_pwm_brightness_set(struct led_classdev *cdev,
 			gpiod_set_value(led->gpiod, 1);
 			led->pwm_active = true;
 			hrtimer_start(&led->timer,
-				      ns_to_ktime((u64)PWM_PERIOD_NS * value
-						  / MAX_BRIGHTNESS),
+				      ns_to_ktime(div_u64((u64)PWM_PERIOD_NS
+							  * value,
+							  MAX_BRIGHTNESS)),
 				      HRTIMER_MODE_REL);
 		}
 		/*
