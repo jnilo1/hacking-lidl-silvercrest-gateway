@@ -2,13 +2,18 @@
 
 ## Hardware
 
-The gateway has two front-panel LEDs, active-low, directly wired to
-RTL8196E GPIO pins:
+The gateway has two front-panel LEDs, active-low, wired to RTL8196E
+pad B3 and B2 respectively:
 
-| LED      | Label   | GPIO   | Pin    | Function (original firmware) |
-|----------|---------|--------|--------|------------------------------|
-| STATUS   | status  | B3     | GPIO 11| System / WPS indicator       |
-| LAN      | lan     | B2     | GPIO 10| Ethernet link & activity     |
+| LED      | Label   | Pad | Function (original firmware)       | Driven by          |
+|----------|---------|-----|------------------------------------|---------------------|
+| STATUS   | status  | B3  | System / WPS indicator             | CPU via GPIO        |
+| LAN      | lan     | B2  | Ethernet link & activity           | Switch ASIC LED controller |
+
+Pin B2 is a **dual-function pad**: it can be routed to either the GPIO
+controller or the switch ASIC LED controller, depending on `PIN_MUX_SEL2`
+bits [1:0] (0b00 = ASIC LED, 0b11 = GPIO).  In the original firmware it
+is **not** used as a GPIO — it is driven entirely by the ASIC hardware.
 
 Both LEDs share the same electrical characteristics and, on the stock
 firmware, glow at the same (fairly high) brightness.
