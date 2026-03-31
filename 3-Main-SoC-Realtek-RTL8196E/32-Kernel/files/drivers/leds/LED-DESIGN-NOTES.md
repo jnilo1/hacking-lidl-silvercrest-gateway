@@ -23,12 +23,26 @@ firmware, glow at the same (fairly high) brightness.
 The vendor BSP is based on Linux 3.10 but carries over several
 drivers from the older 2.6.30 SDK (Ethernet, GPIO, ASIC layer).
 
-Both LEDs are managed through the switch ASIC LED controller, configured
-in `LEDMODE_DIRECT` mode 0 (Link / Activity).  A custom kernel driver
-(`leds-rtl8196e.c`) exposes a procfs interface:
+Both LED pads (B2 and B3) are routed to the switch ASIC LED controller
+by the SDK's ASIC L2 init (`rtl865x_asicL2.c` line 6041):
+
+```c
+REG32(PIN_MUX_SEL2) &= ~((3<<0) | (3<<3) | ...);
+//                        ^^^^^^   ^^^^^^
+//                        B2/LED0  B3/LED1  → both set to 0b00 = ASIC LED mode
+```
+
+A custom Tuya-specific kernel driver (`leds-rtl8196e.c` — not part of
+the open Realtek SDK, source not available) exposed a procfs interface
+for the STATUS LED:
 
     echo 1 > /proc/led1    # STATUS LED on
     echo 0 > /proc/led1    # STATUS LED off
+
+This driver most likely controlled LED_PORT1 (B3) through the ASIC LED
+controller registers rather than through GPIO, since the pin mux routes
+B3 to the ASIC.  This is consistent with both LEDs having identical
+brightness in the stock firmware.
 
 ### Switch ASIC LED controller
 
