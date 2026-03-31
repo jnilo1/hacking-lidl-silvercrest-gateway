@@ -299,18 +299,26 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 * that drive EFR32 nRST LOW, preventing the Zigbee radio from
 	 * operating.
 	 *
-	 * Bits [4:3] are the UART1 TXD mux field — set to 01 (UART1)
-	 * rather than clearing to 00, matching the vendor BSP sequence.
+	 * PIN_MUX_SEL (0xB800_0040):
+	 *   Bits [4:3] = 01 (UART1 TXD), not 00, matching vendor BSP.
+	 *   Clear bits [9:8], [11:10], [15] for MII mode.
+	 *
+	 * PIN_MUX_SEL_2 (0xB800_0044):
+	 *   Clear bits [7:6], [10:9], [13:12], [17:15] for MII/nRST.
+	 *   Preserve bits [1:0] and [4:3] — these control GPIOB2/B3
+	 *   (LAN and status LEDs), managed by the gpio-leds-pwm driver.
 	 */
 	if (hw->syscon) {
 		/* PIN_MUX_SEL: bits [4:3]=01 (UART1), clear bits 8-10,15 */
 		regmap_update_bits(hw->syscon, 0x40,
 				   (3 << 8) | (3 << 10) | (3 << 3) | (1 << 15),
 				   (1 << 3));
-		/* PIN_MUX_SEL2: clear MII/nRST bits, preserve bits [4:3]
-		 * (GPIO 11 / Port B3 — status LED via gpio-leds) */
+		/* PIN_MUX_SEL_2 (0xB800_0044): clear MII/nRST-related bits.
+		 * Preserve bits [1:0] (GPIOB2 / LED_PORT0 — LAN LED)
+		 * and bits [4:3] (GPIOB3 / LED_PORT1 — status LED),
+		 * both managed by the gpio-leds-pwm driver. */
 		regmap_update_bits(hw->syscon, 0x44,
-				   (3 << 0) | (3 << 6) | (3 << 9) |
+				   (3 << 6) | (3 << 9) |
 				   (3 << 12) | (7 << 15),
 				   0);
 	}
