@@ -197,6 +197,28 @@ nano ~/.ssh/authorized_keys
 # Paste your public key (from ~/.ssh/id_rsa.pub on your PC)
 ```
 
+#### 7. LED Brightness
+
+The gateway supports a dim mode for nighttime use. Edit the configuration:
+
+```bash
+nano /etc/leds.conf
+```
+
+Set `MODE=dim` or `MODE=bright` (default):
+```
+MODE=dim
+```
+
+Apply immediately without rebooting:
+```bash
+/userdata/etc/init.d/S11leds start
+```
+
+The setting is applied automatically at every boot. In dim mode, both the LAN
+and STATUS LEDs run at reduced intensity. `serialgateway` and `otbr-agent`
+read the mode automatically when they turn the STATUS LED on.
+
 ### Connect to Zigbee2MQTT
 
 In your Zigbee2MQTT configuration:

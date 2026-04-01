@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# S11leds — Apply LED brightness mode from /userdata/etc/leds.conf
+#
+# Configuration file format:
+#   MODE=dim      Reduced brightness for nighttime use
+#   MODE=bright   Full brightness (default if no config file)
+#
+# The LAN LED brightness is controlled via the Ethernet ASIC LED mode
+# (LEDCREG register: direct mode = bright, scan mode = dim).
+# The STATUS LED brightness is controlled via software PWM (0-255).
+#
+# serialgateway and S70otbr read led_mode automatically and adjust the
+# STATUS LED accordingly — this script only needs to set led_mode.
+#
+# J. Nilo - April 2026
+#
+
+CONF="/userdata/etc/leds.conf"
+LED_MODE="/sys/class/net/eth0/led_mode"
+STATUS_LED="/sys/class/leds/status/brightness"
+
+# Default: bright
+MODE="bright"
+
+if [ -f "$CONF" ]; then
+    . "$CONF"
+fi
+
+case "$1" in
+    start)
+        if [ ! -f "$LED_MODE" ]; then
+            exit 0
+        fi
+        case "$MODE" in
+            dim)
+                echo dim > "$LED_MODE"
+                echo 60 > "$STATUS_LED" 2>/dev/null
+                echo "LEDs: dim mode"
+                ;;
+            *)
+                echo bright > "$LED_MODE"
+                echo 255 > "$STATUS_LED" 2>/dev/null
+                echo "LEDs: bright mode"
+                ;;
+        esac
+        ;;
+    stop)
+        ;;
+    *)
+        echo "Usage: $0 {start|stop}"
+        exit 1
+        ;;
+esac

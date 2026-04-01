@@ -17,6 +17,12 @@ rootfs (33-), and userdata (34-).
   brightness control (0-255) via hrtimers at 1 kHz. Replaces `gpio-leds`
   for the STATUS LED. At brightness 0 or 255 the timer is stopped (zero
   CPU overhead). Designed for SoCs without hardware PWM.
+- **`S11leds` init script**: persistent LED mode via `/userdata/etc/leds.conf`.
+  Set `MODE=dim` or `MODE=bright` (default). Applied at boot right after
+  network init, before serialgateway/otbr-agent start.
+- **Config preservation**: `leds.conf` added to `SAVE_FILES` in
+  `flash_install_rtl8196e.sh` and `flash_remote.sh` — LED preference
+  survives firmware upgrades.
 
 ### Bug fixes
 - **LAN LED dim after Linux 5.10 port**: the LAN LED is hardwired to

@@ -165,7 +165,7 @@ if [ "$COMPONENT" = "userdata" ]; then
 
     SAVE_TAR=$(mktemp)
     # Save only user-configurable files (not init scripts or system files)
-    SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
+    SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
     # shellcheck disable=SC2086
     ssh $SSH_OPTS "${SSH_USER}@${LINUX_IP}" \
         "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
