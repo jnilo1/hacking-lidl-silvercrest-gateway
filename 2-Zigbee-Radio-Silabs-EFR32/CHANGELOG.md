@@ -4,6 +4,20 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.1.3] - 2026-04-01
+
+### 26-OT-RCP (OTBR on gateway)
+- **IPv6 mDNS fix (`accept_ra=2`)**: `S70otbr` enabled IPv6 forwarding
+  which silently disabled Router Advertisement processing. The gateway
+  never acquired a GUA via SLAAC, so mDNS only announced the IPv4
+  address. Fixed: set `accept_ra=2` on eth0 after enabling forwarding. (#77)
+- **Channel Manager enabled**: `otbr-agent` now built with
+  `OT_CHANNEL_MANAGER` and `OT_CHANNEL_MONITOR` (+14 KB). Enables
+  `ot-ctl channel manager` for graceful channel changes across the
+  Thread mesh.
+
+---
+
 ## [2.1.1] - 2026-03-22
 
 ### flash_efr32.sh
