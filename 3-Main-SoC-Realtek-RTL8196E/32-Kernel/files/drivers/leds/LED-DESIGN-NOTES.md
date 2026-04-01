@@ -120,28 +120,30 @@ compatibility with standard LED triggers (`netdev`, `heartbeat`,
 ### Approach
 
 A platform driver (`compatible = "gpio-leds-pwm"`) that extends the
-`gpio-leds` model with a **software PWM layer** based on `hrtimer`:
+`gpio-leds` model with a **software PWM layer** based on `timer_list`:
 
-- Each LED gets one hrtimer running at ~1 kHz (period = 1 ms).
+- Each LED gets one kernel timer firing once per jiffy (250 Hz at HZ=250).
+- PWM period = 4 jiffies → 62.5 Hz (above flicker threshold).
 - `brightness_set(N)` adjusts the duty cycle to `N / 255`.
 - At `N = 0` or `N = 255` the timer is stopped and the GPIO is held
   steady — no interrupt overhead when full-on or full-off.
 - Existing triggers call `brightness_set()` as usual; the PWM layer is
   transparent.
 
+Note: an earlier version used `hrtimer` at 1 kHz, but this caused LX bus
+contention with UART during sustained Xmodem transfers (EFR32 flash).
+The jiffies-based `timer_list` runs in softirq context and does not
+interfere with UART interrupt handling.
+
 ### Requirements
 
-- **`CONFIG_HIGH_RES_TIMERS=y`**: needed for sub-millisecond hrtimer
-  precision.  The RTL8196E timer hardware already supports one-shot
-  mode (`CLOCK_EVT_FEAT_ONESHOT` in `timer-rtl819x.c`), so enabling
-  this option is safe.
 - **`CONFIG_LEDS_GPIO_PWM=y`**: replaces `CONFIG_LEDS_GPIO`.
 
 ### CPU overhead
 
-On the RLX4181 (Lexra MIPS) at ~400 MHz, two LEDs toggling at 1 kHz
-produce 2000 hrtimer interrupts per second.  Each interrupt is a single
-GPIO register read-modify-write (~65 cycles).  Total: **~0.03 % CPU**.
+On the RLX4181 (Lexra MIPS) at ~400 MHz, one LED toggling at 250 Hz
+produces 250 timer callbacks per second.  Each callback is a single
+GPIO register read-modify-write (~65 cycles).  Total: **~0.004 % CPU**.
 
 ### User interface
 
