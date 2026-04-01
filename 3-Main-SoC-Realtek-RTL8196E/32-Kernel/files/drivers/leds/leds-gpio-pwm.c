@@ -193,6 +193,8 @@ static int gpio_pwm_leds_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, leds);
 
+	dev_info(dev, "%d LED(s) registered\n", count);
+
 	return 0;
 }
 
