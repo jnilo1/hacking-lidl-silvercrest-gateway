@@ -36,12 +36,9 @@
 			default-state = "off";
 		};
 
-		lan-led {
-			label = "lan";
-			gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
-			default-state = "off";
-			linux,default-trigger = "netdev";
-		};
+		/* LAN LED (GPIO B2 / LED_PORT0) is hardwired to the switch
+		 * ASIC LED output — GPIO has no physical effect on this LED.
+		 * It is controlled via LEDCREG in the Ethernet driver. */
 	};
 };
 

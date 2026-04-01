@@ -72,6 +72,10 @@ static inline u32 rtl8196e_readl(u32 reg)
 #define TRXRDY     (1 << 0)
 #define MEMCR      (0x34 + SWMISC_BASE)
 
+/* LED controller (switch ASIC) */
+#define LEDCREG        (0x0100 + SWMISC_BASE)  /* 0xBB804300 */
+#define LEDMODE_DIRECT (2 << 20)               /* Bits 21:20 = 10: direct mode */
+
 /* VLAN / netif mapping */
 #define VCR0      (0x00 + 0x4A00 + SWCORE_BASE)
 #define PVCR0      (0x08 + 0x4A00 + SWCORE_BASE)

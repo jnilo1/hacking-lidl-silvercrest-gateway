@@ -85,7 +85,16 @@ start)
                 *) led=0 ;;
             esac
             if [ "$led" != "$last_led" ]; then
-                echo "$led" > "$LED"
+                if [ "$led" = "1" ]; then
+                    # Match STATUS LED brightness to LAN LED mode
+                    mode=$(cat /sys/class/net/eth0/led_mode 2>/dev/null)
+                    case "$mode" in
+                        dim*) echo 60 > "$LED" ;;
+                        *)    echo 255 > "$LED" ;;
+                    esac
+                else
+                    echo 0 > "$LED"
+                fi
                 last_led="$led"
             fi
             # Dataset sync — only write to flash when dataset actually changes

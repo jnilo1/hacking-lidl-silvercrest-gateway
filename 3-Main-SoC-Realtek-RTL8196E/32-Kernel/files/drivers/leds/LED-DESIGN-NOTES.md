@@ -174,12 +174,7 @@ leds {
         default-state = "off";
     };
 
-    lan-led {
-        label = "lan";
-        gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
-        default-state = "off";
-        linux,default-trigger = "netdev";
-    };
+    /* LAN LED is hardwired to switch ASIC — see section below */
 };
 ```
 
@@ -191,3 +186,59 @@ leds {
 | `LED-DESIGN-NOTES.md`              | This document                          |
 | `patches/drivers-leds-Kconfig.patch`| Adds `CONFIG_LEDS_GPIO_PWM` to Kconfig |
 | `patches/drivers-leds-Makefile.patch`| Adds build rule to Makefile           |
+
+## LAN LED — hardwired to switch ASIC (hardware discovery)
+
+### The problem
+
+Despite the datasheet documenting GPIO B2 (pin 117) as a dual-function
+pad switchable between LED_PORT0 and GPIOB2 via `PIN_MUX_SEL_2` bits
+[1:0], **testing revealed that GPIO has no physical effect on the LAN
+LED**.
+
+Evidence:
+- `PIN_MUX_SEL_2` set to `0b11` (GPIO mode) for bits [1:0] ✓
+- `PABCD_CNR` bit 10 = 0 (GPIO function) ✓
+- `PABCD_DIR` bit 10 = 1 (output) ✓
+- `PABCD_DAT` bit 10 toggles correctly with `gpiod_set_value()` ✓
+- Direct `devmem` writes to the DATA register also toggle bit 10 ✓
+- **The physical LED does not change.**
+
+Conversely, writing to `LEDCREG` (0xBB80_4300) immediately changes the
+LAN LED behaviour:
+- `LEDCREG = 0x0020_0000` (LEDMODE_DIRECT) → full brightness,
+  link/activity
+- `LEDCREG = 0x0000_0000` (scan mode) → dim blinking (~15 % of full)
+
+The STATUS LED (GPIO B3) works correctly via GPIO in both GPIO and
+ASIC LED modes.
+
+### Conclusion
+
+The LAN LED is physically connected to the switch ASIC's LED_PORT0
+output, bypassing the pin mux.  This is likely a PCB design choice by
+Tuya/Lidl.  Only `LEDCREG` controls it.
+
+### Dual brightness mode
+
+To allow users to reduce LED brightness (e.g. for nighttime use), the
+Ethernet driver exposes a sysfs attribute:
+
+```sh
+# Full brightness (default after boot)
+echo bright > /sys/class/net/eth0/led_mode
+echo 255 > /sys/class/leds/status/brightness
+
+# Dim mode (matched visually)
+echo dim > /sys/class/net/eth0/led_mode
+echo 60 > /sys/class/leds/status/brightness
+```
+
+- **bright**: `LEDCREG = LEDMODE_DIRECT`, STATUS PWM = 255
+- **dim**: `LEDCREG = 0` (scan mode), STATUS PWM = 60
+
+The value 60 was determined experimentally to match the perceived
+brightness of the LAN LED in scan mode.
+
+`serialgateway` and `S70otbr` read `/sys/class/net/eth0/led_mode` to
+automatically set the correct STATUS LED brightness when turning it on.

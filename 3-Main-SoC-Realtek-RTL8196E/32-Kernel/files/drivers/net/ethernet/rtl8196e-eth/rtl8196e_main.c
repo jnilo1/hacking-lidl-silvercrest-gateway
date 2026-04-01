@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.0"
+#define RTL8196E_DRV_VERSION "2.1"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -508,6 +508,41 @@ static const struct ethtool_ops rtl8196e_ethtool_ops = {
 	.get_ethtool_stats = rtl8196e_get_ethtool_stats,
 };
 
+/*
+ * led_mode sysfs attribute: "bright" (default) or "dim".
+ *
+ * "bright": LEDCREG = LEDMODE_DIRECT (LAN LED full brightness, link/activity).
+ * "dim":    LEDCREG = 0 (LAN LED scan mode, low brightness).
+ *
+ * The LAN LED is hardwired to the switch ASIC LED_PORT0 output;
+ * GPIO has no physical effect.  Only LEDCREG controls it.
+ * The STATUS LED (GPIO-driven) should be set to 255 or 60 to match.
+ */
+static ssize_t led_mode_show(struct device *dev,
+			     struct device_attribute *attr, char *buf)
+{
+	u32 val = rtl8196e_readl(LEDCREG);
+
+	return sysfs_emit(buf, "%s\n",
+			  (val & LEDMODE_DIRECT) ? "bright" : "dim");
+}
+
+static ssize_t led_mode_store(struct device *dev,
+			      struct device_attribute *attr,
+			      const char *buf, size_t count)
+{
+	if (sysfs_streq(buf, "bright"))
+		rtl8196e_writel(LEDMODE_DIRECT, LEDCREG);
+	else if (sysfs_streq(buf, "dim"))
+		rtl8196e_writel(0, LEDCREG);
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+static DEVICE_ATTR_RW(led_mode);
+
 /* Platform probe: allocate netdev, parse DT, create ring, request IRQ, register. */
 static int rtl8196e_probe(struct platform_device *pdev)
 {
@@ -587,6 +622,8 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_irq;
 
+	device_create_file(&ndev->dev, &dev_attr_led_mode);
+
 	dev_info(&pdev->dev, "rtl8196e-eth v" RTL8196E_DRV_VERSION " (J. Nilo)\n");
 	return 0;
 
@@ -611,6 +648,7 @@ static int rtl8196e_remove(struct platform_device *pdev)
 
 	priv = netdev_priv(ndev);
 
+	device_remove_file(&ndev->dev, &dev_attr_led_mode);
 	unregister_netdev(ndev);
 
 	irq = platform_get_irq(pdev, 0);

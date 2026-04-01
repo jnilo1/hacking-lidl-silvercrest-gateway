@@ -12,6 +12,9 @@
     - Validated port range (1-65535) and baud rate
     - Added daemon mode (default), -D for foreground
 
+  v2.1 improvements:
+    - STATUS LED brightness adapts to led_mode (bright=255, dim=60)
+
 */
 #include <sys/socket.h>
 #include <sys/select.h>
@@ -61,11 +64,33 @@ int sockatmark(int fd)
 
 static void _set_status_led(bool is_on)
 {
-    int fd = open("/sys/class/leds/status/brightness", O_WRONLY);
-    if (fd < 0) {
-        return;
+    int fd;
+    const char *val;
+    int len;
+
+    if (!is_on) {
+        val = "0\n"; len = 2;
+    } else {
+        /* Match STATUS LED brightness to LAN LED mode:
+         * "bright" (LEDCREG direct) -> 255, "dim" (scan) -> 60. */
+        char mode[8] = "";
+        fd = open("/sys/class/net/eth0/led_mode", O_RDONLY);
+        if (fd >= 0) {
+            int n = read(fd, mode, sizeof(mode) - 1);
+            if (n > 0) mode[n] = '\0';
+            close(fd);
+        }
+        if (mode[0] == 'd') {
+            val = "60\n"; len = 3;
+        } else {
+            val = "255\n"; len = 4;
+        }
     }
-    write(fd, (is_on) ? "1\n" : "0\n", 2);
+
+    fd = open("/sys/class/leds/status/brightness", O_WRONLY);
+    if (fd < 0)
+        return;
+    write(fd, val, len);
     close(fd);
 }
 

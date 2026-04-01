@@ -343,6 +343,12 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	rtl8196e_writel(FULL_RST, SIRR);
 	mdelay(300);
 
+	/* Enable ASIC LED controller in direct mode (link/activity).
+	 * The LAN LED (LED_PORT0) is hardwired to the switch ASIC output,
+	 * not to the GPIO pad — GPIO control has no physical effect.
+	 * LEDMODE_DIRECT gives full-brightness link/activity indication. */
+	rtl8196e_writel(LEDMODE_DIRECT, LEDCREG);
+
 	/* Map all RX queues to ring 0 (safe default) */
 	rtl8196e_writel(0, CPUQDM0);
 	rtl8196e_writel(0, CPUQDM2);

@@ -6,6 +6,40 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.3] - 2026-04-01
+
+### New features
+- **LED dual brightness mode**: new `led_mode` sysfs attribute
+  (`/sys/class/net/eth0/led_mode`) allows switching between `bright`
+  (default) and `dim` modes. In `dim` mode, both LEDs run at reduced
+  intensity for nighttime use.
+- **`leds-gpio-pwm` driver**: new GPIO LED driver with software PWM
+  brightness control (0-255) via hrtimers at 1 kHz. Replaces `gpio-leds`
+  for the STATUS LED. At brightness 0 or 255 the timer is stopped (zero
+  CPU overhead). Designed for SoCs without hardware PWM.
+
+### Bug fixes
+- **LAN LED dim after Linux 5.10 port**: the LAN LED is hardwired to
+  the switch ASIC LED_PORT0 output, not to the GPIO pad. GPIO control
+  had no physical effect. Fixed: Ethernet driver now configures LEDCREG
+  in LEDMODE_DIRECT after FULL_RST, restoring full-brightness
+  link/activity indication as in the stock firmware.
+- **STATUS LED invisible with serialgateway**: `_set_status_led()` wrote
+  `"1\n"` to brightness. With `gpio-leds` (max=1) this was full-on, but
+  with `leds-gpio-pwm` (max=255) it was 0.4% duty cycle — invisible.
+  Fixed: serialgateway v2.1 reads `led_mode` and writes 255 (bright) or
+  60 (dim). Same fix applied to S70otbr LED daemon.
+
+### Technical notes
+- **Hardware discovery**: PIN_MUX_SEL_2 bits [1:0] = 11 (GPIO mode)
+  has no effect on the LAN LED — the PCB routes it directly to the
+  switch ASIC LED output, bypassing the pin mux. Confirmed by register
+  analysis: GPIO DATA register toggles correctly but LED does not
+  respond; LEDCREG changes immediately affect the LED.
+- Ethernet driver bumped to v2.1, serialgateway bumped to v2.1.
+
+---
+
 ## [2.1.2] - 2026-03-23
 
 ### Bug fixes
