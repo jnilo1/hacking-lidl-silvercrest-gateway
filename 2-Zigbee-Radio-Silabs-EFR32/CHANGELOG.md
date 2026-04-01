@@ -14,7 +14,11 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 - **Channel Manager enabled**: `otbr-agent` now built with
   `OT_CHANNEL_MANAGER` and `OT_CHANNEL_MONITOR` (+14 KB). Enables
   `ot-ctl channel manager` for graceful channel changes across the
-  Thread mesh.
+  Thread mesh. Channel change also works from the HA Thread UI.
+- **HA REST API compatibility**: `build_otbr.sh` patches ot-br-posix
+  REST API JSON keys from camelCase back to PascalCase at build time.
+  Fixes "Failed to call OTBR API" in Home Assistant's Thread integration
+  (`python-otbr-api` < 2.9.0 expects PascalCase).
 
 ---
 
