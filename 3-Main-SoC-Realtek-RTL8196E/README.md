@@ -210,8 +210,14 @@ Set `MODE=dim` or `MODE=bright` (default):
 MODE=dim
 ```
 
-Apply immediately without rebooting:
+Switch between modes without rebooting:
 ```bash
+# Switch to dim
+echo MODE=dim > /userdata/etc/leds.conf
+/userdata/etc/init.d/S11leds start
+
+# Switch to bright
+echo MODE=bright > /userdata/etc/leds.conf
 /userdata/etc/init.d/S11leds start
 ```
 
