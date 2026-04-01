@@ -79,12 +79,12 @@ the two LEDs were unified under the standard `gpio-leds` framework:
 leds {
     compatible = "gpio-leds";
     status-led { gpios = <&gpio0 11 GPIO_ACTIVE_LOW>; };
-    lan-led    { gpios = <&gpio0 10 GPIO_ACTIVE_LOW>;
-                 linux,default-trigger = "netdev"; };
 };
 ```
 
-This introduced two changes for the LAN LED:
+This introduced two changes for the LAN LED (initially both LEDs were
+declared as gpio-leds, but GPIO 10 has no effect on the LAN LED — see
+"Hardware discovery" section below):
 
 1. **Pin mux switched to GPIO mode.**  The GPIO driver
    (`gpio-rtl819x.c`) sets `PIN_MUX_SEL2` bits [1:0] to `0b11` when
@@ -147,20 +147,17 @@ GPIO register read-modify-write (~65 cycles).  Total: **~0.004 % CPU**.
 
 ### User interface
 
-Standard Linux LED sysfs — no custom tooling required:
+Standard Linux LED sysfs for the STATUS LED (the LAN LED is controlled
+via `led_mode`, not via this driver — see "Dual brightness mode" below):
 
 ```sh
-# Set LAN LED to 25 % brightness
-echo 64 > /sys/class/leds/lan/brightness
-
-# Set STATUS LED to 25 % (matching LAN)
+# Set STATUS LED to 25 % brightness
 echo 64 > /sys/class/leds/status/brightness
 
 # Full brightness (no PWM overhead)
 echo 255 > /sys/class/leds/status/brightness
 
 # Triggers work unchanged
-echo netdev > /sys/class/leds/lan/trigger
 echo heartbeat > /sys/class/leds/status/trigger
 ```
 
@@ -224,20 +221,22 @@ Tuya/Lidl.  Only `LEDCREG` controls it.
 ### Dual brightness mode
 
 To allow users to reduce LED brightness (e.g. for nighttime use), the
-Ethernet driver exposes a sysfs attribute:
+`S11leds` init script reads `/userdata/etc/leds.conf` and configures
+both LEDs at boot:
 
 ```sh
-# Full brightness (default after boot)
-echo bright > /sys/class/net/eth0/led_mode
-echo 255 > /sys/class/leds/status/brightness
+# Switch to dim
+echo MODE=dim > /userdata/etc/leds.conf
+/userdata/etc/init.d/S11leds start
 
-# Dim mode (matched visually)
-echo dim > /sys/class/net/eth0/led_mode
-echo 60 > /sys/class/leds/status/brightness
+# Switch to bright
+echo MODE=bright > /userdata/etc/leds.conf
+/userdata/etc/init.d/S11leds start
 ```
 
-- **bright**: `LEDCREG = LEDMODE_DIRECT`, STATUS PWM = 255
-- **dim**: `LEDCREG = 0` (scan mode), STATUS PWM = 60
+Internally, `S11leds` sets:
+- **bright**: `led_mode = bright` → `LEDCREG = LEDMODE_DIRECT`, STATUS PWM = 255
+- **dim**: `led_mode = dim` → `LEDCREG = 0` (scan mode), STATUS PWM = 60
 
 The value 60 was determined experimentally to match the perceived
 brightness of the LAN LED in scan mode.
