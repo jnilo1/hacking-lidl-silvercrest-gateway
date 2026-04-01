@@ -153,6 +153,8 @@ cmake "$SOURCE_DIR" \
     -DOTBR_BORDER_AGENT=ON \
     -DOT_POSIX_RCP_HDLC_BUS=ON \
     -DOT_FIREWALL=OFF \
+    -DOT_CHANNEL_MANAGER=ON \
+    -DOT_CHANNEL_MONITOR=ON \
     -DOT_POSIX_SETTINGS_PATH=\"/userdata/thread\" \
     "$@"
 
@@ -184,7 +186,8 @@ echo "    - Border Agent (Thread commissioning)"
 echo "    - mDNS/DNS-SD (OpenThread built-in)"
 echo "    - SRP Advertising Proxy"
 echo "    - DNS-SD Discovery Proxy"
-echo "    - Border Routing"
+echo "    - Border Routing
+    - Channel Manager / Monitor"
 echo ""
 echo "To install on gateway:"
 echo "  cat build/src/agent/otbr-agent | ssh root@GATEWAY_IP:8888 'cat > /userdata/usr/bin/otbr-agent && chmod +x /userdata/usr/bin/otbr-agent'"

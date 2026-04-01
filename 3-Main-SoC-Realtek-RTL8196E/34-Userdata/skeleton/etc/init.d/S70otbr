@@ -49,6 +49,9 @@ start)
 
     # Enable IPv6 forwarding (required for border routing)
     echo 1 > /proc/sys/net/ipv6/conf/all/forwarding
+    # Accept Router Advertisements even with forwarding enabled (default drops
+    # to 0 when forwarding=1), so the gateway can acquire a GUA via SLAAC
+    echo 2 > /proc/sys/net/ipv6/conf/eth0/accept_ra
 
     $OTBR_BIN \
         -d 4 \
