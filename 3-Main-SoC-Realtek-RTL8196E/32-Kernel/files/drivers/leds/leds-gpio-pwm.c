@@ -2,12 +2,16 @@
 /*
  * GPIO LED driver with software PWM brightness control
  *
- * Drop-in replacement for leds-gpio that adds true brightness control
- * (0-255) via high-frequency software PWM using hrtimers.  When
- * brightness == max the GPIO is held steady (no PWM overhead).
+ * Drop-in replacement for leds-gpio that adds brightness control (0-255)
+ * via low-frequency software PWM using kernel timer_list (jiffies-based).
+ * At brightness 0 or max the timer is stopped (zero CPU overhead).
  *
- * Designed for SoCs without hardware PWM (e.g. Realtek RTL8196E).
- * CPU cost: ~0.03 % per LED at 1 kHz on a 400 MHz MIPS core.
+ * Uses HZ-based timers (250 Hz on RTL8196E) instead of hrtimers to avoid
+ * hard-IRQ interference with UART transfers.
+ *
+ * PWM period = PWM_PERIOD_JIFFIES jiffies. With HZ=250 and period=4:
+ *   PWM frequency = 62.5 Hz (above flicker threshold).
+ *   Brightness 60/255 ≈ 1/4 duty cycle (25%).
  *
  * DTS compatible: "gpio-leds-pwm"  (same child-node syntax as gpio-leds)
  *
@@ -19,56 +23,52 @@
 #include <linux/gpio/consumer.h>
 #include <linux/leds.h>
 #include <linux/of.h>
-#include <linux/hrtimer.h>
+#include <linux/timer.h>
 #include <linux/slab.h>
-#include <linux/math64.h>
 
-#define PWM_PERIOD_NS	(1000000)	/* 1 ms  = 1 kHz */
-#define MAX_BRIGHTNESS	255
+#define PWM_PERIOD_JIFFIES	4	/* 4 jiffies = 16ms @ HZ=250 → 62.5 Hz */
+#define MAX_BRIGHTNESS		255
 
 struct gpio_pwm_led {
 	struct led_classdev	cdev;
 	struct gpio_desc	*gpiod;
-	struct hrtimer		timer;
+	struct timer_list	timer;
 	unsigned int		brightness;	/* current target 0-255    */
-	bool			phase;		/* 0 = ON phase, 1 = OFF   */
-	bool			pwm_active;	/* hrtimer currently runs   */
+	unsigned int		counter;	/* position in PWM cycle   */
+	bool			pwm_active;	/* timer currently runs    */
 	spinlock_t		lock;
 };
 
-/* ----- hrtimer callback ------------------------------------------------- */
+/* ----- timer callback --------------------------------------------------- */
 
-static enum hrtimer_restart gpio_pwm_timer_fn(struct hrtimer *hr)
+static void gpio_pwm_timer_fn(struct timer_list *t)
 {
-	struct gpio_pwm_led *led = container_of(hr, struct gpio_pwm_led, timer);
-	unsigned int bright;
+	struct gpio_pwm_led *led = from_timer(led, t, timer);
+	unsigned int bright, threshold;
 	unsigned long flags;
-	ktime_t on_ns, off_ns;
 
 	spin_lock_irqsave(&led->lock, flags);
 	bright = led->brightness;
 	spin_unlock_irqrestore(&led->lock, flags);
 
 	/* Should not happen, but guard anyway */
-	if (bright == 0 || bright >= MAX_BRIGHTNESS)
-		return HRTIMER_NORESTART;
-
-	if (!led->phase) {
-		/* End of ON phase -> turn OFF, schedule OFF duration */
-		gpiod_set_value(led->gpiod, 0);
-		led->phase = true;
-		off_ns = div_u64((u64)PWM_PERIOD_NS * (MAX_BRIGHTNESS - bright),
-				 MAX_BRIGHTNESS);
-		hrtimer_forward_now(hr, ns_to_ktime(off_ns));
-	} else {
-		/* End of OFF phase -> turn ON, schedule ON duration */
-		gpiod_set_value(led->gpiod, 1);
-		led->phase = false;
-		on_ns = div_u64((u64)PWM_PERIOD_NS * bright, MAX_BRIGHTNESS);
-		hrtimer_forward_now(hr, ns_to_ktime(on_ns));
+	if (bright == 0 || bright >= MAX_BRIGHTNESS) {
+		led->pwm_active = false;
+		return;
 	}
 
-	return HRTIMER_RESTART;
+	/* threshold = number of jiffies ON per period */
+	threshold = (bright * PWM_PERIOD_JIFFIES + MAX_BRIGHTNESS / 2) / MAX_BRIGHTNESS;
+	if (threshold == 0)
+		threshold = 1;
+
+	gpiod_set_value(led->gpiod, led->counter < threshold ? 1 : 0);
+
+	led->counter++;
+	if (led->counter >= PWM_PERIOD_JIFFIES)
+		led->counter = 0;
+
+	mod_timer(&led->timer, jiffies + 1);
 }
 
 /* ----- brightness_set --------------------------------------------------- */
@@ -86,28 +86,23 @@ static void gpio_pwm_brightness_set(struct led_classdev *cdev,
 	if (value == 0) {
 		/* Full OFF -- stop PWM, force GPIO low */
 		if (led->pwm_active) {
-			hrtimer_cancel(&led->timer);
+			del_timer_sync(&led->timer);
 			led->pwm_active = false;
 		}
 		gpiod_set_value(led->gpiod, 0);
 	} else if (value >= MAX_BRIGHTNESS) {
 		/* Full ON -- stop PWM, force GPIO high */
 		if (led->pwm_active) {
-			hrtimer_cancel(&led->timer);
+			del_timer_sync(&led->timer);
 			led->pwm_active = false;
 		}
 		gpiod_set_value(led->gpiod, 1);
 	} else {
 		/* Intermediate -- start PWM if not already running */
 		if (!led->pwm_active) {
-			led->phase = false;
-			gpiod_set_value(led->gpiod, 1);
+			led->counter = 0;
 			led->pwm_active = true;
-			hrtimer_start(&led->timer,
-				      ns_to_ktime(div_u64((u64)PWM_PERIOD_NS
-							  * value,
-							  MAX_BRIGHTNESS)),
-				      HRTIMER_MODE_REL);
+			mod_timer(&led->timer, jiffies + 1);
 		}
 		/*
 		 * If already running the new duty cycle is picked up on the
@@ -134,8 +129,7 @@ static int gpio_pwm_led_probe_child(struct device *dev,
 
 	spin_lock_init(&led->lock);
 
-	hrtimer_init(&led->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
-	led->timer.function = gpio_pwm_timer_fn;
+	timer_setup(&led->timer, gpio_pwm_timer_fn, 0);
 
 	led->cdev.max_brightness = MAX_BRIGHTNESS;
 	led->cdev.brightness_set = gpio_pwm_brightness_set;

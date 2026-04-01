@@ -14,12 +14,15 @@ rootfs (33-), and userdata (34-).
   (default) and `dim` modes. In `dim` mode, both LEDs run at reduced
   intensity for nighttime use.
 - **`leds-gpio-pwm` driver**: new GPIO LED driver with software PWM
-  brightness control (0-255) via hrtimers at 1 kHz. Replaces `gpio-leds`
-  for the STATUS LED. At brightness 0 or 255 the timer is stopped (zero
-  CPU overhead). Designed for SoCs without hardware PWM.
+  brightness control (0-255) via kernel timer_list (250 Hz). Replaces
+  `gpio-leds` for the STATUS LED. At brightness 0 or 255 the timer is
+  stopped (zero CPU overhead). Designed for SoCs without hardware PWM.
 - **`S11leds` init script**: persistent LED mode via `/userdata/etc/leds.conf`.
   Set `MODE=dim` or `MODE=bright` (default). Applied at boot right after
   network init, before serialgateway/otbr-agent start.
+- **`flash_efr32.sh` PWM guard**: disables status LED PWM before Xmodem
+  transfer to avoid bus contention between GPIO writes and UART on the
+  shared LX bus. Brightness is restored on reboot via S11leds.
 - **Config preservation**: `leds.conf` added to `SAVE_FILES` in
   `flash_install_rtl8196e.sh` and `flash_remote.sh` — LED preference
   survives firmware upgrades.

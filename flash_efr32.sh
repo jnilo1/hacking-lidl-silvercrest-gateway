@@ -149,6 +149,8 @@ echo ""
 echo "Connecting to ${GW_IP} — preparing serial port for flashing..."
 for i in $(seq 1 "$SSH_RETRIES"); do
     if $SSH "
+        # Stop LED PWM timer (interferes with UART during Xmodem transfer)
+        echo 0 > /sys/class/leds/status/brightness 2>/dev/null || true
         # Stop any daemon holding the serial port
         killall otbr-agent 2>/dev/null || true
         killall cpcd 2>/dev/null || true
