@@ -6,6 +6,23 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.4] - 2026-04-02
+
+### New features
+- **LED off mode**: `MODE=off` in `leds.conf` completely disables both LEDs
+  (LAN + STATUS). The LAN LED is turned off via the `DIRECTLCR` register
+  (0xBB804314) which controls the switch ASIC LED output scale — setting it
+  to 0 fully disables the LED output with no residual glow.
+- **`led_mode` sysfs**: now supports `bright`, `dim`, and `off`.
+  `serialgateway` v2.2 and `S70otbr` respect `off` mode (STATUS LED stays
+  at 0 even when the radio is connected).
+
+### Changes
+- **rtl8196e-eth v2.2**: added `DIRECTLCR` register support for true LED off.
+- **serialgateway v2.2**: respects `led_mode=off` (keeps STATUS LED at 0).
+
+---
+
 ## [2.1.3] - 2026-04-01
 
 ### New features

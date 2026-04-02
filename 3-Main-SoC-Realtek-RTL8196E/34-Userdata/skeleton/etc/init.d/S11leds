@@ -3,6 +3,7 @@
 # S11leds — Apply LED brightness mode from /userdata/etc/leds.conf
 #
 # Configuration file format:
+#   MODE=off      All LEDs off (saves ~20 mA)
 #   MODE=dim      Reduced brightness for nighttime use
 #   MODE=bright   Full brightness (default if no config file)
 #
@@ -33,6 +34,11 @@ case "$1" in
             exit 0
         fi
         case "$MODE" in
+            off)
+                echo off > "$LED_MODE"
+                echo 0 > "$STATUS_LED" 2>/dev/null
+                echo "LEDs: off"
+                ;;
             dim)
                 echo dim > "$LED_MODE"
                 echo 60 > "$STATUS_LED" 2>/dev/null

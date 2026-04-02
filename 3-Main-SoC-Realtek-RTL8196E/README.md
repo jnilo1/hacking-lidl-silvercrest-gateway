@@ -199,31 +199,31 @@ nano ~/.ssh/authorized_keys
 
 #### 7. LED Brightness
 
-The gateway supports a dim mode for nighttime use. Edit the configuration:
+The gateway supports three LED modes. Set the mode in `/userdata/etc/leds.conf`:
 
+| Mode | LAN LED | STATUS LED |
+|------|---------|------------|
+| `bright` | Full brightness (default) | 255 |
+| `dim` | Reduced (~15%) | 60 |
+| `off` | Completely off | 0 |
+
+Switch modes without rebooting:
 ```bash
-nano /etc/leds.conf
-```
+# All LEDs off
+echo MODE=off > /userdata/etc/leds.conf
+/userdata/etc/init.d/S11leds start
 
-Set `MODE=dim` or `MODE=bright` (default):
-```
-MODE=dim
-```
-
-Switch between modes without rebooting:
-```bash
-# Switch to dim
+# Dim mode
 echo MODE=dim > /userdata/etc/leds.conf
 /userdata/etc/init.d/S11leds start
 
-# Switch to bright
+# Full brightness (default)
 echo MODE=bright > /userdata/etc/leds.conf
 /userdata/etc/init.d/S11leds start
 ```
 
-The setting is applied automatically at every boot. In dim mode, both the LAN
-and STATUS LEDs run at reduced intensity. `serialgateway` and `otbr-agent`
-read the mode automatically when they turn the STATUS LED on.
+The setting is applied automatically at every boot. `serialgateway` and
+`otbr-agent` read the mode automatically when they turn the STATUS LED on.
 
 ### Connect to Zigbee2MQTT
 

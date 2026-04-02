@@ -92,6 +92,7 @@ start)
                     # Match STATUS LED brightness to LAN LED mode
                     mode=$(cat /sys/class/net/eth0/led_mode 2>/dev/null)
                     case "$mode" in
+                        off*) echo 0 > "$LED" ;;
                         dim*) echo 60 > "$LED" ;;
                         *)    echo 255 > "$LED" ;;
                     esac

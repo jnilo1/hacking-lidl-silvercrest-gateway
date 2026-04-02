@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.1"
+#define RTL8196E_DRV_VERSION "2.2"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -509,34 +509,41 @@ static const struct ethtool_ops rtl8196e_ethtool_ops = {
 };
 
 /*
- * led_mode sysfs attribute: "bright" (default) or "dim".
+ * led_mode sysfs attribute: "bright" (default), "dim", or "off".
  *
- * "bright": LEDCREG = LEDMODE_DIRECT (LAN LED full brightness, link/activity).
- * "dim":    LEDCREG = 0 (LAN LED scan mode, low brightness).
+ * "bright": LEDCREG = LEDMODE_DIRECT, DIRECTLCR = default (full brightness).
+ * "dim":    LEDCREG = 0 (scan mode, ~15% brightness).
+ * "off":    DIRECTLCR = 0 (completely off — disables LED output in HW).
  *
  * The LAN LED is hardwired to the switch ASIC LED_PORT0 output;
- * GPIO has no physical effect.  Only LEDCREG controls it.
- * The STATUS LED (GPIO-driven) should be set to 255 or 60 to match.
+ * GPIO has no physical effect.  Only LEDCREG/DIRECTLCR control it.
+ * The STATUS LED (GPIO-driven) should be set to 255, 60, or 0 to match.
  */
 static ssize_t led_mode_show(struct device *dev,
 			     struct device_attribute *attr, char *buf)
 {
-	u32 val = rtl8196e_readl(LEDCREG);
+	if (rtl8196e_readl(DIRECTLCR) == 0)
+		return sysfs_emit(buf, "off\n");
 
 	return sysfs_emit(buf, "%s\n",
-			  (val & LEDMODE_DIRECT) ? "bright" : "dim");
+			  (rtl8196e_readl(LEDCREG) & LEDMODE_DIRECT) ? "bright" : "dim");
 }
 
 static ssize_t led_mode_store(struct device *dev,
 			      struct device_attribute *attr,
 			      const char *buf, size_t count)
 {
-	if (sysfs_streq(buf, "bright"))
+	if (sysfs_streq(buf, "bright")) {
+		rtl8196e_writel(DIRECTLCR_DEFAULT, DIRECTLCR);
 		rtl8196e_writel(LEDMODE_DIRECT, LEDCREG);
-	else if (sysfs_streq(buf, "dim"))
+	} else if (sysfs_streq(buf, "dim")) {
+		rtl8196e_writel(DIRECTLCR_DEFAULT, DIRECTLCR);
 		rtl8196e_writel(0, LEDCREG);
-	else
+	} else if (sysfs_streq(buf, "off")) {
+		rtl8196e_writel(0, DIRECTLCR);
+	} else {
 		return -EINVAL;
+	}
 
 	return count;
 }

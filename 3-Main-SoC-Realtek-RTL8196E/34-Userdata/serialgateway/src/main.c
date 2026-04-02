@@ -15,6 +15,9 @@
   v2.1 improvements:
     - STATUS LED brightness adapts to led_mode (bright=255, dim=60)
 
+  v2.2 improvements:
+    - Respect led_mode=off (keep STATUS LED at 0)
+
 */
 #include <sys/socket.h>
 #include <sys/select.h>
@@ -80,7 +83,9 @@ static void _set_status_led(bool is_on)
             if (n > 0) mode[n] = '\0';
             close(fd);
         }
-        if (mode[0] == 'd') {
+        if (mode[0] == 'o') {
+            val = "0\n"; len = 2;
+        } else if (mode[0] == 'd') {
             val = "60\n"; len = 3;
         } else {
             val = "255\n"; len = 4;

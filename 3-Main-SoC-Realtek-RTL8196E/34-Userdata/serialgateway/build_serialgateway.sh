@@ -29,7 +29,7 @@ SOURCE_DIR="${SCRIPT_DIR}/src"
 INSTALL_DIR="${USERDATA_PART}/skeleton/usr/bin"
 
 # Version info - local revision
-VERSION="2.1"
+VERSION="2.2"
 
 # Check if sources exist (local revised version)
 if [ ! -f "${SOURCE_DIR}/main.c" ]; then
