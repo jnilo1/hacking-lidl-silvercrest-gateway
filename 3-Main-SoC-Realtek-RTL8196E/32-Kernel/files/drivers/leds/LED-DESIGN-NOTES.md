@@ -151,8 +151,8 @@ Standard Linux LED sysfs for the STATUS LED (the LAN LED is controlled
 via `led_mode`, not via this driver — see "Dual brightness mode" below):
 
 ```sh
-# Set STATUS LED to 25 % brightness
-echo 64 > /sys/class/leds/status/brightness
+# Set STATUS LED to dim (matches LAN LED scan mode)
+echo 60 > /sys/class/leds/status/brightness
 
 # Full brightness (no PWM overhead)
 echo 255 > /sys/class/leds/status/brightness
@@ -207,7 +207,7 @@ Conversely, writing to `LEDCREG` (0xBB80_4300) immediately changes the
 LAN LED behaviour:
 - `LEDCREG = 0x0020_0000` (LEDMODE_DIRECT) → full brightness,
   link/activity
-- `LEDCREG = 0x0000_0000` (scan mode) → dim blinking (~15 % of full)
+- `LEDCREG = 0x0000_0000` (scan mode) → dim blinking (~25 % of full)
 
 The STATUS LED (GPIO B3) works correctly via GPIO in both GPIO and
 ASIC LED modes.
@@ -224,7 +224,7 @@ The `DIRECTLCR` register (0xBB80_4314, physical 0x1B80_4314) controls
 the LED output scale in direct mode.  Its reset value is `0x1003FFFF`.
 
 Setting `DIRECTLCR = 0` completely disables the LED output — no residual
-glow, unlike scan mode which still produces ~15% brightness.  Restoring
+glow, unlike scan mode which still produces ~25% perceived brightness.  Restoring
 `DIRECTLCR = 0x1003FFFF` re-enables the LED.
 
 This was discovered empirically (not documented in the SDK).  Bit 8

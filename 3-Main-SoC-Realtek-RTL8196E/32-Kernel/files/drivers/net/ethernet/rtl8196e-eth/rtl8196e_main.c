@@ -512,7 +512,7 @@ static const struct ethtool_ops rtl8196e_ethtool_ops = {
  * led_mode sysfs attribute: "bright" (default), "dim", or "off".
  *
  * "bright": LEDCREG = LEDMODE_DIRECT, DIRECTLCR = default (full brightness).
- * "dim":    LEDCREG = 0 (scan mode, ~15% brightness).
+ * "dim":    LEDCREG = 0 (scan mode, ~25% brightness).
  * "off":    DIRECTLCR = 0 (completely off — disables LED output in HW).
  *
  * The LAN LED is hardwired to the switch ASIC LED_PORT0 output;

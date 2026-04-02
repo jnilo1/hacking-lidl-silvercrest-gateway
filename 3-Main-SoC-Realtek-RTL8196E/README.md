@@ -204,7 +204,7 @@ The gateway supports three LED modes. Set the mode in `/userdata/etc/leds.conf`:
 | Mode | LAN LED | STATUS LED |
 |------|---------|------------|
 | `bright` | Full brightness (default) | 255 |
-| `dim` | Reduced (~15%) | 60 |
+| `dim` | Reduced (~25%) | 60 |
 | `off` | Completely off | 0 |
 
 Switch modes without rebooting:
