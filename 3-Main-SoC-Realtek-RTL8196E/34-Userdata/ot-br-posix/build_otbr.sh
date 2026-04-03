@@ -50,41 +50,10 @@ else
     git submodule update --init --recursive
 fi
 
-# Patch REST API JSON keys from camelCase to PascalCase.
-# ot-br-posix main switched to camelCase (commit 2e8ccf2b, Sep 2025) but
-# Home Assistant's python-otbr-api < 2.9.0 expects PascalCase.
-JSON_CPP="${SOURCE_DIR}/src/rest/json.cpp"
-if [ -f "$JSON_CPP" ] && grep -q '"activeTimestamp"' "$JSON_CPP"; then
-    echo "==> Patching REST JSON keys to PascalCase (HA compatibility)..."
-    sed -i \
-        -e 's/"activeTimestamp"/"ActiveTimestamp"/g' \
-        -e 's/"networkKey"/"NetworkKey"/g' \
-        -e 's/"networkName"/"NetworkName"/g' \
-        -e 's/"extPanId"/"ExtPanId"/g' \
-        -e 's/"meshLocalPrefix"/"MeshLocalPrefix"/g' \
-        -e 's/"panId"/"PanId"/g' \
-        -e 's/"channel"/"Channel"/g' \
-        -e 's/"channelMask"/"ChannelMask"/g' \
-        -e 's/"pskc"/"PSKc"/g' \
-        -e 's/"securityPolicy"/"SecurityPolicy"/g' \
-        -e 's/"seconds"/"Seconds"/g' \
-        -e 's/"ticks"/"Ticks"/g' \
-        -e 's/"authoritative"/"Authoritative"/g' \
-        -e 's/"rotationTime"/"RotationTime"/g' \
-        -e 's/"obtainNetworkKey"/"ObtainNetworkKey"/g' \
-        -e 's/"nativeCommissioning"/"NativeCommissioning"/g' \
-        -e 's/"externalCommissioning"/"ExternalCommissioning"/g' \
-        -e 's/"commercialCommissioning"/"CommercialCommissioning"/g' \
-        -e 's/"autonomousEnrollment"/"AutonomousEnrollment"/g' \
-        -e 's/"networkKeyProvisioning"/"NetworkKeyProvisioning"/g' \
-        -e 's/"tobleLink"/"TobleLink"/g' \
-        -e 's/"routers"/"Routers"/g' \
-        -e 's/"nonCcmRouters"/"NonCcmRouters"/g' \
-        -e 's/"pendingTimestamp"/"PendingTimestamp"/g' \
-        -e 's/"delay"/"Delay"/g' \
-        -e 's/"activeDataset"/"ActiveDataset"/g' \
-        "$JSON_CPP"
-fi
+# Note: The PascalCase REST API patch (camelCase → PascalCase) that was here
+# has been removed. ot-br-posix switched to camelCase (commit 2e8ccf2b, Sep 2025)
+# and python-otbr-api >= 2.9.0 (shipped with HA 2026.4+) now expects camelCase.
+# The patch was needed for HA < 2026.4 but is now counter-productive.
 
 # Lexra toolchain (musl 1.2.5)
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"

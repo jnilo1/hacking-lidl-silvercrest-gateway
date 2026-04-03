@@ -4,6 +4,17 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [2.1.5] - 2026-04-03
+
+### 26-OT-RCP (OTBR on gateway)
+- **⚠️ HA REST API: PascalCase patch removed**. The camelCase→PascalCase
+  patch from v2.1.3 has been removed. `otbr-agent` now returns native
+  camelCase, compatible with HA ≥ 2026.4 (`python-otbr-api` ≥ 2.9.0).
+  Users on HA < 2026.4 must keep the v2.1.3/v2.1.4 `otbr-agent` binary.
+  See RTL8196E CHANGELOG for the full compatibility matrix.
+
+---
+
 ## [2.1.3] - 2026-04-01
 
 ### 26-OT-RCP (OTBR on gateway)

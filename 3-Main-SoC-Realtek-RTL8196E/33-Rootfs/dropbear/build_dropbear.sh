@@ -64,18 +64,21 @@ rm -f "$INSTALL_DIR"/dropbear*
   --disable-utmpx \
   --disable-wtmpx
 
-make PROGRAMS="dropbearmulti dropbear dropbearkey" MULTI=1
+make PROGRAMS="dropbearmulti dropbear dropbearkey dbclient scp" MULTI=1 SCPPROGRESS=1
 ${STRIP} dropbearmulti
 
 mkdir -p "$INSTALL_DIR"
 cp dropbearmulti "$INSTALL_DIR"/
 ln -sf dropbearmulti "$INSTALL_DIR"/dropbear
 ln -sf dropbearmulti "$INSTALL_DIR"/dropbearkey
+ln -sf dropbearmulti "$INSTALL_DIR"/dbclient
+ln -sf dropbearmulti "$INSTALL_DIR"/scp
 
 echo ""
 echo "📊 Build summary:"
 echo "  • Version: ${VERSION}"
 echo "  • Binary: $(ls -lh dropbearmulti | awk '{print $5}')"
+echo "  • Programs: dropbear, dropbearkey, dbclient, scp"
 echo "  • Installation: ${INSTALL_DIR}"
 echo ""
-echo "✅ dropbear & dropbearkey installed in $INSTALL_DIR"
+echo "✅ dropbear, dropbearkey, dbclient & scp installed in $INSTALL_DIR"
