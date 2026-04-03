@@ -90,15 +90,13 @@ if [ $MISSING -eq 1 ]; then
     exit 1
 fi
 
-# Rebuild rootfs if missing (skeleton is in git, rootfs.bin is not)
-if [ ! -f "$ROOTFS_IMG" ]; then
-    log "rootfs.bin not found — rebuilding..."
-    ROOTFS_DIR="${RTL_DIR}/33-Rootfs"
-    if [ "$QUIET" -eq 1 ]; then
-        "${ROOTFS_DIR}/build_rootfs.sh" >/dev/null
-    else
-        "${ROOTFS_DIR}/build_rootfs.sh"
-    fi
+# Always rebuild rootfs from skeleton to avoid stale images
+log "Building rootfs.bin from skeleton..."
+ROOTFS_DIR="${RTL_DIR}/33-Rootfs"
+if [ "$QUIET" -eq 1 ]; then
+    "${ROOTFS_DIR}/build_rootfs.sh" >/dev/null
+else
+    "${ROOTFS_DIR}/build_rootfs.sh"
 fi
 
 # --- build userdata ----------------------------------------------------------

@@ -30,10 +30,9 @@ if ! command -v nc >/dev/null 2>&1; then
     exit 1
 fi
 
-if [ ! -f "$IMAGE" ]; then
-    echo "rootfs.bin not found — building it..."
-    "${SCRIPT_DIR}/build_rootfs.sh" -q
-fi
+# Always rebuild rootfs from skeleton to avoid stale images
+echo "Building rootfs.bin from skeleton..."
+"${SCRIPT_DIR}/build_rootfs.sh" -q
 
 SIZE=$(stat -c%s "$IMAGE" 2>/dev/null || stat -f%z "$IMAGE")
 
