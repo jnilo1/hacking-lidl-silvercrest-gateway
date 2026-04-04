@@ -6,32 +6,27 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [2.1.5] - 2026-04-03
+## [2.1.5] - 2026-04-04
 
-### ⚠️ Breaking: OTBR REST API — Home Assistant compatibility
+### OTBR REST API — PascalCase kept
 
-The PascalCase REST API patch introduced in v2.1.3 has been **removed** from
-`build_otbr.sh`. The `otbr-agent` binary is rebuilt without it.
-
-| otbr-agent version | HA < 2026.4 | HA ≥ 2026.4 |
-|---|---|---|
-| v2.1.3 / v2.1.4 (PascalCase patch) | ✅ OK | ❌ "Failed to call OTBR API" |
-| **v2.1.5+** (camelCase native) | ❌ "Failed to call OTBR API" | ✅ OK |
-
-**Why?** Upstream `ot-br-posix` switched to camelCase (commit 2e8ccf2b,
-Sep 2025). Home Assistant 2026.4 ships `python-otbr-api` ≥ 2.9.0 which
-expects camelCase — the old PascalCase patch is now counter-productive.
-
-**Who is affected?** Only Thread/OTBR users. Zigbee users are not impacted.
-
-**What to do?** Update HA and `otbr-agent` together. If you must stay on
-HA < 2026.4, keep the v2.1.3 or v2.1.4 `otbr-agent` binary.
+The PascalCase REST API patch is **kept**. `python-otbr-api` 2.9.0
+(HA 2026.4) accepts camelCase in GET responses but still sends PascalCase
+in PUT requests — upstream `otbr-agent` (camelCase) rejects them.
+PascalCase `otbr-agent` works with all HA versions.
+See [python-otbr-api#238](https://github.com/home-assistant-libs/python-otbr-api/issues/238).
 
 ### New features
 - **Dropbear SCP & SSH client**: `scp` and `dbclient` (SSH client) added to
   the dropbear multi-call binary. Enables `scp` file transfers to/from the
   gateway and outbound SSH connections via `dbclient`. Progress bar included
   (`SCPPROGRESS`). Binary size: 473 KB → 555 KB (+82 KB).
+
+### Fixes
+- **rootfs.bin always rebuilt**: `build_fullflash.sh` and `flash_rootfs.sh`
+  now always rebuild `rootfs.bin` from the skeleton, like `userdata.bin`.
+  Prevents stale images from being flashed after an upgrade.
+- **version/motd bumped** to v2.1.5.
 
 ---
 
