@@ -71,7 +71,28 @@ nav:
   - Home: README.md
   - Hardware: 0-Hardware/README.md
   - Build environment: 1-Build-Environment/README.md
-  - Zigbee Radio (EFR32): 2-Zigbee-Radio-Silabs-EFR32/README.md
+  - Zigbee Radio (EFR32):
+    - 2-Zigbee-Radio-Silabs-EFR32/README.md
+    - EZSP Reference: 2-Zigbee-Radio-Silabs-EFR32/20-EZSP-Reference/README.md
+    - Simplicity Studio: 2-Zigbee-Radio-Silabs-EFR32/21-Simplicity-Studio/README.md
+    - Backup, Flash & Restore: 2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md
+    - Bootloader (UART/Xmodem):
+      - 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/README.md
+      - Firmware: 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/README.md
+    - NCP-UART-HW (EmberZNet): 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/README.md
+    - RCP-UART-HW (Multi-PAN):
+      - 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/README.md
+      - EmberZNet 8.x guide: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/EMBERZNET-8.x-GUIDE.md
+      - cpcd: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/cpcd/README.md
+      - Docker: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/README.md
+      - RCP stack: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/README.md
+      - zigbeed 7.5.1: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-7.5.1/README.md
+      - zigbeed 8.2.2: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-8.2.2/README.md
+    - OT-RCP (OpenThread):
+      - 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/README.md
+      - Thread & Matter primer: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/THREAD-MATTER-PRIMER.md
+      - Docker: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/README.md
+    - Router: 2-Zigbee-Radio-Silabs-EFR32/27-Router/README.md
   - Main SoC (RTL8196E):
     - 3-Main-SoC-Realtek-RTL8196E/README.md
     - Backup & Restore: 3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md
@@ -104,7 +125,6 @@ exclude_docs: |
   **/build/
   **/Output/
   **/out/
-  **/firmware/
   **/linux-*/
   **/busybox-*/
   **/dropbear*/
@@ -113,8 +133,17 @@ exclude_docs: |
   **/ncurses*/
   **/nano-*/
   1-Build-Environment/11-realtek-tools/
-  2-Zigbee-Radio-Silabs-EFR32/2[0-9]-*/
+  # Per-section build artifacts and source dirs (sub-section READMEs are kept)
+  2-Zigbee-Radio-Silabs-EFR32/*/build/
+  2-Zigbee-Radio-Silabs-EFR32/*/patches/*.patch
+  2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/docker/z2m/
+  2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/z2m/
   2-Zigbee-Radio-Silabs-EFR32/CHANGELOG.md
+  # Dev note — internal technical memo
+  2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/MEMO-universal-silabs-flasher.md
+  # Dev notes — patches/ READMEs document the build process for contributors
+  2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/patches/README.md
+  2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md
   3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-*/
   3-Main-SoC-Realtek-RTL8196E/32-Kernel/files/
   3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches/

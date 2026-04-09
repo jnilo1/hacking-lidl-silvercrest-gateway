@@ -31,7 +31,7 @@ The result is a clean, maintainable kernel that can be easily updated to newer 5
 |----------------|-------------|
 | [`patches/`](patches/) | Patches to apply on vanilla Linux 5.10.246 |
 | [`files/`](files/) | New files to add to the kernel tree (Realtek platform support) |
-| [`config-5.10.246-realtek.txt`](files/config-5.10.246-realtek.txt) | Kernel configuration |
+| [`config-5.10.246-realtek.txt`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files/config-5.10.246-realtek.txt) | Kernel configuration |
 | [`build_kernel.sh`](build_kernel.sh) | Build script |
 
 ## Building
