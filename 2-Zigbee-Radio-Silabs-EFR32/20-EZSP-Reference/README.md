@@ -95,7 +95,7 @@ ______________________________________________________________________
 - 🔸 **EZSP V13**:\
   Built from Simplicity Studio Gecko SDK 4.4.x, they provide the most
   recent EMberZNet 7.4.x versions available at the time of this writing.
-  See [NCP-UART-HW section](../24-NCP-UART-HW/firmware)
+  See [NCP-UART-HW section](../24-NCP-UART-HW/README.md)
 
 ______________________________________________________________________
 

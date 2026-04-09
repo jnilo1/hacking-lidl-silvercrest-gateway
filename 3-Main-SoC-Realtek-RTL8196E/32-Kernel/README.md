@@ -29,10 +29,10 @@ The result is a clean, maintainable kernel that can be easily updated to newer 5
 
 | Directory/File | Description |
 |----------------|-------------|
-| [`patches/`](patches/) | Patches to apply on vanilla Linux 5.10.246 |
-| [`files/`](files/) | New files to add to the kernel tree (Realtek platform support) |
+| [`patches/`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches) | Patches to apply on vanilla Linux 5.10.246 |
+| [`files/`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files) | New files to add to the kernel tree (Realtek platform support) |
 | [`config-5.10.246-realtek.txt`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files/config-5.10.246-realtek.txt) | Kernel configuration |
-| [`build_kernel.sh`](build_kernel.sh) | Build script |
+| [`build_kernel.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build script |
 
 ## Building
 
@@ -57,7 +57,7 @@ The script will:
 4. Compile the kernel
 5. Create `kernel.img` ready to flash
 
-**Requirements**: [Toolchain](../../1-Build-Environment/10-lexra-toolchain/) must be built first
+**Requirements**: [Toolchain](../../1-Build-Environment/README.md) must be built first
 
 ## Output
 

@@ -6,7 +6,7 @@ Migrate a Lidl/Silvercrest Zigbee Gateway from Tuya firmware to custom Linux sys
 >
 > Before any migration, make a complete backup of all original partitions (bootloader, kernel, rootfs, userdata). This allows full recovery if something goes wrong.
 >
-> See **[30-Backup-Restore](../30-Backup-Restore/)** for detailed backup procedures.
+> See **[30-Backup-Restore](../30-Backup-Restore/README.md)** for detailed backup procedures.
 
 ## Flash Scripts
 
@@ -159,4 +159,4 @@ The script:
 ## Rollback
 
 To restore original firmware, flash the backed-up images from the `<RealTek>` prompt.
-See **[30-Backup-Restore](../30-Backup-Restore/)** for detailed restore procedures.
+See **[30-Backup-Restore](../30-Backup-Restore/README.md)** for detailed restore procedures.

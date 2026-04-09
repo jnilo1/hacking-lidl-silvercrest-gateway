@@ -23,14 +23,14 @@ docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
 
 | Directory | Description |
 |-----------|-------------|
-| [20-EZSP-Reference](./20-EZSP-Reference/) | Introduction to EZSP protocol and EmberZNet stack |
-| [21-Simplicity-Studio](./21-Simplicity-Studio/) | Build your own firmware with Silabs IDE |
-| [22-Backup-Flash-Restore](./22-Backup-Flash-Restore/) | Backup, flash, and restore the Zigbee chip firmware |
-| [23-Bootloader-UART-Xmodem](./23-Bootloader-UART-Xmodem/) | Flash firmware via UART using Gecko bootloader |
-| [24-NCP-UART-HW](./24-NCP-UART-HW/) | NCP firmware for Zigbee2MQTT and ZHA |
-| [25-RCP-UART-HW](./25-RCP-UART-HW/) | RCP firmware with cpcd + zigbeed for multiprotocol support |
-| [26-OT-RCP](./26-OT-RCP/) | OpenThread RCP firmware for zigbee-on-host or Thread/Matter |
-| [27-Router](./27-Router/) | Zigbee 3.0 Router SoC firmware to extend mesh network |
+| [20-EZSP-Reference](./20-EZSP-Reference/README.md) | Introduction to EZSP protocol and EmberZNet stack |
+| [21-Simplicity-Studio](./21-Simplicity-Studio/README.md) | Build your own firmware with Silabs IDE |
+| [22-Backup-Flash-Restore](./22-Backup-Flash-Restore/README.md) | Backup, flash, and restore the Zigbee chip firmware |
+| [23-Bootloader-UART-Xmodem](./23-Bootloader-UART-Xmodem/README.md) | Flash firmware via UART using Gecko bootloader |
+| [24-NCP-UART-HW](./24-NCP-UART-HW/README.md) | NCP firmware for Zigbee2MQTT and ZHA |
+| [25-RCP-UART-HW](./25-RCP-UART-HW/README.md) | RCP firmware with cpcd + zigbeed for multiprotocol support |
+| [26-OT-RCP](./26-OT-RCP/README.md) | OpenThread RCP firmware for zigbee-on-host or Thread/Matter |
+| [27-Router](./27-Router/README.md) | Zigbee 3.0 Router SoC firmware to extend mesh network |
 
 ## Firmware: NCP (Network Co-Processor)
 

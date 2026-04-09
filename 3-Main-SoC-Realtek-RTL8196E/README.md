@@ -59,9 +59,9 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 
 | Image | File | Size | Description |
 |-------|------|------|-------------|
-| Kernel | [`32-Kernel/kernel.img`](./32-Kernel/) | ~1 MB | Linux 5.10 kernel |
-| Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/) | ~900 KB | Base system (BusyBox, Dropbear) |
-| Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/) | ~12 MB | Apps (nano, serialgateway) |
+| Kernel | [`32-Kernel/kernel.img`](./32-Kernel/README.md) | ~1 MB | Linux 5.10 kernel |
+| Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/README.md) | ~900 KB | Base system (BusyBox, Dropbear) |
+| Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/README.md) | ~12 MB | Apps (nano, serialgateway) |
 
 > **Note:** The userdata image is 12 MB because it must fill the entire JFFS2 partition to avoid filesystem errors at boot. The actual data is only ~1 MB.
 
@@ -244,7 +244,7 @@ Replace `<GATEWAY_IP>` with the IP assigned to your gateway (check via DHCP or s
 
 ### Prerequisites
 
-First, set up the build environment. See [1-Build-Environment](../1-Build-Environment/) for detailed instructions.
+First, set up the build environment. See [1-Build-Environment](../1-Build-Environment/README.md) for detailed instructions.
 
 **Quick setup:**
 
@@ -300,12 +300,12 @@ After building, flash the images as described in [Option 1](#flashing).
 
 | Directory | Description |
 |-----------|-------------|
-| [1-Build-Environment](../1-Build-Environment/) | Toolchain, tools, and build setup |
-| [30-Backup-Restore](./30-Backup-Restore/) | Backup and restore the flash memory |
-| [31-Bootloader](./31-Bootloader/) | Realtek bootloader analysis |
-| [32-Kernel](./32-Kernel/) | Linux 5.10 kernel with patches |
-| [33-Rootfs](./33-Rootfs/) | Root filesystem (BusyBox, Dropbear SSH) |
-| [34-Userdata](./34-Userdata/) | User partition (nano, serialgateway) |
+| [1-Build-Environment](../1-Build-Environment/README.md) | Toolchain, tools, and build setup |
+| [30-Backup-Restore](./30-Backup-Restore/README.md) | Backup and restore the flash memory |
+| [31-Bootloader](./31-Bootloader/README.md) | Realtek bootloader analysis |
+| [32-Kernel](./32-Kernel/README.md) | Linux 5.10 kernel with patches |
+| [33-Rootfs](./33-Rootfs/README.md) | Root filesystem (BusyBox, Dropbear SSH) |
+| [34-Userdata](./34-Userdata/README.md) | User partition (nano, serialgateway) |
 
 ---
 

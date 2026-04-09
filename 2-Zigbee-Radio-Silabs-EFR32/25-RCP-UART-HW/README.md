@@ -7,7 +7,7 @@ This firmware transforms the gateway's Zigbee chip into a **Radio Co-Processor**
 | Mode | Stack | Host | Details |
 |------|-------|------|---------|
 | **Zigbee (cpcd + zigbeed)** | EmberZNet | External PC/RPi via serialgateway | See [Host Software Setup](#host-software-setup) |
-| **Thread (OTBR)** | OpenThread | Natively on the RTL8196E gateway | See [`3-Main-SoC.../34-Userdata/ot-br-posix/`](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/) |
+| **Thread (OTBR)** | OpenThread | Natively on the RTL8196E gateway | See [`3-Main-SoC.../34-Userdata/ot-br-posix/`](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/README.md) |
 
 ## About RCP Architecture
 
@@ -116,7 +116,7 @@ commander flash firmware/rcp-uart-802154.gbl \
     --device EFR32MG1B232F256GM48
 ```
 
-> For a detailed explanation of how `universal-silabs-flasher` works (firmware detection, bootloader entry, the `-f` flag, troubleshooting), see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/).
+> For a detailed explanation of how `universal-silabs-flasher` works (firmware detection, bootloader entry, the `-f` flag, troubleshooting), see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/README.md).
 
 ---
 
@@ -338,7 +338,7 @@ The CPC protocol is sensitive to network conditions. For reliable operation:
 
 - [CPC Daemon](https://github.com/SiliconLabs/cpc-daemon)
 - [AN1333: Multiprotocol RCP](https://www.silabs.com/documents/public/application-notes/an1333-concurrent-protocols-with-802-15-4-rcp.pdf)
-- [serialgateway](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway/)
+- [serialgateway](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway)
 
 ## License
 

@@ -186,7 +186,7 @@ If you installed elsewhere, set the PATH manually or use the `env.sh` script gen
 
 After setting up the build environment:
 
-1. **Build Main SoC:** `./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh` — See [3-Main-SoC-Realtek-RTL8196E](../3-Main-SoC-Realtek-RTL8196E/)
-2. **Build EFR32 firmware:** `./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh` — See [2-Zigbee-Radio-Silabs-EFR32](../2-Zigbee-Radio-Silabs-EFR32/)
+1. **Build Main SoC:** `./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh` — See [3-Main-SoC-Realtek-RTL8196E](../3-Main-SoC-Realtek-RTL8196E/README.md)
+2. **Build EFR32 firmware:** `./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh` — See [2-Zigbee-Radio-Silabs-EFR32](../2-Zigbee-Radio-Silabs-EFR32/README.md)
 
 Both scripts accept individual targets (e.g., `build_rtl8196e.sh kernel`, `build_efr32.sh ncp rcp`). Run with `--help` for details.

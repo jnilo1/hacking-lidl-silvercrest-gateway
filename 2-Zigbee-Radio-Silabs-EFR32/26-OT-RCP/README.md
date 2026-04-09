@@ -152,7 +152,7 @@ This is the **recommended setup** for Thread/Matter since v2.0.
 
 ## 3. Docker Stacks
 
-Pre-configured Docker Compose files are in [`docker/`](docker/):
+Pre-configured Docker Compose files are in [`docker/`](docker/README.md):
 
 | # | Use case | Compose file | Command |
 |---|----------|-------------|---------|

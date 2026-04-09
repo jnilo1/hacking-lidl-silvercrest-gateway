@@ -61,10 +61,10 @@ The bootstrap script (`/etc/init.d/rcS`) is the **only** init script in the root
 
 | Directory/File | Description |
 |----------------|-------------|
-| [skeleton/](skeleton/) | Base filesystem structure (etc, init scripts) |
-| [busybox/](busybox/) | BusyBox build directory |
-| [dropbear/](dropbear/) | Dropbear SSH build directory |
-| [build_rootfs.sh](build_rootfs.sh) | Script to assemble and package the rootfs |
+| [skeleton/](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton) | Base filesystem structure (etc, init scripts) |
+| [busybox/](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/busybox) | BusyBox build directory |
+| [dropbear/](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/dropbear) | Dropbear SSH build directory |
+| [build_rootfs.sh](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/build_rootfs.sh) | Script to assemble and package the rootfs |
 
 ## Building
 

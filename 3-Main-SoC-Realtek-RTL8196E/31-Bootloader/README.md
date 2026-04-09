@@ -115,8 +115,8 @@ This is what `flash_install_rtl8196e.sh` uses for automated installation.
 | Document | Contents |
 |----------|----------|
 | [Command Reference](doc/COMMANDS.md) | All bootloader console commands (memory, TFTP, flash, PHY) |
-| [Technical Memo](doc/MEMO_BOOTLOADER.md) | Architecture, boot process, image format, flash layout, build system |
-| [Toolchain Notes](doc/BOOTLOADER_TOOLCHAIN_NOTES.md) | Porting post-mortem: RSDK to GCC 8.5 / musl |
+| [Technical Memo](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/MEMO_BOOTLOADER.md) | Architecture, boot process, image format, flash layout, build system |
+| [Toolchain Notes](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/BOOTLOADER_TOOLCHAIN_NOTES.md) | Porting post-mortem: RSDK to GCC 8.5 / musl |
 | [Testing Guide](doc/TESTING.md) | RAM-test workflow, command validation checklist |
 | [Reboot to Bootloader](doc/REBOOT_TO_BOOTLOADER.md) | Enter `<RealTek>` prompt from Linux without pressing ESC |
-| [Reset Vector Audit](doc/RESET_VECTOR_AUDIT.md) | Stage-1 DDR init analysis |
+| [Reset Vector Audit](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/RESET_VECTOR_AUDIT.md) | Stage-1 DDR init analysis |

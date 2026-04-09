@@ -109,7 +109,7 @@ The script handles everything automatically: installs `universal-silabs-flasher`
 in a venv, restarts serialgateway in flash mode via SSH, flashes the selected
 firmware, and reboots the gateway.
 
-See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details on the script.
+See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md) for details on the script.
 
 ---
 
@@ -119,7 +119,7 @@ See [35-Migration](../../3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details 
 
 > For a deep dive into how USF works over TCP, why baud rate recovery is
 > tricky, and how `flash_efr32.sh` handles it, see
-> [MEMO-universal-silabs-flasher.md](MEMO-universal-silabs-flasher.md).
+> [MEMO-universal-silabs-flasher.md](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/MEMO-universal-silabs-flasher.md).
 
 ### Architecture
 

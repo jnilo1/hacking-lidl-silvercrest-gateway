@@ -12,7 +12,7 @@ Silicon Labs provides several tools for EFR32 development. See the [full list](h
 | **Commander** | Flash, debug, and secure devices via GUI or CLI |
 | **Network Analyzer** | Capture and analyze wireless network traffic |
 
-**Simplicity Studio V5** is Silicon Labs' official IDE for developing and flashing firmware onto EFR32MG1B chips. It is an alternative to the CLI-based approach used in this project (see [24-NCP-UART-HW](../24-NCP-UART-HW/), [25-RCP-UART-HW](../25-RCP-UART-HW/), etc.) which uses `slc`.
+**Simplicity Studio V5** is Silicon Labs' official IDE for developing and flashing firmware onto EFR32MG1B chips. It is an alternative to the CLI-based approach used in this project (see [24-NCP-UART-HW](../24-NCP-UART-HW/README.md), [25-RCP-UART-HW](../25-RCP-UART-HW/README.md), etc.) which uses `slc`.
 
 **Note:** The EFR32MG1B is a Series 1 chip. Simplicity Studio V5 is the latest Silabs IDE supporting Series 1. The newer Simplicity Studio V6 only supports Series 2 chips.
 
@@ -28,7 +28,7 @@ A free Silicon Labs account may be required later to download SDKs.
 ## Notes
 
 - **Debugger (J-Link, etc.)**: Required to flash firmware via SWD. See
-  [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/) for hardware setup.
+  [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/README.md) for hardware setup.
 - **Administrator Privileges**: On some Linux systems, you may need to run
   Simplicity Studio as root.
   ```sh

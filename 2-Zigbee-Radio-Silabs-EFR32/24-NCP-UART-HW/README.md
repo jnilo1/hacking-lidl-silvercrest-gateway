@@ -114,7 +114,7 @@ commander flash firmware/ncp-uart-hw.gbl \
 ```
 
 The RTL8196E runs `serialgateway` to bridge the EFR32's UART to TCP port 8888.
-See [34-Userdata](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/) for gateway setup.
+See [34-Userdata](../../3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md) for gateway setup.
 
 ### Zigbee2MQTT Configuration
 
@@ -141,7 +141,7 @@ Add integration with:
 > this gateway. 460800+ causes UART overruns due to the 16-byte FIFO and
 > userspace latency. See [25-RCP-UART-HW](../25-RCP-UART-HW/README.md#baudrate-and-network-considerations) for details.
 
-The build process applies patches to optimize the firmware for the Lidl Gateway. See [patches/README.md](./patches/README.md) for details.
+The build process applies patches to optimize the firmware for the Lidl Gateway. See [patches/README.md](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md) for details.
 
 ### Network Parameters
 

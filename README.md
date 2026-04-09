@@ -55,7 +55,7 @@ The script builds a complete 16 MiB flash image and uploads it via TFTP.
 - For older bootloaders (Tuya/V1.2), the script guides you through the FLW
   command on the serial console.
 
-See [35-Migration](./3-Main-SoC-Realtek-RTL8196E/35-Migration/) for details.
+See [35-Migration](./3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md) for details.
 
 ### Step 2: Flash the Zigbee Radio
 
@@ -91,10 +91,10 @@ ______________________________________________________________________
 
 | Directory | Contents |
 |-----------|----------|
-| [0-Hardware](./0-Hardware/) | PCB photos, pinout, chip specs |
-| [1-Build-Environment](./1-Build-Environment/) | Toolchains (Lexra MIPS + ARM GCC + Silabs slc-cli) |
-| [2-Zigbee-Radio-Silabs-EFR32](./2-Zigbee-Radio-Silabs-EFR32/) | EFR32 firmware: bootloader, NCP, RCP, OT-RCP, router |
-| [3-Main-SoC-Realtek-RTL8196E](./3-Main-SoC-Realtek-RTL8196E/) | Linux system: bootloader, kernel, rootfs, userdata |
+| [0-Hardware](./0-Hardware/README.md) | PCB photos, pinout, chip specs |
+| [1-Build-Environment](./1-Build-Environment/README.md) | Toolchains (Lexra MIPS + ARM GCC + Silabs slc-cli) |
+| [2-Zigbee-Radio-Silabs-EFR32](./2-Zigbee-Radio-Silabs-EFR32/README.md) | EFR32 firmware: bootloader, NCP, RCP, OT-RCP, router |
+| [3-Main-SoC-Realtek-RTL8196E](./3-Main-SoC-Realtek-RTL8196E/README.md) | Linux system: bootloader, kernel, rootfs, userdata |
 
 ### Scripts
 
@@ -164,7 +164,7 @@ cd 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW && ./build_ncp.sh
 cd ../.. && ./flash_efr32.sh <GATEWAY_IP>
 ```
 
-See [1-Build-Environment](./1-Build-Environment/) for details.
+See [1-Build-Environment](./1-Build-Environment/README.md) for details.
 
 ______________________________________________________________________
 
@@ -176,4 +176,4 @@ No need to crack the root password — access to the Realtek bootloader prompt
 
 ## License
 
-MIT License — See [LICENSE](./LICENSE) for details.
+MIT License — See [LICENSE](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/LICENSE) for details.

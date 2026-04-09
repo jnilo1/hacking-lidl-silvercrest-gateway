@@ -54,6 +54,12 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      # Use a github-compatible slugifier so anchor links written for
+      # github.com (e.g. #use-case-1-zoh--zigbee-zigbee-on-host) also
+      # resolve on the MkDocs site.
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
@@ -163,6 +169,8 @@ exclude_docs: |
   3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway/
   3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/build/
   3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/src/
+  # Vendored ot-br-posix git clone (the doubled-path inner copy)
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/ot-br-posix/
   3-Main-SoC-Realtek-RTL8196E/CHANGELOG.md
   3-Main-SoC-Realtek-RTL8196E/3-Main-SoC-Realtek-RTL8196E/
   backups/

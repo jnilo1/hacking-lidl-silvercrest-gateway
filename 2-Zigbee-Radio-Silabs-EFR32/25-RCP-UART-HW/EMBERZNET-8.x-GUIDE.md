@@ -57,7 +57,7 @@ sudo apt install cmake build-essential socat git
 
 ### Step 2: Install Silicon Labs Tools
 
-Follow the instructions in [1-Build-Environment](../../../1-Build-Environment/) to install slc-cli and ARM GCC toolchain:
+Follow the instructions in [1-Build-Environment](../../1-Build-Environment/README.md) to install slc-cli and ARM GCC toolchain:
 
 ```bash
 cd 1-Build-Environment
