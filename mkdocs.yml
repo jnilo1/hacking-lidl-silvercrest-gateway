@@ -45,6 +45,9 @@ plugins:
   - awesome-pages    # auto-nav from directory tree (used more in phase 2+)
   - section-index    # README.md → section index page
 
+extra_css:
+  - docs-assets/extra.css
+
 markdown_extensions:
   - admonition
   - attr_list

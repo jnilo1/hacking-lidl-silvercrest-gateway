@@ -1,0 +1,24 @@
+/* MkDocs Material — visual tweaks */
+
+/*
+ * Make top-level leaf nav items look like section headers.
+ *
+ * With `navigation.sections`, top-level items that have children render
+ * as bold uppercase section headers (Zigbee Radio, Main SoC). Top-level
+ * leaf items (Hardware, Build environment) render as plain links, which
+ * creates a visual asymmetry. This rule restores the visual consistency
+ * by styling top-level leaves (except the first one — Home) like section
+ * headers.
+ */
+.md-nav--primary > .md-nav__list > .md-nav__item:not(.md-nav__item--nested) > .md-nav__link {
+  font-weight: 700 !important;
+}
+
+/*
+ * Hide the redundant site title at the top of the left nav.
+ * It's already shown in the header, no need to repeat it inside
+ * the navigation column.
+ */
+.md-nav--primary > .md-nav__title {
+  display: none !important;
+}
