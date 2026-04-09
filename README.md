@@ -1,6 +1,8 @@
 # Hacking the Lidl Silvercrest Gateway
 
-> **If you find this project useful, please consider giving it a star!** It helps others discover it and motivates continued development.
+> **If you find this project useful, please consider [giving it a star](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway)!** It helps others discover it and motivates continued development.
+>
+> **Documentation site:** https://jnilo1.github.io/hacking-lidl-silvercrest-gateway/ — full project docs with search and navigation.
 >
 > Questions? Use [Discussions](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions). Found a bug? Open an [Issue](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/issues).
 
