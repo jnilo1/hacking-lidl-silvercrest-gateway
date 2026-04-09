@@ -22,3 +22,14 @@
 .md-nav--primary > .md-nav__title {
   display: none !important;
 }
+
+/*
+ * Add vertical spacing after nested nav items (those with a chevron).
+ * Material renders sections-with-children flush against their next
+ * sibling, which makes Bootloader+Kernel and Userdata+Migration look
+ * glued together. We use padding-bottom on the nested item itself
+ * with high specificity to beat Material's defaults.
+ */
+nav.md-nav .md-nav__item--nested {
+  padding-bottom: 0.4em !important;
+}
