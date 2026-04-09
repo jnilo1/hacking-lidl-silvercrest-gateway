@@ -74,11 +74,18 @@ nav:
   - Zigbee Radio (EFR32): 2-Zigbee-Radio-Silabs-EFR32/README.md
   - Main SoC (RTL8196E):
     - 3-Main-SoC-Realtek-RTL8196E/README.md
+    - Backup & Restore: 3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md
     - Bootloader:
       - 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/README.md
       - Commands: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/COMMANDS.md
       - Reboot to bootloader: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/REBOOT_TO_BOOTLOADER.md
       - Testing guide: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/TESTING.md
+    - Kernel: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/README.md
+    - Rootfs: 3-Main-SoC-Realtek-RTL8196E/33-Rootfs/README.md
+    - Userdata:
+      - 3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md
+      - OpenThread Border Router: 3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/README.md
+    - Migration: 3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md
 
 # Exclusions: keep the build small and clean in phase 1.
 # Sub-sections (2x-*, 3x-*) are excluded for now and will be enabled
@@ -108,11 +115,25 @@ exclude_docs: |
   1-Build-Environment/11-realtek-tools/
   2-Zigbee-Radio-Silabs-EFR32/2[0-9]-*/
   2-Zigbee-Radio-Silabs-EFR32/CHANGELOG.md
-  3-Main-SoC-Realtek-RTL8196E/30-*/
-  3-Main-SoC-Realtek-RTL8196E/32-*/
-  3-Main-SoC-Realtek-RTL8196E/33-*/
-  3-Main-SoC-Realtek-RTL8196E/34-*/
-  3-Main-SoC-Realtek-RTL8196E/35-*/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-*/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/files/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/scripts/
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/test_results_*/
+  # Gitignored dev notes — not in git, also excluded from the site
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/COMPRESSION.md
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/IRAM-DMEM-MIPS16.md
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/OPUS_REVIEW_PROMPT.md
+  # Dev notes — Ethernet driver perf analysis, contributor-only
+  3-Main-SoC-Realtek-RTL8196E/32-Kernel/PERF-ANALYSIS.md
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/skeleton/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/busybox/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/dropbear/
+  3-Main-SoC-Realtek-RTL8196E/33-Rootfs/scripts/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/serialgateway/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/build/
+  3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/src/
   3-Main-SoC-Realtek-RTL8196E/CHANGELOG.md
   3-Main-SoC-Realtek-RTL8196E/3-Main-SoC-Realtek-RTL8196E/
   backups/
