@@ -86,3 +86,7 @@ system.map
 # packages
 packages/
 CLAUDE.md
+
+# MkDocs documentation site
+site/
+.venv-docs/

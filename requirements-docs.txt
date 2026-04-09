@@ -1,0 +1,7 @@
+# Documentation site (MkDocs Material) — phase 1
+# Install with: pip install -r requirements-docs.txt
+mkdocs==1.6.*
+mkdocs-material==9.5.*
+mkdocs-same-dir==0.1.*
+mkdocs-awesome-pages-plugin==2.9.*
+mkdocs-section-index==0.3.*
