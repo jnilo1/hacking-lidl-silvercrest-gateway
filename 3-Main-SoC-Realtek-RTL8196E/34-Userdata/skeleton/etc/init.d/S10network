@@ -77,9 +77,10 @@ start)
         ip link set eth0 up
         sleep 1
         HOSTNAME=$(cat /etc/hostname)
-        # 3 attempts (default) with a 3 sec interval (-T 3)
+        # Try DHCP with short timeouts at boot; if no lease, background and keep
+        # retrying so the gateway recovers once the DHCP server is back (see #82)
         udhcpc -i eth0 -x hostname:"$HOSTNAME" -s /bin/udhcpc.script -S \
-            -p /var/run/udhcpc0.pid -T 3 -n 2>&1 | grep -v "no lease, failing"
+            -p /var/run/udhcpc0.pid -T 3 -b 2>&1 | grep -v "no lease, failing"
     fi
     ;;
 stop)
