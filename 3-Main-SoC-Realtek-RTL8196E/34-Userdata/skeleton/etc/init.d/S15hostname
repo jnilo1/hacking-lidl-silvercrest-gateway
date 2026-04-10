@@ -28,8 +28,8 @@ start)
     # Check if IP is valid
     if [ -z "$CURRENT_IP" ]; then
         echo "⚠️  Warning: eth0 has no IP address configured"
-        # Use the default IP as fallback if none is set
-        CURRENT_IP="192.168.1.254"
+        # Use loopback as fallback (Debian convention for dynamic hosts)
+        CURRENT_IP="127.0.1.1"
     elif [ "$CURRENT_IP" = "192.168.1.254" ]; then
         echo "ℹ️  Note: Using fallback IP address 192.168.1.254"
     else
