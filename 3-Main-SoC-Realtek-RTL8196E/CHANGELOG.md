@@ -6,6 +6,24 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [2.1.6] - 2026-04-10
+
+### Fixes
+- **DHCP resilience**: udhcpc now uses `-b` instead of `-n`, so if the DHCP
+  server is unavailable at boot the client keeps retrying in the background
+  and configures the gateway automatically once a lease is obtained. Previously
+  the gateway stayed without an IP until rebooted. (S10network — [#82])
+- **`/var/hosts` updated on late DHCP lease**: `udhcpc.script` now regenerates
+  `/var/hosts` in the `bound` handler, so the hostname→IP mapping is corrected
+  when a lease arrives after initial failure. (udhcpc.script — [#82])
+- **Hostname fallback uses `127.0.1.1`**: S15hostname now falls back to
+  `127.0.1.1` (Debian convention) instead of `192.168.1.254` when no IP is
+  assigned at boot. (S15hostname — [#82])
+
+[#82]: https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/82
+
+---
+
 ## [2.1.5] - 2026-04-04
 
 ### OTBR REST API — PascalCase kept
