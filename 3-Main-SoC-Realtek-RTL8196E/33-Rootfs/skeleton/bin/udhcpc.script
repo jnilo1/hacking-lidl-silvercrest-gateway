@@ -24,6 +24,12 @@ renew | bound)
     ip addr add "$ip/$mask" broadcast "$broadcast" dev "$interface"
     echo "IP assigned to $interface: $ip"
     echo "$ip" >/var/run/current_eth0_ip
+    # Update /var/hosts so hostname resolves to the leased IP (see #82)
+    HOSTNAME=$(cat /etc/hostname)
+    cat >/var/hosts <<HOSTS
+127.0.0.1         localhost
+$ip               $HOSTNAME
+HOSTS
     if [ -n "$router" ]; then
         echo "Checking existing default routes"
         if ip route show default | grep -q .; then
