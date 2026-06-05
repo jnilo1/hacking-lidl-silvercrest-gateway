@@ -47,6 +47,23 @@ patch -b CMakeLists.txt < cmakeLists.patch
 rm cmakeLists.patch
 }
 
+# Apply the native TCP-bus patch (adds bus_type: TCP so cpcd connects straight to
+# the gateway's UART<->TCP bridge, no socat PTY shim). Idempotent: skips if the
+# patch is already applied to the clone.
+apply_tcp_bus_patch() {
+    local patch_file="${SCRIPT_DIR}/tcp-bus.patch"
+    [ -f "$patch_file" ] || { echo "WARNING: ${patch_file} missing, skipping TCP bus patch"; return 0; }
+    if git -C "$CPCD_SRC" apply --reverse --check "$patch_file" 2>/dev/null; then
+        echo "TCP bus patch already applied."
+    elif git -C "$CPCD_SRC" apply --check "$patch_file" 2>/dev/null; then
+        git -C "$CPCD_SRC" apply "$patch_file"
+        echo "Applied TCP bus patch."
+    else
+        echo "ERROR: tcp-bus.patch does not apply cleanly to this cpcd checkout." >&2
+        exit 1
+    fi
+}
+
 prepare_deb_files() {
     echo "Creating build helper scripts..."
     # Debian Maintainer Scripts
@@ -140,6 +157,7 @@ fi
 
 # Build
 cd "${CPCD_SRC}"
+apply_tcp_bus_patch
 prepare_cmake
 
 cmake -B build -S . \

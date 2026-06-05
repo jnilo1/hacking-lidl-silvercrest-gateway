@@ -9,7 +9,6 @@ ENV_FILE="$CONFIG_DIR/rcp-stack.env"
 UNIT_DIR="$ROOT/systemd/user"
 
 UNITS=(
-  socat-cpc-rcp.service
   cpcd-bringup.service
   zigbeed.service
   socat-zigbeed-pty.service
@@ -51,14 +50,26 @@ open_editor() {
 set_defaults() {
   CPC_INSTANCE_NAME="${CPC_INSTANCE_NAME:-cpcd_bringup}"
   CPC_SOCKET_DIR="${CPC_SOCKET_DIR:-/dev/shm/cpcd/$CPC_INSTANCE_NAME}"
-  CPC_RCP_PTY="${CPC_RCP_PTY:-/tmp/ttyCpcRcp}"
   ZIGBEED_PTY="${ZIGBEED_PTY:-/tmp/ttyZigbeed}"
   Z2M_PTY="${Z2M_PTY:-/tmp/ttyZ2M}"
   CPCD_CONF="${CPCD_CONF:-$HOME/.config/rcp-stack/cpcd.conf}"
   READY_TIMEOUT="${READY_TIMEOUT:-20}"
   READY_POLL_INTERVAL="${READY_POLL_INTERVAL:-0.2}"
-  export CPC_INSTANCE_NAME CPC_SOCKET_DIR CPC_RCP_PTY ZIGBEED_PTY Z2M_PTY
+  export CPC_INSTANCE_NAME CPC_SOCKET_DIR ZIGBEED_PTY Z2M_PTY
   export CPCD_CONF READY_TIMEOUT READY_POLL_INTERVAL
+}
+
+# Split RCP_ENDPOINT (tcp://host:port, host:port, TCP:host:port, [v6]:port)
+# into RCP_HOST / RCP_PORT for cpcd's native TCP bus.
+parse_rcp_endpoint() {
+  local ep="${RCP_ENDPOINT:?RCP_ENDPOINT is not set}"
+  ep="${ep#[Tt][Cc][Pp]://}"; ep="${ep#[Tt][Cc][Pp]:}"; ep="${ep#//}"
+  if [[ "$ep" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+    RCP_HOST="${BASH_REMATCH[1]}"; RCP_PORT="${BASH_REMATCH[2]}"
+  else
+    RCP_HOST="${ep%:*}"; RCP_PORT="${ep##*:}"
+  fi
+  export RCP_HOST RCP_PORT
 }
 
 ensure_env() {
@@ -75,7 +86,6 @@ ensure_env() {
 # - \$CPC_INSTANCE_NAME (defaults to cpcd_bringup)
 # - \$CPC_SOCKET_DIR (defaults to /dev/shm/cpcd/\$CPC_INSTANCE_NAME)
 # - \$CPCD_CONF (defaults to \$HOME/.config/rcp-stack/cpcd.conf)
-# - \$CPC_RCP_PTY (defaults to /tmp/ttyCpcRcp)
 # - \$ZIGBEED_PTY (defaults to /tmp/ttyZigbeed)
 # - \$Z2M_PTY (defaults to /tmp/ttyZ2M)
 #
@@ -110,19 +120,23 @@ EOF
 
 ensure_cpcd_conf() {
   if [ ! -s "$CPCD_CONF" ]; then
+    parse_rcp_endpoint
     log "Generating $CPCD_CONF..."
     cat >"$CPCD_CONF" <<EOF
 instance_name: ${CPC_INSTANCE_NAME:-cpcd_bringup}
-bus_type: UART
-uart_device_file: ${CPC_RCP_PTY:-/tmp/ttyCpcRcp}
-uart_device_baud: 115200
-uart_hardflow: true
+# Native TCP bus: cpcd dials the gateway's in-kernel UART<->TCP bridge directly
+# and owns its own reconnection. No socat PTY shim. The UART baud lives on the
+# gateway side (the bridge), so the host does not set it here.
+bus_type: TCP
+tcp_server_address: ${RCP_HOST}
+tcp_server_port: ${RCP_PORT}
 disable_encryption: true
 binding_key_file: $HOME/.cpcd/binding.key
 stdout_trace: false
 trace_to_file: false
 traces_folder: /run/user/$UID/rcp-stack/traces
-socket_folder: /dev/shm/cpcd/${CPC_INSTANCE_NAME:-cpcd_bringup}
+# No socket_folder key: cpcd v4.5.3 ignores it (warns "not recognized") and
+# derives /dev/shm/cpcd/<instance_name>/ from the compiled-in CPC_SOCKET_DIR.
 EOF
     log "Edit if needed (binding_key_file, etc.)"
   fi
@@ -166,17 +180,16 @@ cmd_up() {
   link_units
   load_env
   set_defaults
-  ensure_cpcd_conf
 
   require_vars RCP_ENDPOINT CPCD_COMMAND ZIGBEED_COMMAND
+  ensure_cpcd_conf
 
   "$BIN_DIR/rcp-check-endpoint"
   "$BIN_DIR/rcp-check-cpcd-conf"
   "$BIN_DIR/rcp-check-zigbeed-conf"
 
-  systemctl --user start socat-cpc-rcp.service
-  "$BIN_DIR/rcp-wait-pty" "$CPC_RCP_PTY"
-
+  # cpcd dials the gateway bridge directly over its native TCP bus — no
+  # socat-cpc-rcp PTY shim in front of it anymore.
   systemctl --user start cpcd-bringup.service
   "$BIN_DIR/rcp-wait-cpcd"
 
@@ -200,7 +213,7 @@ cmd_down() {
   sync_scripts
   set_defaults
 
-  systemctl --user stop zigbee2mqtt.service zigbeed.service socat-zigbeed-pty.service cpcd-bringup.service socat-cpc-rcp.service 2>/dev/null || true
+  systemctl --user stop zigbee2mqtt.service zigbeed.service socat-zigbeed-pty.service cpcd-bringup.service 2>/dev/null || true
 
   "$BIN_DIR/rcp-cleanup" --all --socket-dir "$CPC_SOCKET_DIR"
 }
@@ -212,7 +225,7 @@ cmd_status() {
   systemctl --user --no-pager status "${UNITS[@]}" 2>/dev/null || true
   log ""
   log "Symlinks:"
-  ls -l /tmp/ttyCpcRcp /tmp/ttyZigbeed /tmp/ttyZ2M 2>/dev/null || true
+  ls -l /tmp/ttyZigbeed /tmp/ttyZ2M 2>/dev/null || true
   log ""
   log "CPC sockets:"
   ls -l "$CPC_SOCKET_DIR" 2>/dev/null || true
@@ -238,7 +251,7 @@ cmd_doctor() {
 
   log "Filesystem state:"
   ls -ld "$CONFIG_DIR" "$STATE_DIR" "$KEY_DIR" "$CPC_SOCKET_DIR" 2>/dev/null || true
-  ls -l /tmp/ttyCpcRcp /tmp/ttyZigbeed /tmp/ttyZ2M 2>/dev/null || true
+  ls -l /tmp/ttyZigbeed /tmp/ttyZ2M 2>/dev/null || true
   log ""
 
   if [ -d "$CPC_SOCKET_DIR" ]; then

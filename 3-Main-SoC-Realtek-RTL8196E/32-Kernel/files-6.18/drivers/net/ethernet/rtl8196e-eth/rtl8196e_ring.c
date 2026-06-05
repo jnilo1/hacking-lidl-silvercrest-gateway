@@ -79,6 +79,8 @@ struct rtl8196e_ring {
 	u32 kicks_threshold;	/* threshold-triggered pulses */
 	u32 kicks_drain;	/* end-of-NAPI drain pulses */
 	u32 kicks_total;	/* sum of the three above */
+	/* Ring anomaly counters (exposed via ethtool -S). */
+	struct rtl8196e_ring_diag diag;
 };
 
 /* Allocate @size bytes, store the original pointer in *orig_out, return KSEG1 address. */
@@ -96,6 +98,35 @@ static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 static struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
 {
 	return (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
+}
+
+/*
+ * Pool bounds check. A descriptor pointer read back from a ring entry must
+ * land on a 4-byte-aligned element inside the [base, base + count*size) pool
+ * the driver allocated; anything else is a corrupt entry and dereferencing it
+ * would chase a wild pointer.
+ */
+static __always_inline bool rtl8196e_ptr_in_pool(const void *ptr, const void *base,
+						 unsigned int count, size_t size)
+{
+	unsigned long addr = (unsigned long)ptr;
+	unsigned long start = (unsigned long)base;
+	unsigned long end = start + (unsigned long)count * size;
+
+	return addr >= start && addr < end && IS_ALIGNED(addr, sizeof(u32));
+}
+
+/* TX pkthdr/mbuf descriptors live in the first tx_cnt slots of each pool. */
+static __always_inline bool rtl8196e_tx_pkthdr_valid(struct rtl8196e_ring *ring,
+						     const struct rtl_pktHdr *ph)
+{
+	return rtl8196e_ptr_in_pool(ph, ring->pkthdr_pool, ring->tx_cnt, sizeof(*ph));
+}
+
+static __always_inline bool rtl8196e_tx_mbuf_valid(struct rtl8196e_ring *ring,
+						   const struct rtl_mBuf *mb)
+{
+	return rtl8196e_ptr_in_pool(mb, ring->mbuf_pool, ring->tx_cnt, sizeof(*mb));
 }
 
 /* Allocate and initialise TX/RX descriptor rings with pre-allocated SKB buffers. */
@@ -302,26 +333,42 @@ __iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	struct rtl_pktHdr *ph;
 	struct rtl_mBuf *mb;
 
-	if (unlikely(!ring || !skb || !data || len == 0))
+	if (unlikely(!ring))
 		return -EINVAL;
+	if (unlikely(!skb || !data || len == 0)) {
+		ring->diag.tx_bad_args++;
+		return -EINVAL;
+	}
 
 	if (len < ETH_ZLEN)
 		len = ETH_ZLEN;
-	if (unlikely(len > 1518))
+	if (unlikely(len > 1518)) {
+		ring->diag.tx_bad_len++;
 		return -EINVAL;
+	}
 
 	next = ring->tx_prod + 1;
 	if (next >= ring->tx_cnt)
 		next = 0;
 
-	if (unlikely(next == READ_ONCE(ring->tx_cons)))
+	if (unlikely(next == READ_ONCE(ring->tx_cons))) {
+		ring->diag.tx_ring_full++;
 		return -ENOSPC;
+	}
 
 	if (was_empty)
 		*was_empty = (ring->tx_prod == ring->tx_cons);
 
 	ph = rtl8196e_desc_ptr(ring->tx_ring[ring->tx_prod]);
+	if (unlikely(!rtl8196e_tx_pkthdr_valid(ring, ph))) {
+		ring->diag.tx_bad_pkthdr++;
+		return -EIO;
+	}
 	mb = ph->ph_mbuf;
+	if (unlikely(!rtl8196e_tx_mbuf_valid(ring, mb))) {
+		ring->diag.tx_bad_mbuf++;
+		return -EIO;
+	}
 	ring->last_tx_submit = ring->tx_prod;
 
 	mb->m_len = len;
@@ -376,8 +423,16 @@ __iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 			break;
 
 		ph = rtl8196e_desc_ptr(entry);
+		if (unlikely(!rtl8196e_tx_pkthdr_valid(ring, ph))) {
+			ring->diag.tx_bad_pkthdr++;
+			break;
+		}
 		dma_cache_inv((unsigned long)ph, sizeof(*ph));
 		mb = ph->ph_mbuf;
+		if (unlikely(!rtl8196e_tx_mbuf_valid(ring, mb))) {
+			ring->diag.tx_bad_mbuf++;
+			break;
+		}
 		dma_cache_inv((unsigned long)mb, sizeof(*mb));
 
 		skb = (struct sk_buff *)mb->skb;
@@ -386,6 +441,8 @@ __iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 			done_bytes += skb->len;
 			napi_consume_skb(skb, napi_budget);
 			mb->skb = NULL;
+		} else {
+			ring->diag.tx_reclaim_no_skb++;
 		}
 
 		{
@@ -427,6 +484,16 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 			break;
 
 		ph = rtl8196e_desc_ptr(entry);
+		/* Defense in depth: the ring entry came from HW/uncached memory;
+		 * a corrupt entry could carry a pkthdr pointer outside the pool.
+		 * Range-check before we dereference (dma_cache_inv + ph->ph_mbuf)
+		 * and fall back on the static index->ph mapping. */
+		if (unlikely(ph < ring->pkthdr_pool ||
+			     ph >= ring->pkthdr_pool + ring->tx_cnt + ring->rx_cnt)) {
+			ring->diag.rx_wild_pkthdr++;
+			dev->stats.rx_errors++;
+			ph = &ring->pkthdr_pool[ring->tx_cnt + ring->rx_idx];
+		}
 		dma_cache_inv((unsigned long)ph, sizeof(*ph));
 		mb = ph->ph_mbuf;
 		/* Defense in depth: HW wrote the descriptor; a silicon or RAM
@@ -434,15 +501,34 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		 * on the static index->mb mapping set at ring_create(). */
 		if (unlikely(mb < ring->rx_mbuf_base ||
 			     mb >= ring->rx_mbuf_base + ring->rx_mbuf_cnt)) {
+			ring->diag.rx_wild_mbuf++;
 			dev->stats.rx_errors++;
 			mb = &ring->rx_mbuf_base[ring->rx_idx];
 		}
 		dma_cache_inv((unsigned long)mb, sizeof(*mb));
+		mbuf_index = (unsigned int)(mb - ring->rx_mbuf_base);
 
-		rxb = &ring->rx_bufs[ring->rx_idx];
-		skb = rxb->skb;
-		if (unlikely(!skb))
+		/*
+		 * Under RX ring saturation the switch links pkthdr[rx_idx] to a
+		 * mbuf whose ring index differs from rx_idx (skew appears only
+		 * at/near saturation, never in flow-controlled TCP). The shadow
+		 * skb backing the DMA'd data is the one bound to *that* mbuf, so
+		 * index rx_bufs by the mbuf index, not rx_idx. Guard the lookup:
+		 * rx_bufs holds rx_cnt entries while a valid mbuf index spans
+		 * [0, rx_mbuf_cnt); today rx_cnt == rx_mbuf_cnt but the API only
+		 * guarantees >=.
+		 */
+		if (unlikely(mbuf_index >= ring->rx_cnt)) {
+			ring->diag.rx_mbuf_no_shadow++;
+			rxb = NULL;
 			goto rearm_drop;
+		}
+		rxb = &ring->rx_bufs[mbuf_index];
+		skb = rxb->skb;
+		if (unlikely(!skb)) {
+			ring->diag.rx_no_skb++;
+			goto rearm_drop;
+		}
 
 		len = ph->ph_len;
 		if (unlikely(len < ETH_ZLEN || len > ring->buf_size))
@@ -453,8 +539,10 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 		/* Allocate a fresh SKB for the descriptor (NAPI-optimized) */
 		new_skb = napi_alloc_skb(napi, ring->buf_size);
-		if (unlikely(!new_skb))
+		if (unlikely(!new_skb)) {
+			ring->diag.rx_alloc_fail++;
 			goto rearm_drop;
+		}
 
 		/* Set length on received SKB and hand to stack */
 		skb_put(skb, len);
@@ -502,6 +590,7 @@ rearm_drop:
 		goto rearm;
 
 rearm_bad:
+		ring->diag.rx_bad_len++;
 		dev->stats.rx_errors++;
 		dev->stats.rx_length_errors++;
 		if (unlikely(ring->rx_debug_bad < 3)) {
@@ -526,7 +615,7 @@ rearm:
 		ph->ph_flags = PKTHDR_USED | PKT_INCOMING;
 		mb->m_len = 0;
 		mb->m_extsize = ring->buf_size;
-		if (likely(rxb->skb)) {
+		if (likely(rxb && rxb->skb)) {
 			mb->m_data = rxb->skb->data;
 			mb->m_extbuf = rxb->skb->data;
 		}
@@ -541,18 +630,20 @@ rearm:
 		 * napi_gro_receive). Mirrors rtl8196e_ring_tx_submit() which uses
 		 * the same wback-then-wmb-then-handover-then-wmb sequence.
 		 */
-		if (likely(rxb->skb))
+		if (likely(rxb && rxb->skb))
 			dma_cache_wback_inv((unsigned long)rxb->skb->head,
 					    NET_SKB_PAD + NET_IP_ALIGN + ring->buf_size);
 		dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
 		dma_cache_wback_inv((unsigned long)mb, sizeof(*mb));
 		wmb();
 
-		mbuf_index = (unsigned int)(mb - ring->rx_mbuf_base);
+		/* mbuf_index was computed up front from the same mb. */
 		if (likely(mbuf_index < ring->rx_mbuf_cnt)) {
 			/* Atomic write preserving WRAP bit */
 			ring->rx_mbuf_ring[mbuf_index] = (u32)mb | RTL8196E_DESC_SWCORE_OWNED |
 							  (ring->rx_mbuf_ring[mbuf_index] & RTL8196E_DESC_WRAP);
+		} else {
+			ring->diag.rx_rearm_badidx++;
 		}
 
 		ring->rx_pkthdr_ring[ring->rx_idx] =
@@ -656,6 +747,14 @@ void rtl8196e_ring_kick_stats_get(struct rtl8196e_ring *ring,
 		*drain = ring->kicks_drain;
 	if (total)
 		*total = ring->kicks_total;
+}
+
+/* Copy the ring anomaly counters out for ethtool -S. */
+void rtl8196e_ring_diag_get(struct rtl8196e_ring *ring,
+			    struct rtl8196e_ring_diag *out)
+{
+	if (ring && out)
+		*out = ring->diag;
 }
 
 /*

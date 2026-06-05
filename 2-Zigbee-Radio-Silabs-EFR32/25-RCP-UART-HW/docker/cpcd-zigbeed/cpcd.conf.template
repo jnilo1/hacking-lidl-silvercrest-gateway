@@ -2,12 +2,15 @@
 # Variables are substituted by entrypoint.sh at runtime
 
 instance_name: ${CPCD_INSTANCE}
-bus_type: UART
-uart_device_file: /tmp/ttyCpcRcp
-uart_device_baud: ${UART_BAUDRATE}
-uart_hardflow: true
+# Native TCP bus: cpcd connects straight to the gateway's in-kernel UART<->TCP
+# bridge and owns its own reconnection. No socat PTY shim required.
+bus_type: TCP
+tcp_server_address: ${RCP_HOST}
+tcp_server_port: ${RCP_PORT}
 disable_encryption: true
 stdout_trace: false
 trace_to_file: false
 traces_folder: /var/log/cpcd
-socket_folder: /dev/shm/cpcd/${CPCD_INSTANCE}
+# No socket_folder key: cpcd v4.5.3 has no parser for it (it warns "not
+# recognized") and always derives /dev/shm/cpcd/<instance_name>/ from the
+# compiled-in CPC_SOCKET_DIR (/dev/shm). zigbeed reaches it via the instance.

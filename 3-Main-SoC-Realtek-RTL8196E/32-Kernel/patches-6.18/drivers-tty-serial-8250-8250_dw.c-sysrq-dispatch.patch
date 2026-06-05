@@ -26,7 +26,7 @@ diff --git a/drivers/tty/serial/8250/8250_dw.c b/drivers/tty/serial/8250/8250_dw
 index 55e40c10f..9d552b224 100644
 --- a/drivers/tty/serial/8250/8250_dw.c
 +++ b/drivers/tty/serial/8250/8250_dw.c
-@@ -416,7 +416,7 @@ static int dw8250_handle_irq(struct uart_port *p)
+@@ -427,7 +427,7 @@ static int dw8250_handle_irq(struct uart
  	unsigned int quirks = d->pdata->quirks;
  	unsigned int status;
  

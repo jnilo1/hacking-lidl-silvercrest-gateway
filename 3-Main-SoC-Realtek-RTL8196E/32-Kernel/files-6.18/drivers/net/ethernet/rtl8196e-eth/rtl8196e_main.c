@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.5"
+#define RTL8196E_DRV_VERSION "2.6"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -567,7 +567,7 @@ static int rtl8196e_get_link_ksettings(struct net_device *ndev,
 	return 0;
 }
 
-#define RTL8196E_ETHTOOL_STATS_COUNT 11
+#define RTL8196E_ETHTOOL_STATS_COUNT 24
 
 /* ethtool: return the number of driver-specific statistics. */
 static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
@@ -593,6 +593,20 @@ static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 		"rtl8196e_tx_kicks_cold",
 		"rtl8196e_tx_kicks_threshold",
 		"rtl8196e_tx_kicks_drain",
+		/* Ring anomaly counters — must stay 0 in nominal flow. */
+		"rtl8196e_rx_wild_pkthdr",
+		"rtl8196e_rx_wild_mbuf",
+		"rtl8196e_rx_bad_len",
+		"rtl8196e_rx_no_skb",
+		"rtl8196e_rx_alloc_fail",
+		"rtl8196e_rx_rearm_badidx",
+		"rtl8196e_tx_bad_args",
+		"rtl8196e_tx_bad_len",
+		"rtl8196e_tx_ring_full",
+		"rtl8196e_tx_reclaim_no_skb",
+		"rtl8196e_tx_bad_pkthdr",
+		"rtl8196e_tx_bad_mbuf",
+		"rtl8196e_rx_mbuf_no_shadow",
 	};
 
 	(void)ndev;
@@ -608,6 +622,7 @@ static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	u32 cold = 0, thresh = 0, drain = 0, total = 0;
+	struct rtl8196e_ring_diag diag = {};
 
 	(void)stats;
 	data[0] = priv->l2_check_ok;
@@ -617,12 +632,27 @@ static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 	data[4] = priv->tx_dbg_vid;
 	data[5] = priv->tx_dbg_len;
 	data[6] = priv->tx_dbg_submit;
-	if (priv->ring)
+	if (priv->ring) {
 		rtl8196e_ring_kick_stats_get(priv->ring, &cold, &thresh, &drain, &total);
+		rtl8196e_ring_diag_get(priv->ring, &diag);
+	}
 	data[7] = total;
 	data[8] = cold;
 	data[9] = thresh;
 	data[10] = drain;
+	data[11] = diag.rx_wild_pkthdr;
+	data[12] = diag.rx_wild_mbuf;
+	data[13] = diag.rx_bad_len;
+	data[14] = diag.rx_no_skb;
+	data[15] = diag.rx_alloc_fail;
+	data[16] = diag.rx_rearm_badidx;
+	data[17] = diag.tx_bad_args;
+	data[18] = diag.tx_bad_len;
+	data[19] = diag.tx_ring_full;
+	data[20] = diag.tx_reclaim_no_skb;
+	data[21] = diag.tx_bad_pkthdr;
+	data[22] = diag.tx_bad_mbuf;
+	data[23] = diag.rx_mbuf_no_shadow;
 }
 
 static const struct ethtool_ops rtl8196e_ethtool_ops = {

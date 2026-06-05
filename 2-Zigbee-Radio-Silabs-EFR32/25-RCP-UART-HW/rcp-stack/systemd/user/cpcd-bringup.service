@@ -1,20 +1,19 @@
 [Unit]
 Description=CPC daemon bringup (user)
-Requires=socat-cpc-rcp.service
-After=socat-cpc-rcp.service
+After=network-online.target
+Wants=network-online.target
 StartLimitIntervalSec=30s
 StartLimitBurst=5
 
 [Service]
 Type=simple
-Environment=CPC_RCP_PTY=/tmp/ttyCpcRcp
 EnvironmentFile=-%h/.config/rcp-stack/rcp-stack.env
 RuntimeDirectory=rcp-stack
 RuntimeDirectoryMode=0700
 ExecStartPre=%h/.config/rcp-stack/bin/rcp-ensure-dirs
 ExecStartPre=%h/.config/rcp-stack/bin/rcp-check-cpcd-conf
+ExecStartPre=%h/.config/rcp-stack/bin/rcp-check-endpoint
 ExecStartPre=/bin/sh -c '%h/.config/rcp-stack/bin/rcp-cleanup --socket-dir "$CPC_SOCKET_DIR"'
-ExecStartPre=%h/.config/rcp-stack/bin/rcp-wait-pty /tmp/ttyCpcRcp
 ExecStart=%h/.config/rcp-stack/bin/rcp-run-command CPCD_COMMAND
 ExecStopPost=/bin/sh -c '%h/.config/rcp-stack/bin/rcp-cleanup --socket-dir "$CPC_SOCKET_DIR"'
 Restart=on-failure

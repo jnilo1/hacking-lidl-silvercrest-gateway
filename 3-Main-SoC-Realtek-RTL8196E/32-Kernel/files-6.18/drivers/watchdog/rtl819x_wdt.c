@@ -48,6 +48,7 @@
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
 #include <linux/timekeeping.h>
+#include <linux/timer.h>
 #include <linux/watchdog.h>
 
 #include <asm/mach-realtek/realtek_mem.h>
@@ -170,15 +171,6 @@
 #define WDT_REC_OFF_REASON	0x10
 #define WDT_REC_REASON_MAX	0xE0		/* 0x10+0xE0=0xF0, clear of boothold@0xFF4 */
 
-/*
- * Exported by our kernel/time/timer.c patch (patches-6.18/
- * kernel-time-timer.c.patch). Declared locally rather than adding a
- * prototype to <linux/timer.h>, so the core-kernel change stays a single
- * file. Returns the timer callback running on this CPU at panic time, or
- * NULL if the panic landed between callbacks.
- */
-extern void *timer_get_running_fn(void);
-
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0444);
 MODULE_PARM_DESC(nowayout,
@@ -291,7 +283,7 @@ static int rtl819x_wdt_restart(struct watchdog_device *wdd,
  * hrtimer that keeps WDOG_HW_RUNNING devices kicked fires from softirq
  * context, which drains on every syscall return. A userspace busy-loop
  * that re-enters the kernel via a fast syscall (e.g. otbr-agent spinning
- * in `waitpid()` returning -ECHILD, GitHub issue #99) therefore lets the
+ * in `waitpid()` returning -ECHILD) therefore lets the
  * softirq drain — and the auto-kicker — keep running indefinitely. The
  * soft-lockup detector reports the hang at 22 s, but the chip never
  * fires because the framework keeps petting it. Observed: 600+ seconds

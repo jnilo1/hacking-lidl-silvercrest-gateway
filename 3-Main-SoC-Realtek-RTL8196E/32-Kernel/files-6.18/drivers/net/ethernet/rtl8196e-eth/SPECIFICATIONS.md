@@ -152,7 +152,7 @@ Pure LOC = non-blank, non-comment lines.  For comparison, the legacy
 | `RTL8196E_TX_STOP_THRESH` |     4 | `rtl8196e_main.c` |
 | `RTL8196E_TX_WAKE_THRESH` |    16 | `rtl8196e_main.c` |
 | `rtl8196e_kick_threshold` |     4 | `rtl8196e_ring.c` (extern, `EXPORT_SYMBOL`, runtime tunable via future hook) |
-| `RTL8196E_DRV_VERSION`    | "2.4" | `rtl8196e_main.c` |
+| `RTL8196E_DRV_VERSION`    | "2.6" | `rtl8196e_main.c` |
 
 ## 11. Init sequence (in `rtl8196e_open()`)
 

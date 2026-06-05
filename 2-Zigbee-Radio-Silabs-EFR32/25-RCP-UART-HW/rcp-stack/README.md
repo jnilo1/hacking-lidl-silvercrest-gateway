@@ -2,46 +2,41 @@
 
 Systemd --user manager for the complete RCP chain:
 ```
-RCP (EFR32) ←kernel UART bridge (TCP:8888)→ socat ←PTY→ cpcd ←CPC→ zigbeed ←PTY→ socat ←PTY→ Z2M
+RCP (EFR32) ←kernel UART bridge (TCP:8888)→ cpcd ←CPC→ zigbeed ←PTY→ socat ←PTY→ Z2M
 ```
+
+> **Note:** cpcd uses its native `bus_type: TCP` (see [`../cpcd/README.md`](../cpcd/README.md))
+> to dial the gateway bridge directly. The former `socat-cpc-rcp` PTY hop in front
+> of cpcd is gone — `rcp-stack` now generates a `bus_type: TCP` cpcd.conf from
+> `RCP_ENDPOINT`. (socat is still used downstream, between zigbeed and Z2M.)
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           HOST (PC / Raspberry Pi)                       │
-├─────────────────────────────────────────────────────────────────────────┤
-│                                                                          │
-│  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐               │
-│  │ socat-cpc-rcp│───▶│    cpcd      │───▶│   zigbeed    │               │
-│  │   (TCP→PTY)  │    │  (CPC daemon)│    │ (EmberZNet)  │               │
-│  └──────────────┘    └──────────────┘    └──────────────┘               │
-│         │                   │                   │                        │
-│         ▼                   ▼                   ▼                        │
-│  /tmp/ttyCpcRcp      CPC sockets         /tmp/ttyZigbeed                │
-│                    /dev/shm/cpcd/              │                        │
-│                                                ▼                        │
-│                                    ┌──────────────────┐                 │
-│                                    │ socat-zigbeed-pty│                 │
-│                                    │   (PTY bridge)   │                 │
-│                                    └──────────────────┘                 │
-│                                                │                        │
-│                                                ▼                        │
-│                                         /tmp/ttyZ2M                     │
-│                                                │                        │
-│                                                ▼                        │
-│                                    ┌──────────────────┐                 │
-│                                    │   Zigbee2MQTT    │                 │
-│                                    └──────────────────┘                 │
-│                                                                          │
-└─────────────────────────────────────────────────────────────────────────┘
-         ▲
-         │ TCP (kernel UART bridge)
-         ▼
-┌─────────────────┐
-│ Lidl Gateway    │
-│ (RCP firmware)  │
-└─────────────────┘
+                       HOST (PC / Raspberry Pi)
+
+   ┌──────────────┐  CPC sockets    ┌──────────────┐
+   │     cpcd     │────────────────▶│   zigbeed    │
+   │  (TCP bus)   │  /dev/shm/cpcd/ │ (EmberZNet)  │
+   └──────┬───────┘                 └──────┬───────┘
+          │                                │ /tmp/ttyZigbeed
+          │                                ▼
+          │                       ┌──────────────────┐
+          │                       │ socat-zigbeed-pty│
+          │                       │   (PTY bridge)   │
+          │                       └────────┬─────────┘
+          │                                │ /tmp/ttyZ2M
+          │                                ▼
+          │                       ┌──────────────────┐
+          │                       │   Zigbee2MQTT    │
+          │                       └──────────────────┘
+          │
+          │ TCP :8888 (in-kernel UART bridge)
+          ▼
+   ┌─────────────────┐
+   │  Lidl Gateway   │
+   │  (RCP firmware) │
+   └─────────────────┘
 ```
 
 ## Prerequisites
@@ -88,7 +83,6 @@ Z2M_COMMAND='zigbee2mqtt'
 # Optional (default values)
 # CPC_INSTANCE_NAME=cpcd_bringup
 # CPC_SOCKET_DIR=/dev/shm/cpcd/cpcd_bringup
-# CPC_RCP_PTY=/tmp/ttyCpcRcp
 # ZIGBEED_PTY=/tmp/ttyZigbeed
 # Z2M_PTY=/tmp/ttyZ2M
 # RCP_ENDPOINT_TIMEOUT=5
@@ -128,8 +122,7 @@ The `rcp-stack up` command installs and starts these services in order:
 
 | Service | Description | Dependencies |
 |---------|-------------|--------------|
-| `socat-cpc-rcp.service` | TCP→PTY for cpcd | - |
-| `cpcd-bringup.service` | CPC daemon | socat-cpc-rcp |
+| `cpcd-bringup.service` | CPC daemon (native TCP bus) | - |
 | `socat-zigbeed-pty.service` | PTY bridge zigbeed↔Z2M | - |
 | `zigbeed.service` | Zigbee daemon | cpcd, socat-zigbeed-pty |
 | `zigbee2mqtt.service` | Zigbee2MQTT | zigbeed |
@@ -144,7 +137,7 @@ journalctl --user -u zigbeed.service -f
 systemctl --user restart zigbeed.service
 
 # Enable at boot (optional)
-systemctl --user enable socat-cpc-rcp.service cpcd-bringup.service \
+systemctl --user enable cpcd-bringup.service \
   socat-zigbeed-pty.service zigbeed.service zigbee2mqtt.service
 loginctl enable-linger $USER
 ```
@@ -162,7 +155,6 @@ loginctl enable-linger $USER
     ├── rcp-cleanup
     ├── rcp-ensure-dirs
     ├── rcp-run-command
-    ├── rcp-socat-rcp
     ├── rcp-wait-active
     ├── rcp-wait-cpcd
     └── rcp-wait-pty
@@ -176,7 +168,6 @@ loginctl enable-linger $USER
 └── ctrl.cpcd.sock         # Control socket
 
 /tmp/
-├── ttyCpcRcp              # PTY: socat → cpcd
 ├── ttyZigbeed             # PTY: zigbeed output
 └── ttyZ2M                 # PTY: Z2M input
 ```

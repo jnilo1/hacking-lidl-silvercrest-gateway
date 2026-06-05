@@ -73,6 +73,30 @@ better register allocation in the TCP send-side hot path being the
 likely amplifier. RX is already near the per-packet cache-flush
 ceiling described below, so it does not see a similar lift.
 
+## v3.8.0 confirmation run (June 2026)
+
+`scripts/test_rtl8196e_eth_iperf3.sh` against the v3.8.0 release kernel
+(driver 2.6). Unlike the v3.5.0 run, the RX path *did* change here: the
+shadow skb is now indexed by the hardware mbuf index (guarded), and the
+TX submit/reclaim paths gained pool-bounds validators. This run confirms
+those changes carry no throughput cost.
+
+| Workload                    | Median (Mbit/s) | Δ vs v3.5.0 |
+|-----------------------------|----------------:|------------:|
+| TCP RX (host → gateway)     | 93.9            | −0.1 %      |
+| TCP TX (gateway → host)     | 71.5            | −1.8 %      |
+
+Parallel TCP RX: 94.0 (4 streams) / 93.5 (8 streams). Stress run (300 s
+single-stream TCP RX): 93.5 Mbit/s sustained, 19 retransmits over 2.44 M
+segments (0.00 %). Interface counters across the whole suite: rx_errors
+0, rx_dropped 0, tx_errors 0, tx_dropped 0.
+
+The TX delta vs the v3.5.0 confirmation (72.8) is within this CPU's
+run-to-run spread (TX has ranged 69.3–72.8 across sessions); the
+validators add only a couple of bounds checks per descriptor. No
+regression: RX holds line-rate, TX stays at the ~71 Mbit/s asymptote
+described below.
+
 ## TX path per-packet decomposition (driver v2.4 + Track A, probe-on)
 
 Captured during the v3.4.1 perf session with the optional `ktime_get()`

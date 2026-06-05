@@ -1178,12 +1178,17 @@ if [ -n "$FIRMWARE_NAME" ]; then
         touch /userdata/etc/radio.conf
         # Strip every key we own, then re-append in canonical order.
         sed -i '/^FIRMWARE=/d;/^FIRMWARE_VERSION=/d;/^FIRMWARE_BAUD=/d;/^BOOTLOADER_VERSION=/d;/^MODE=/d;/^BRIDGE_BAUD=/d;/^OTBR_BAUD=/d' /userdata/etc/radio.conf
+        # Use 'if' (not '[ -n x ] && echo') for the optional keys: a false
+        # short-circuit on the LAST line would make the whole brace group —
+        # and thus this SSH command — exit non-zero, which the caller misreads
+        # as a failed radio.conf write. RCP/NCP/Router flashes have an empty
+        # MODE_LINE, so '[ -n '' ] && echo' was tripping that false negative.
         {
             echo 'FIRMWARE=${FIRMWARE_NAME}'
-            [ -n '${FIRMWARE_VER}' ] && echo 'FIRMWARE_VERSION=${FIRMWARE_VER}'
+            if [ -n '${FIRMWARE_VER}' ]; then echo 'FIRMWARE_VERSION=${FIRMWARE_VER}'; fi
             echo 'FIRMWARE_BAUD=${fw_baud}'
-            [ -n '${BOOTLOADER_VERSION_DETECTED}' ] && echo 'BOOTLOADER_VERSION=${BOOTLOADER_VERSION_DETECTED}'
-            [ -n '${MODE_LINE}' ] && echo '${MODE_LINE}'
+            if [ -n '${BOOTLOADER_VERSION_DETECTED}' ]; then echo 'BOOTLOADER_VERSION=${BOOTLOADER_VERSION_DETECTED}'; fi
+            if [ -n '${MODE_LINE}' ]; then echo '${MODE_LINE}'; fi
         } >> /userdata/etc/radio.conf
     "; then
         echo "" >&2

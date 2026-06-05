@@ -35,11 +35,10 @@ diff --git a/include/linux/serial_core.h b/include/linux/serial_core.h
 index 4f7bbdd90..d1404c97d 100644
 --- a/include/linux/serial_core.h
 +++ b/include/linux/serial_core.h
-@@ -1286,6 +1286,18 @@ static inline void uart_unlock_and_check_sysrq_irqrestore(struct uart_port *port
- }
+@@ -1275,6 +1275,18 @@ static inline void uart_unlock_and_check
  #endif	/* CONFIG_MAGIC_SYSRQ_SERIAL */
  
-+/*
+ /*
 + * Variant of guard(uart_port_lock_irqsave) for IRQ handlers that may capture
 + * a SysRq character via uart_prepare_sysrq_char(). The destructor uses the
 + * sysrq-aware unlock helper so that a captured port->sysrq_ch is dispatched
@@ -51,6 +50,7 @@ index 4f7bbdd90..d1404c97d 100644
 +                    uart_unlock_and_check_sysrq_irqrestore(_T->lock, _T->flags),
 +                    unsigned long flags);
 +
- /*
++/*
   * We do the SysRQ and SAK checking like this...
   */
+ static inline int uart_handle_break(struct uart_port *port)

@@ -4,6 +4,100 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [3.8.0] - 2026-06-02
+
+Companion entry to the [v3.8.0 RTL8196E
+release](../3-Main-SoC-Realtek-RTL8196E/CHANGELOG.md#380---2026-06-02).
+**No EFR32 firmware change** — same `.gbl` artefacts as before. The
+host-side RCP stack (`cpcd`) gains a native TCP bus, plus two tooling
+fixes.
+
+### `cpcd` — native TCP bus (drops the `socat` PTY shim)
+
+`cpcd` only spoke `bus_type: UART`/`SPI`, so the RCP host stack put a
+`socat` in front of it to turn the gateway's in-kernel UART↔TCP bridge
+(`TCP:8888`) into a PTY (`/tmp/ttyCpcRcp`). On any TCP blip that `socat`
+recreated the PTY, `cpcd`'s serial fd went stale, and `cpcd` + `zigbeed`
+had to restart in cascade.
+
+A native `bus_type: TCP` lets `cpcd` dial the bridge directly and own its
+own reconnection — no `socat` shim, no stale-PTY restart cascade. Because
+a bridge drop loses only the host-side TCP (not the EFR32), the CPC
+reliability layer (sequence numbers + ACK + RTO retransmit) recovers the
+gap when the link returns: the session resumes with sequence continuity,
+no secondary reset, no daemon restart.
+
+Validated against a live EFR32MG1B RCP: the full CPC handshake completes
+over the TCP bus, and a mid-session link drop (bridge disarm/re-arm) is
+recovered transparently with NOOP keep-alives flowing straight through.
+
+* The cpcd source is a gitignored build clone, so the change is carried as
+  `25-RCP-UART-HW/cpcd/tcp-bus.patch` (cpcd v4.5.3) and applied
+  idempotently by `build_cpcd.sh` (mirrors the existing `cmakeLists.patch`
+  flow). New config keys: `bus_type: TCP`, `tcp_server_address`,
+  `tcp_server_port`.
+* The Docker stack (`25-RCP-UART-HW/docker/cpcd-zigbeed/`) is wired for it:
+  `cpcd.conf.template` uses `bus_type: TCP` and `supervisord.conf` no
+  longer runs a `socat-cpc` program. The `Dockerfile.multiarch` builder
+  now `git apply`s `tcp-bus.patch` onto its cpcd v4.5.3 clone, so the
+  image ships the same patched `cpcd` as the host build — without it the
+  image would bundle a stock `cpcd` that rejects `bus_type: TCP` and fail
+  to start. The build context is widened to `25-RCP-UART-HW/` (with a
+  `.dockerignore` keeping it minimal) so the Dockerfile can reach the
+  single-source patch; the CI workflow's `context:` is repointed to match.
+  Set `bus_type: UART` with `uart_device_file` to fall back to the classic
+  socat-PTY path.
+* The native `rcp-stack` (systemd `--user`) flow is migrated too: it
+  generates a `bus_type: TCP` `cpcd.conf` from `RCP_ENDPOINT` and the
+  `socat-cpc-rcp.service` PTY shim (and its `rcp-socat-rcp` helper) are
+  removed — `cpcd-bringup.service` now dials the gateway directly. The
+  downstream `socat-zigbeed-pty` (zigbeed↔Z2M) is unchanged.
+
+### `flash_efr32.sh` — false-negative on the post-flash `radio.conf` write
+
+For RCP/NCP/Router flashes (where the `MODE=` line is empty), the SSH
+command that rewrites `/userdata/etc/radio.conf` ended in a brace group
+whose last statement was `[ -n '' ] && echo` — which exits 1. The whole
+remote command returned non-zero, so the script printed "failed to write
+/userdata/etc/radio.conf" and aborted before rebooting, even though the
+`sed` + appends had all succeeded and `radio.conf` was correct.
+
+Fix: the optional-key lines now use `if … fi` (returns 0 when the key is
+absent). Genuine SSH transport failures still surface (`ssh` returns 255).
+
+### `cpcd.conf` — drop the unrecognized `socket_folder` key
+
+cpcd v4.5.3 has no config-file parser for `socket_folder`; it is set only
+at build time from `CPC_SOCKET_DIR` (`/dev/shm`) and the per-instance
+socket path is hardcoded as `<socket_folder>/cpcd/<instance_name>/`. Every
+`cpcd.conf` that set `socket_folder` therefore got a "key not recognized"
+warning and the value was silently ignored (and would have double-nested
+the path if it had been honoured). The dead line is removed from the three
+places that emitted it — the Docker template, the `rcp-stack` example, and
+`rcp-stack`'s generated conf — with a comment so it is not re-added. Inert:
+the `/dev/shm` default already yields the documented
+`/dev/shm/cpcd/<instance>/` path.
+
+### Docker `socat-zigbeed` — one Z2M client at a time
+
+The container exports the shared zigbeed PTY to Z2M over TCP with
+`socat tcp-listen:9999,…,fork`, which forks a handler per connection. Two
+overlapping Z2M connections (e.g. a Z2M restart racing the old session)
+both relayed onto the same PTY, interleaving bytes and corrupting the EZSP
+stream — the multi-PID-over-shared-PTY failure seen in Discussion #112.
+Adding `max-children=1` keeps the listener alive (so reconnects still work)
+but stops it accepting while a client is connected; a second connection is
+queued and served only once the active one closes.
+
+* `25-RCP-UART-HW/cpcd/tcp-bus.patch`, `25-RCP-UART-HW/cpcd/build_cpcd.sh`
+* `25-RCP-UART-HW/docker/cpcd-zigbeed/{cpcd.conf.template,supervisord.conf}`
+* `25-RCP-UART-HW/rcp-stack/examples/cpcd.conf.example`,
+  `25-RCP-UART-HW/rcp-stack/bin/rcp-stack`
+* `25-RCP-UART-HW/README.md`, `25-RCP-UART-HW/EMBERZNET-8.x-GUIDE.md`
+* `flash_efr32.sh`
+
+---
+
 ## [3.4.1] - 2026-05-02
 
 Companion entry to the [v3.4.1 RTL8196E

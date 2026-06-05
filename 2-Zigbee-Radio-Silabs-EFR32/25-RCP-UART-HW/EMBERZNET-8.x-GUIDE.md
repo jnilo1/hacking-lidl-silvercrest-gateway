@@ -41,6 +41,17 @@ In RCP mode, the EFR32 chip only handles the 802.15.4 radio PHY/MAC layer. The E
                                                                     +---------------------+
 ```
 
+> **CPC transport — native TCP bus.** `cpcd` is built with a native
+> `bus_type: TCP` (carried as `cpcd/tcp-bus.patch`, applied automatically by
+> `build_cpcd.sh`). With it, cpcd connects directly to the gateway's in-kernel
+> UART↔TCP bridge on `TCP:8888` and reconnects on its own — no intermediate
+> `socat` PTY in front of cpcd. The **Docker stack** (`docker/cpcd-zigbeed/`)
+> uses this directly. The **native `rcp-stack`** flow documented below still
+> front-ends cpcd with a `socat` PTY (`socat-cpc-rcp`) and `uart_device_*`
+> keys; moving it onto the TCP bus is a follow-up. To use the TCP bus with a
+> hand-rolled cpcd.conf, set `bus_type: TCP` plus `tcp_server_address` /
+> `tcp_server_port` instead of `uart_device_file` / `uart_device_baud`.
+
 ## Installation Guide
 
 ### Prerequisites

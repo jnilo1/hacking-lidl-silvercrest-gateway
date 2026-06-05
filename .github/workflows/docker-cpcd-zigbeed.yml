@@ -1,11 +1,11 @@
 name: Build cpcd-zigbeed Docker image
 
+# Publish ONLY when a release tag vX.Y.Z is pushed (or via manual dispatch).
+# Pushes to main do NOT build/publish: main is a pre-release staging line and
+# must not clobber the public ghcr :latest before a release is cut.
 on:
   push:
-    branches: [main]
-    paths:
-      - '2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/cpcd-zigbeed/**'
-      - '.github/workflows/docker-cpcd-zigbeed.yml'
+    tags: ['v*']
   workflow_dispatch:
     inputs:
       push_image:
@@ -21,6 +21,12 @@ env:
 jobs:
   build:
     runs-on: ubuntu-latest
+    # The ghcr package jnilo1/cpcd-zigbeed is owned by the PUBLIC repo, so the
+    # image must be built and pushed from there — the private repo's
+    # GITHUB_TOKEN has no write_package on it. The release tag is pushed to
+    # both remotes; this guard skips the private repo's run so it does not fail
+    # on the denied push (and avoids a duplicate build).
+    if: github.repository == 'jnilo1/hacking-lidl-silvercrest-gateway'
     permissions:
       contents: read
       packages: write
@@ -47,15 +53,19 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          # Pre-release tags (e.g. v3.8.0-rc1) publish only the versioned image
+          # and the sha tag; they must not move :latest / :cpcd4.5.3-ezsp18,
+          # which keep pointing at the last GA release until v3.8.0 ships.
           tags: |
-            type=raw,value=latest
-            type=raw,value=cpcd4.5.3-ezsp18
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-rc') }}
+            type=raw,value=cpcd4.5.3-ezsp18,enable=${{ !contains(github.ref_name, '-rc') }}
             type=sha,prefix=
 
       - name: Build and push Docker image
         uses: docker/build-push-action@v5
         with:
-          context: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/cpcd-zigbeed
+          context: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW
           file: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/cpcd-zigbeed/Dockerfile.multiarch
           platforms: linux/amd64,linux/arm64
           push: ${{ github.event_name != 'workflow_dispatch' || inputs.push_image }}

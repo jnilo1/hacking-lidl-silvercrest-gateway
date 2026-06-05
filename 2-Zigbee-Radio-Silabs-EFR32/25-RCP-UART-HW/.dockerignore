@@ -1,0 +1,7 @@
+# The build context for docker/cpcd-zigbeed/Dockerfile.multiarch is this whole
+# directory (25-RCP-UART-HW/) so the Dockerfile can COPY cpcd/tcp-bus.patch into
+# the cpcd build. Keep the context tiny: ignore everything, then re-include only
+# the assets the Dockerfile actually needs.
+**
+!docker/cpcd-zigbeed/**
+!cpcd/tcp-bus.patch

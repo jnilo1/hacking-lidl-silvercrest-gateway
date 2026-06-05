@@ -1,0 +1,13 @@
+--- a/include/linux/timer.h
++++ b/include/linux/timer.h
+@@ -152,6 +152,10 @@
+ extern int mod_timer_pending(struct timer_list *timer, unsigned long expires);
+ extern int timer_reduce(struct timer_list *timer, unsigned long expires);
+ 
++/* Running timer callback on this (UP) CPU, or NULL — for the watchdog
++ * panic notifier (drivers/watchdog/rtl819x_wdt.c). */
++void *timer_get_running_fn(void);
++
+ /*
+  * The jiffies value which is added to now, when there is no timer
+  * in the timer wheel:

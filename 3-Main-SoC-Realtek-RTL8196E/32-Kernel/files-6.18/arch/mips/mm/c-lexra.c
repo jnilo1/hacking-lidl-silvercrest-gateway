@@ -105,18 +105,20 @@ void lexra_cache_init(void);
  */
 static noinline __iram void rlx_flush_dcache_fast(unsigned long start, unsigned long end)
 {
-	unsigned long p;
+	/*
+	 * Line-bounded: 128-byte unrolled op only for groups wholly inside the
+	 * 16-byte-rounded range, 16-byte ops for the remainder. One
+	 * CACHE16_UNROLL8 per iteration regardless of length would touch 128
+	 * bytes for a 20/32-byte flush and spill onto adjacent buffers — on a
+	 * non-coherent platform that needlessly widens every dma_cache_* op.
+	 */
+	unsigned long p = start & ~(16UL - 1);
+	unsigned long e = (end + 16UL - 1) & ~(16UL - 1);
 
-	/* Process 128 bytes at a time (8 lines × 16 bytes) */
-	for (p = start; p < end; p += 0x080) {
+	for (; p + 0x80 <= e; p += 0x80)
 		CACHE16_UNROLL8(CACHE_DCACHE_FLUSH, p);
-	}
-
-	/* Handle remainder */
-	p = p & ~(16 - 1);  /* cpu_dcache_line = 16 for RLX4181 */
-	if (p < end) {
+	for (; p < e; p += 16)
 		CACHE_OP(CACHE_DCACHE_FLUSH, p);
-	}
 }
 
 /*
@@ -125,6 +127,9 @@ static noinline __iram void rlx_flush_dcache_fast(unsigned long start, unsigned 
  */
 static noinline __iram void rlx_flush_dcache_range(unsigned long start, unsigned long end)
 {
+	if (unlikely(start >= end))	/* zero-length / underflow guard */
+		return;
+
 	/* For large ranges, use CCTL to flush entire cache */
 	if (end - start > 8192) {  /* cpu_dcache_size = 8KB */
 		CCTL_OP(CCTL_DCACHE_FLUSH);
@@ -147,6 +152,8 @@ static void rlx_flush_icache_range(unsigned long start, unsigned long end)
 	 * then flush entire I-cache using CCTL.
 	 * The "memory" clobber in CCTL_OP prevents reordering.
 	 */
+	if (unlikely(start >= end))	/* zero-length / underflow guard */
+		return;
 	rlx_flush_dcache_range(start, end);
 	CCTL_OP(CCTL_ICACHE_FLUSH);
 }
@@ -204,20 +211,20 @@ static inline void rlx_flush_kernel_vmap_range(unsigned long vaddr, int size)
 
 static inline void rlx_wback_dcache_fast(unsigned long start, unsigned long end)
 {
-	unsigned long p;
+	/* Line-bounded, like rlx_flush_dcache_fast() — no 128-byte over-run. */
+	unsigned long p = start & ~(16UL - 1);
+	unsigned long e = (end + 16UL - 1) & ~(16UL - 1);
 
-	for (p = start; p < end; p += 0x080) {
+	for (; p + 0x80 <= e; p += 0x80)
 		CACHE16_UNROLL8(CACHE_DCACHE_WBACK, p);
-	}
-
-	p = p & ~(16 - 1);
-	if (p < end) {
+	for (; p < e; p += 16)
 		CACHE_OP(CACHE_DCACHE_WBACK, p);
-	}
 }
 
 static inline void rlx_wback_dcache_range(unsigned long start, unsigned long end)
 {
+	if (unlikely(start >= end))	/* zero-length / underflow guard */
+		return;
 	if (end - start > 8192) {
 		CCTL_OP(CCTL_DCACHE_WBACK);
 		return;

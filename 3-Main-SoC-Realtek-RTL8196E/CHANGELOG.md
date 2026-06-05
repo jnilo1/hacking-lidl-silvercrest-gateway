@@ -6,6 +6,39 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [3.8.0] - 2026-06-02
+
+### Kernel — Ethernet driver (`rtl8196e-eth` v2.6) + D-cache flush bounding
+
+RX shadow-skb association hardened and the descriptor paths gained
+bounds validation, at no throughput cost (TCP RX 93.9 / TX 71.5 Mbit/s,
+zero interface errors or drops across the full iperf3 suite).
+
+* **RX correctness under ring saturation.** The RX poll now indexes the
+  shadow skb by the hardware mbuf index (guarded by `mbuf_index <
+  rx_cnt`) instead of `rx_idx`. Under RX ring saturation the switch can
+  link `pkthdr[rx_idx]` to a mbuf at a different ring index, so the old
+  code could hand the stack the wrong shadow skb; flow-controlled TCP
+  (the nominal case) is unaffected.
+* **Descriptor pool validation.** `rtl8196e_ptr_in_pool()` range- and
+  alignment-checks the pkthdr/mbuf pointers read back from the rings; a
+  corrupt TX descriptor now returns `-EIO` instead of being
+  dereferenced as a wild pointer. New ring anomaly counters are exposed
+  via `ethtool -S eth0` (24 stats) and stay at zero in nominal flow.
+* **`mm/c-lexra`: D-cache range-flush bounding.** The fast D-cache
+  flush/wback now rounds to 16-byte lines and stays within the rounded
+  range. Previously a 20/32-byte descriptor flush issued a full 128-byte
+  unrolled op and spilled onto adjacent buffers — needless blast radius
+  on this non-coherent platform. Zero-length / underflow guards added on
+  the range entry points.
+
+* `32-Kernel/files-6.18/drivers/net/ethernet/rtl8196e-eth/` — driver
+  2.5 → 2.6 (`rtl8196e_ring.c/.h`, `rtl8196e_main.c`, `SPECIFICATIONS.md`,
+  `PERFORMANCE.md`).
+* `32-Kernel/files-6.18/arch/mips/mm/c-lexra.c` — range-flush bounding.
+
+---
+
 ## [3.7.0] - 2026-05-30
 
 ### Kernel — Hardware watchdog driver (`rtl819x_wdt` v1.1) — persistent panic post-mortem
@@ -37,7 +70,9 @@ rtl819x-wdt ...: previous boot ended in panic: uptime=<sec>s running=<fn> reason
 * `34-Userdata/skeleton/etc/init.d/S26panicrec` — copies the one dmesg
   line into `/userdata/panic/history` on the **first occurrence only** and
   blocks until the file is removed by hand, so a reboot loop cannot fill
-  the JFFS2 partition. Re-arm with `rm /userdata/panic/history`.
+  the JFFS2 partition. Re-arm with `rm /userdata/panic/history`. This means
+  at most a single one-line write to NOR flash per re-arm, for an already
+  rare event — no flash-wear concern.
 
 The page already survives the same `WDTCNR=0` reset (proven by
 `boothold`), and a panic reboot does not set HOLD, so the bootloader boots

@@ -61,7 +61,9 @@ Border Router compose at `../../26-OT-RCP/docker/docker-compose-otbr-host.yml`.
 
 Runs Zigbee2MQTT with the `ember` adapter. The Zigbee stack (zigbeed,
 EmberZNet 8.2.2 / EZSP v18) runs in a Docker container that connects to
-the gateway's in-kernel UART bridge over TCP.
+the gateway's in-kernel UART bridge over TCP. Inside the container, `cpcd`
+uses its native `bus_type: TCP` to dial the bridge on `TCP:8888` directly —
+no `socat` PTY shim (see [`cpcd/README.md`](../cpcd/README.md)).
 
 ### Quick Start
 

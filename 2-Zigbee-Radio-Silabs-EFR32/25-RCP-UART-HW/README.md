@@ -191,6 +191,17 @@ After flashing the RCP firmware, you need to configure the host software chain.
 | zigbeed | EmberZNet 8.2.2 | Simplicity SDK 2025.6.3 | Zigbee stack daemon (recommended) |
 | zigbeed | EmberZNet 7.5.1 | Gecko SDK 4.5.0 | Zigbee stack daemon (legacy) |
 
+> **CPC transport — native TCP bus.** `cpcd` here is built with a native
+> `bus_type: TCP` (carried as [`cpcd/tcp-bus.patch`](./cpcd/tcp-bus.patch) and
+> applied automatically by `build_cpcd.sh`). cpcd connects straight to the
+> gateway's in-kernel UART↔TCP bridge on `TCP:8888` and owns its own
+> reconnection, so the host stack no longer needs a `socat` PTY shim in front
+> of cpcd. The Docker stack config in this tree (`docker/cpcd-zigbeed/`) is
+> wired for it (`bus_type: TCP`, `tcp_server_address`/`tcp_server_port`);
+> rebuild the image from that directory to ship the patched cpcd. Set
+> `bus_type: UART` with `uart_device_file` to fall back to the classic
+> socat-PTY path.
+
 ### Build Instructions
 
 See subdirectories for detailed build instructions:
@@ -362,7 +373,7 @@ The CPC protocol is sensitive to network conditions. For reliable operation:
 
 | Problem | Solution |
 |---------|----------|
-| cpcd won't connect | Check `tcp_client_address` in cpcd.conf |
+| cpcd won't connect | With the native TCP bus, check `tcp_server_address`/`tcp_server_port` in cpcd.conf point at the gateway bridge; verify `nc -zv <gateway-ip> 8888` |
 | CPC version mismatch | Use GSDK 4.5.0 for CPC Protocol v5 |
 | Frequent disconnects | Use direct Ethernet, check for WiFi bridges |
 
@@ -390,6 +401,7 @@ The CPC protocol is sensitive to network conditions. For reliable operation:
 - **Hardware Flow Control:** RTS/CTS required for reliable TCP operation
 - **CPC Security Disabled:** Saves ~45KB flash (not needed for local network)
 - **Stack flexibility:** Same `.gbl` works with `zigbeed` 7.5.1 *or* 8.2.2 — no EFR32 reflash needed to change EZSP version
+- **Native TCP bus in cpcd:** cpcd dials the gateway's UART↔TCP bridge directly (`bus_type: TCP`) and reconnects on its own — no `socat` PTY shim, no stale-PTY restart cascade
 
 ---
 

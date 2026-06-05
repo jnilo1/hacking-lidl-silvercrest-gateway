@@ -22,7 +22,7 @@ while [ $# -gt 0 ]; do
       shift 2
       ;;
     --all)
-      symlinks+=("/tmp/ttyCpcRcp" "/tmp/ttyZigbeed" "/tmp/ttyZ2M")
+      symlinks+=("/tmp/ttyZigbeed" "/tmp/ttyZ2M")
       socket_dir="${socket_dir:-${CPC_SOCKET_DIR:-}}"
       shift
       ;;

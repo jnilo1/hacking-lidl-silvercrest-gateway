@@ -1,0 +1,770 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 73e20e4..6bba88c 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -102,6 +102,7 @@ set(CPCD_SOURCES
+   "${PROJECT_SOURCE_DIR}/driver/driver_ezsp.c"
+   "${PROJECT_SOURCE_DIR}/driver/driver_kill.c"
+   "${PROJECT_SOURCE_DIR}/driver/driver_spi.c"
++  "${PROJECT_SOURCE_DIR}/driver/driver_tcp.c"
+   "${PROJECT_SOURCE_DIR}/driver/driver_uart.c"
+   "${PROJECT_SOURCE_DIR}/driver/driver_xmodem.c"
+   "${PROJECT_SOURCE_DIR}/misc/board_controller.c"
+diff --git a/driver/driver_tcp.c b/driver/driver_tcp.c
+new file mode 100644
+index 0000000..7038c22
+--- /dev/null
++++ b/driver/driver_tcp.c
+@@ -0,0 +1,580 @@
++/***************************************************************************//**
++ * @file
++ * @brief Co-Processor Communication Protocol (CPC) - TCP driver
++ *******************************************************************************
++ * # License
++ * <b>Copyright 2022 Silicon Laboratories Inc. www.silabs.com</b>
++ *******************************************************************************
++ *
++ * The licensor of this software is Silicon Laboratories Inc. Your use of this
++ * software is governed by the terms of Silicon Labs Master Software License
++ * Agreement (MSLA) available at
++ * www.silabs.com/about-us/legal/master-software-license-agreement. This
++ * software is distributed to you in Source Code format and is governed by the
++ * sections of the MSLA applicable to Source Code.
++ *
++ ******************************************************************************/
++
++#include "config.h"
++
++#include <pthread.h>
++
++#include <fcntl.h>
++#include <unistd.h>
++#include <errno.h>
++#include <string.h>
++#include <stdio.h>
++#include <sys/types.h>
++#include <sys/socket.h>
++#include <sys/epoll.h>
++#include <sys/eventfd.h>
++#include <netinet/in.h>
++#include <netinet/tcp.h>
++#include <netdb.h>
++#include <poll.h>
++#include <time.h>
++
++#include "cpcd/config.h"
++#include "cpcd/logging.h"
++#include "cpcd/sleep.h"
++#include "cpcd/utils.h"
++
++#include "driver/driver_tcp.h"
++#include "server_core/core/hdlc.h"
++#include "server_core/core/crc.h"
++#include "driver/driver_kill.h"
++
++#define TCP_BUFFER_SIZE (4096 + SLI_CPC_HDLC_HEADER_RAW_SIZE)
++
++// Fixed back-off between reconnection attempts (milliseconds)
++#define TCP_RECONNECT_BACKOFF_MS 1000
++// Bounded retries for the very first connection before giving up (× backoff)
++#define TCP_INITIAL_CONNECT_ATTEMPTS 60
++
++static int fd_tcp = -1;
++static int fd_core;
++static int fd_core_notify;
++static int fd_stop_drv;
++
++static const char *server_address;
++static char        server_port_str[8];
++
++// Protects fd_tcp and tcp_connected against the rx (reconnecting) thread and
++// the tx (writing) thread touching the socket concurrently.
++static pthread_mutex_t tcp_lock = PTHREAD_MUTEX_INITIALIZER;
++static bool tcp_connected = false;
++
++static pthread_t rx_drv_thread;
++static bool rx_drv_thread_started = false;
++
++static pthread_t tx_drv_thread;
++static bool tx_drv_thread_started = false;
++
++// rx frame-delimiter state — file scope so a reconnect can reset it cleanly
++static uint8_t rx_buffer[TCP_BUFFER_SIZE];
++static size_t  rx_buffer_head = 0;
++static enum { EXPECTING_HEADER, EXPECTING_PAYLOAD } rx_state = EXPECTING_HEADER;
++
++static void* receive_driver_thread_func(void* param);
++static void* transmit_driver_thread_func(void* param);
++
++static int  driver_tcp_try_connect(void);
++static int  driver_tcp_connect_blocking(int max_attempts);
++static bool stop_requested(int timeout_ms);
++
++// Reads once from the socket, then delimits and pushes every complete frame the
++// buffer now holds. On a transport disconnect, sets *disconnected.
++static void driver_tcp_process_tcp(bool *disconnected);
++
++static bool validate_header(uint8_t *header_start);
++static bool header_synch(uint8_t *buffer, size_t *buffer_head);
++static bool delimit_and_push_frames_to_core(uint8_t *buffer, size_t *buffer_head);
++
++void driver_tcp_init(int *fd_to_core, int *fd_notify_core, const char *address, unsigned int port)
++{
++  int fd_sockets[2];
++  int fd_sockets_notify[2];
++  ssize_t ret;
++
++  server_address = address;
++  snprintf(server_port_str, sizeof(server_port_str), "%u", port);
++
++  // Create the stop event first so the (blocking) connect can honour a kill
++  fd_stop_drv = eventfd(0, EFD_CLOEXEC);
++  FATAL_SYSCALL_ON(fd_stop_drv == -1);
++
++  fd_tcp = driver_tcp_connect_blocking(TCP_INITIAL_CONNECT_ATTEMPTS);
++  if (fd_tcp < 0) {
++    FATAL("Could not connect to %s:%s", server_address, server_port_str);
++  }
++  tcp_connected = true;
++
++  ret = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fd_sockets);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  fd_core  = fd_sockets[0];
++  *fd_to_core = fd_sockets[1];
++
++  ret = socketpair(AF_UNIX, SOCK_SEQPACKET, 0, fd_sockets_notify);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  fd_core_notify  = fd_sockets_notify[0];
++  *fd_notify_core = fd_sockets_notify[1];
++
++  driver_kill_init(driver_tcp_kill);
++
++  ret = pthread_create(&tx_drv_thread, NULL, transmit_driver_thread_func, NULL);
++  FATAL_ON(ret != 0);
++  tx_drv_thread_started = true;
++
++  ret = pthread_create(&rx_drv_thread, NULL, receive_driver_thread_func, NULL);
++  FATAL_ON(ret != 0);
++  rx_drv_thread_started = true;
++
++  ret = pthread_setname_np(tx_drv_thread, "tx_drv_thread");
++  FATAL_ON(ret != 0);
++  ret = pthread_setname_np(rx_drv_thread, "rx_drv_thread");
++  FATAL_ON(ret != 0);
++
++  TRACE_DRIVER("Connected to %s:%s", server_address, server_port_str);
++  TRACE_DRIVER("Init done");
++}
++
++void driver_tcp_kill(void)
++{
++  ssize_t ret;
++  const uint64_t event_value = 1;
++
++  ret = write(fd_stop_drv, &event_value, sizeof(event_value));
++  FATAL_SYSCALL_ON(ret != sizeof(event_value));
++
++  if (tx_drv_thread_started) {
++    pthread_join(tx_drv_thread, NULL);
++    tx_drv_thread_started = false;
++  }
++  if (rx_drv_thread_started) {
++    pthread_join(rx_drv_thread, NULL);
++    rx_drv_thread_started = false;
++  }
++
++  TRACE_DRIVER("TCP driver threads cancelled");
++
++  if (fd_tcp >= 0) {
++    close(fd_tcp);
++  }
++  close(fd_core);
++  close(fd_core_notify);
++  close(fd_stop_drv);
++}
++
++/*
++ * Poll fd_stop_drv (without consuming it — both worker threads observe it
++ * level-triggered) for up to timeout_ms. Returns true if a kill was requested.
++ */
++static bool stop_requested(int timeout_ms)
++{
++  struct pollfd pfd = { .fd = fd_stop_drv, .events = POLLIN };
++  int ret;
++
++  do {
++    ret = poll(&pfd, 1, timeout_ms);
++  } while (ret == -1 && errno == EINTR);
++
++  FATAL_SYSCALL_ON(ret < 0);
++
++  return ret > 0 && (pfd.revents & POLLIN);
++}
++
++/* One connection attempt. Returns a connected, TCP_NODELAY socket fd, or -1. */
++static int driver_tcp_try_connect(void)
++{
++  struct addrinfo hints = { 0 };
++  struct addrinfo *result = NULL;
++  struct addrinfo *rp;
++  int fd = -1;
++  int gai;
++
++  hints.ai_family = AF_UNSPEC;
++  hints.ai_socktype = SOCK_STREAM;
++
++  gai = getaddrinfo(server_address, server_port_str, &hints, &result);
++  if (gai != 0) {
++    TRACE_DRIVER("getaddrinfo(%s:%s): %s", server_address, server_port_str, gai_strerror(gai));
++    return -1;
++  }
++
++  for (rp = result; rp != NULL; rp = rp->ai_next) {
++    fd = socket(rp->ai_family, rp->ai_socktype | SOCK_CLOEXEC, rp->ai_protocol);
++    if (fd < 0) {
++      continue;
++    }
++    if (connect(fd, rp->ai_addr, rp->ai_addrlen) == 0) {
++      break; // success
++    }
++    close(fd);
++    fd = -1;
++  }
++
++  freeaddrinfo(result);
++
++  if (fd < 0) {
++    return -1;
++  }
++
++  // Mirror the gateway-side bridge: disable Nagle so CPC's tight ACK timing
++  // is not coalesced (rtl8196e-uart-bridge sets TCP_NODELAY on its end too).
++  {
++    int one = 1;
++    if (setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one)) < 0) {
++      WARN("TCP_NODELAY: %s", strerror(errno));
++    }
++  }
++
++  return fd;
++}
++
++/*
++ * Loop driver_tcp_try_connect() with a fixed back-off until it succeeds, a kill
++ * is requested, or (when max_attempts > 0) the attempt budget is exhausted.
++ * Returns the connected fd, or -1.
++ */
++static int driver_tcp_connect_blocking(int max_attempts)
++{
++  int attempt = 0;
++
++  while (true) {
++    int fd = driver_tcp_try_connect();
++    if (fd >= 0) {
++      return fd;
++    }
++
++    attempt++;
++    if (max_attempts > 0 && attempt >= max_attempts) {
++      return -1;
++    }
++
++    TRACE_DRIVER("Connection to %s:%s failed, retrying in %d ms",
++                 server_address, server_port_str, TCP_RECONNECT_BACKOFF_MS);
++
++    if (stop_requested(TCP_RECONNECT_BACKOFF_MS)) {
++      return -1;
++    }
++  }
++}
++
++static void* receive_driver_thread_func(void* param)
++{
++  struct epoll_event events[2] = {};
++  bool exit_thread = false;
++  int fd_epoll;
++  int ret;
++
++  (void) param;
++
++  TRACE_DRIVER("Receiver thread start");
++
++  fd_epoll = epoll_create1(EPOLL_CLOEXEC);
++  FATAL_SYSCALL_ON(fd_epoll < 0);
++
++  events[0].events = EPOLLIN;
++  events[0].data.fd = fd_tcp;
++  ret = epoll_ctl(fd_epoll, EPOLL_CTL_ADD, fd_tcp, &events[0]);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  events[1].events = EPOLLIN;
++  events[1].data.fd = fd_stop_drv;
++  ret = epoll_ctl(fd_epoll, EPOLL_CTL_ADD, fd_stop_drv, &events[1]);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  while (!exit_thread) {
++    int event_count;
++
++    do {
++      event_count = epoll_wait(fd_epoll, events, 2, -1);
++      if (event_count == -1 && errno == EINTR) {
++        continue;
++      }
++      FATAL_SYSCALL_ON(event_count == -1);
++      break;
++    } while (1);
++
++    FATAL_ON(event_count == 0);
++
++    for (size_t event_i = 0; event_i != (size_t)event_count; event_i++) {
++      int current_event_fd = events[event_i].data.fd;
++
++      if (current_event_fd == fd_stop_drv) {
++        exit_thread = true;
++        continue;
++      }
++
++      if (current_event_fd == fd_tcp) {
++        bool disconnected = false;
++
++        driver_tcp_process_tcp(&disconnected);
++
++        if (disconnected) {
++          int old_fd = fd_tcp;
++          int new_fd;
++
++          WARN("TCP link to %s:%s dropped, reconnecting", server_address, server_port_str);
++
++          // Closing old_fd removes it from this epoll set automatically.
++          epoll_ctl(fd_epoll, EPOLL_CTL_DEL, old_fd, NULL);
++
++          pthread_mutex_lock(&tcp_lock);
++          tcp_connected = false;
++          close(old_fd);
++          fd_tcp = -1;
++          new_fd = driver_tcp_connect_blocking(0 /* forever, until stop */);
++          if (new_fd >= 0) {
++            fd_tcp = new_fd;
++            tcp_connected = true;
++          }
++          pthread_mutex_unlock(&tcp_lock);
++
++          if (new_fd < 0) {
++            // Only returns < 0 on a kill request
++            exit_thread = true;
++            break;
++          }
++
++          // Drop any partially-buffered frame from the dead connection
++          rx_buffer_head = 0;
++          rx_state = EXPECTING_HEADER;
++
++          events[0].events = EPOLLIN;
++          events[0].data.fd = new_fd;
++          ret = epoll_ctl(fd_epoll, EPOLL_CTL_ADD, new_fd, &events[0]);
++          FATAL_SYSCALL_ON(ret < 0);
++
++          PRINT_INFO("Reconnected to %s:%s", server_address, server_port_str);
++        }
++      }
++    }
++  }
++
++  close(fd_epoll);
++  return 0;
++}
++
++static void* transmit_driver_thread_func(void* param)
++{
++  struct epoll_event events[2] = {};
++  bool exit_thread = false;
++  int fd_epoll;
++  int ret;
++
++  (void) param;
++
++  TRACE_DRIVER("Transmitter thread start");
++
++  fd_epoll = epoll_create1(EPOLL_CLOEXEC);
++  FATAL_SYSCALL_ON(fd_epoll < 0);
++
++  events[0].events = EPOLLIN;
++  events[0].data.fd = fd_core;
++  ret = epoll_ctl(fd_epoll, EPOLL_CTL_ADD, fd_core, &events[0]);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  events[1].events = EPOLLIN;
++  events[1].data.fd = fd_stop_drv;
++  ret = epoll_ctl(fd_epoll, EPOLL_CTL_ADD, fd_stop_drv, &events[1]);
++  FATAL_SYSCALL_ON(ret < 0);
++
++  while (!exit_thread) {
++    int event_count;
++
++    do {
++      event_count = epoll_wait(fd_epoll, events, 2, -1);
++      if (event_count == -1 && errno == EINTR) {
++        continue;
++      }
++      FATAL_SYSCALL_ON(event_count == -1);
++      break;
++    } while (1);
++
++    FATAL_ON(event_count == 0);
++
++    for (size_t event_i = 0; event_i != (size_t)event_count; event_i++) {
++      int current_event_fd = events[event_i].data.fd;
++
++      if (current_event_fd == fd_stop_drv) {
++        exit_thread = true;
++        continue;
++      }
++
++      if (current_event_fd == fd_core) {
++        uint8_t buffer[TCP_BUFFER_SIZE];
++        ssize_t read_retval = read(fd_core, buffer, sizeof(buffer));
++        FATAL_SYSCALL_ON(read_retval < 0);
++
++        pthread_mutex_lock(&tcp_lock);
++        if (tcp_connected) {
++          ssize_t write_retval = write(fd_tcp, buffer, (size_t)read_retval);
++          if (write_retval != read_retval) {
++            // Treat any short/failed write as a transport drop; the rx thread
++            // owns reconnection and will pick it up on its EOF/error.
++            WARN("TCP write failed (%zd/%zd): %s", write_retval, read_retval, strerror(errno));
++            tcp_connected = false;
++          }
++        } else {
++          // Mid-reconnect: drop the frame. CPC retransmits unacked frames.
++          TRACE_DRIVER("Dropping core frame: TCP link down");
++        }
++        pthread_mutex_unlock(&tcp_lock);
++
++        // Notify the core that the bytes have been handed to the kernel.
++        // Unlike UART there is no baud-rate drain time to model.
++        struct timespec tx_complete_timestamp;
++        clock_gettime(CLOCK_MONOTONIC, &tx_complete_timestamp);
++        ssize_t notify_retval = write(fd_core_notify, &tx_complete_timestamp, sizeof(tx_complete_timestamp));
++        FATAL_SYSCALL_ON(notify_retval != sizeof(tx_complete_timestamp));
++      }
++    }
++  }
++
++  close(fd_epoll);
++  return 0;
++}
++
++static void driver_tcp_process_tcp(bool *disconnected)
++{
++  const size_t available_space = sizeof(rx_buffer) - rx_buffer_head - 1;
++
++  // Guard against a 0-length read (would look like EOF): only read when there
++  // is room. If the buffer is momentarily full, fall through and keep parsing.
++  if (available_space > 0) {
++    uint8_t temp_buffer[TCP_BUFFER_SIZE];
++    ssize_t read_retval;
++
++    do {
++      read_retval = read(fd_tcp, temp_buffer, available_space);
++    } while (read_retval == -1 && errno == EINTR);
++
++    if (read_retval == 0) {
++      *disconnected = true;     // peer closed the connection
++      return;
++    }
++    if (read_retval < 0) {
++      *disconnected = true;     // ECONNRESET, ETIMEDOUT, … — transport drop
++      return;
++    }
++
++    memcpy(&rx_buffer[rx_buffer_head], temp_buffer, (size_t)read_retval);
++    rx_buffer_head += (size_t)read_retval;
++  }
++
++  while (1) {
++    switch (rx_state) {
++      case EXPECTING_HEADER:
++        if (header_synch(rx_buffer, &rx_buffer_head)) {
++          rx_state = EXPECTING_PAYLOAD;
++        } else {
++          return;
++        }
++        break;
++
++      case EXPECTING_PAYLOAD:
++        if (delimit_and_push_frames_to_core(rx_buffer, &rx_buffer_head)) {
++          rx_state = EXPECTING_HEADER;
++        } else {
++          return;
++        }
++        break;
++
++      default:
++        BUG("Illegal switch, Case : %d", rx_state);
++        return;
++    }
++  }
++}
++
++// -------------------------------------------------------------------------
++// HDLC frame delimiting — duplicated from driver_uart.c (transport-agnostic).
++// Kept local to the TCP driver so the working UART path is untouched; a later
++// productization step can lift these into a shared driver_frame.c.
++// -------------------------------------------------------------------------
++
++static bool validate_header(uint8_t *header_start)
++{
++  uint16_t hcs;
++  uint16_t payload_size;
++
++  if (header_start[SLI_CPC_HDLC_FLAG_POS] != SLI_CPC_HDLC_FLAG_VAL) {
++    return false;
++  }
++
++  hcs = hdlc_get_hcs(header_start);
++
++  if (!sli_cpc_validate_crc_sw(header_start, SLI_CPC_HDLC_HEADER_SIZE, hcs)) {
++    TRACE_DRIVER_INVALID_HEADER_CHECKSUM();
++    return false;
++  }
++
++  payload_size = hdlc_get_length(header_start);
++  if (payload_size > TCP_BUFFER_SIZE) {
++    TRACE_DRIVER("RX buffer size from bus is invalid: %d", payload_size);
++    return false;
++  }
++
++  return true;
++}
++
++static bool header_synch(uint8_t *buffer, size_t *buffer_head)
++{
++  if (*buffer_head < SLI_CPC_HDLC_HEADER_RAW_SIZE) {
++    return false;
++  }
++
++  const size_t num_header_combination = *buffer_head - SLI_CPC_HDLC_HEADER_RAW_SIZE + 1;
++  size_t i;
++
++  for (i = 0; i != num_header_combination; i++) {
++    if (validate_header(&buffer[i])) {
++      if (i != 0) {
++        memmove(&buffer[0], &buffer[i], *buffer_head - i);
++        *buffer_head -= i;
++      }
++      return true;
++    }
++  }
++
++  memmove(&buffer[0], &buffer[num_header_combination], SLI_CPC_HDLC_HEADER_RAW_SIZE - 1);
++  *buffer_head = SLI_CPC_HDLC_HEADER_RAW_SIZE - 1;
++
++  return false;
++}
++
++static bool delimit_and_push_frames_to_core(uint8_t *buffer, size_t *buffer_head)
++{
++  uint16_t payload_len;
++  size_t frame_size;
++
++  if (*buffer_head < SLI_CPC_HDLC_HEADER_RAW_SIZE) {
++    return false;
++  }
++
++  payload_len = hdlc_get_length(buffer);
++  frame_size = payload_len + SLI_CPC_HDLC_HEADER_RAW_SIZE;
++
++  if (frame_size > *buffer_head) {
++    return false;
++  }
++
++  {
++    TRACE_FRAME("Driver : Frame delimiter : push delimited frame to core : ", buffer, frame_size);
++
++    ssize_t write_retval = write(fd_core, buffer, frame_size);
++    FATAL_SYSCALL_ON(write_retval < 0);
++    FATAL_ON((size_t)write_retval != frame_size);
++  }
++
++  {
++    const size_t remaining_bytes = *buffer_head - frame_size;
++    memmove(buffer, &buffer[frame_size], remaining_bytes);
++    *buffer_head = remaining_bytes;
++  }
++
++  return true;
++}
+diff --git a/driver/driver_tcp.h b/driver/driver_tcp.h
+new file mode 100644
+index 0000000..49c8e67
+--- /dev/null
++++ b/driver/driver_tcp.h
+@@ -0,0 +1,37 @@
++/***************************************************************************//**
++ * @file
++ * @brief Co-Processor Communication Protocol (CPC) - TCP driver
++ *******************************************************************************
++ * # License
++ * <b>Copyright 2022 Silicon Laboratories Inc. www.silabs.com</b>
++ *******************************************************************************
++ *
++ * The licensor of this software is Silicon Laboratories Inc. Your use of this
++ * software is governed by the terms of Silicon Labs Master Software License
++ * Agreement (MSLA) available at
++ * www.silabs.com/about-us/legal/master-software-license-agreement. This
++ * software is distributed to you in Source Code format and is governed by the
++ * sections of the MSLA applicable to Source Code.
++ *
++ ******************************************************************************/
++
++#ifndef DRIVER_TCP_H
++#define DRIVER_TCP_H
++
++/*
++ * Initialize the TCP driver. Crashes the app if the initial connection fails.
++ *
++ * This driver is meant to talk to the EFR32 RCP over a transparent UART<->TCP
++ * bridge (e.g. the in-kernel rtl8196e-uart-bridge on the Lidl gateway). It owns
++ * its own reconnection: if the TCP link drops mid-session it reconnects under
++ * cpcd without the daemon exiting, removing the need for an external socat PTY
++ * shim.
++ *
++ * Returns, through the out-parameters, the file descriptors of the paired
++ * sockets to the driver for the core to use in its select()/epoll() calls.
++ */
++void driver_tcp_init(int *fd_to_core, int *fd_notify_core, const char *server_address, unsigned int server_port);
++
++void driver_tcp_kill(void);
++
++#endif // DRIVER_TCP_H
+diff --git a/include/cpcd/config.h b/include/cpcd/config.h
+index 3b4a1e1..9e965a4 100644
+--- a/include/cpcd/config.h
++++ b/include/cpcd/config.h
+@@ -24,6 +24,7 @@
+ typedef enum {
+   UART,
+   SPI,
++  TCP,
+   UNCHOSEN
+ } bus_t;
+ 
+@@ -71,6 +72,9 @@ typedef struct __attribute__((packed)) {
+   const char *spi_irq_chip;
+   unsigned int spi_irq_pin;
+ 
++  const char *tcp_server_address;
++  unsigned int tcp_server_port;
++
+   const char *fwu_reset_chip;
+   int fwu_spi_reset_pin;
+   const char *fwu_wake_chip;
+diff --git a/misc/config.c b/misc/config.c
+index 493c3d2..9e0c0ea 100644
+--- a/misc/config.c
++++ b/misc/config.c
+@@ -93,6 +93,10 @@ config_t config = {
+   .spi_irq_chip = NULL,
+   .spi_irq_pin = 0,
+ 
++  // TCP config
++  .tcp_server_address = NULL,
++  .tcp_server_port = 0,
++
+   // Firmware update
+   .fwu_reset_chip = NULL,
+   .fwu_spi_reset_pin = -1,
+@@ -160,6 +164,8 @@ static const char* config_bus_to_str(bus_t value)
+       return "UART";
+     case SPI:
+       return "SPI";
++    case TCP:
++      return "TCP";
+     case UNCHOSEN:
+       return "UNCHOSEN";
+     default:
+@@ -279,6 +285,9 @@ static void config_print(void)
+   CONFIG_PRINT_STR_COND(config.spi_irq_chip, config.bus == SPI);
+   CONFIG_PRINT_DEC_COND(config.spi_irq_pin, config.bus == SPI);
+ 
++  CONFIG_PRINT_STR_COND(config.tcp_server_address, config.bus == TCP);
++  CONFIG_PRINT_DEC_COND(config.tcp_server_port, config.bus == TCP);
++
+   CONFIG_PRINT_BOOL_TO_STR(config.fwu_recovery_pins_enabled);
+   CONFIG_PRINT_STR_COND(config.fwu_reset_chip, config.fwu_recovery_pins_enabled);
+   CONFIG_PRINT_DEC_COND(config.fwu_spi_reset_pin, config.fwu_recovery_pins_enabled);
+@@ -727,6 +736,8 @@ static void config_parse_config_file(void)
+         config.bus = UART;
+       } else if (0 == strcmp(val, "SPI")) {
+         config.bus = SPI;
++      } else if (0 == strcmp(val, "TCP")) {
++        config.bus = TCP;
+       } else {
+         FATAL("Config file error : bad bus_type value\n");
+       }
+@@ -745,6 +756,14 @@ static void config_parse_config_file(void)
+       if (*endptr != '\0') {
+         FATAL("Bad config line \"%s\"", line);
+       }
++    } else if (0 == strcmp(name, "tcp_server_address")) {
++      config.tcp_server_address = strdup(val);
++      FATAL_ON(config.tcp_server_address == NULL);
++    } else if (0 == strcmp(name, "tcp_server_port")) {
++      config.tcp_server_port = (unsigned int)strtoul(val, &endptr, 10);
++      if (*endptr != '\0') {
++        FATAL("Bad config line \"%s\"", line);
++      }
+     } else if (0 == strcmp(name, "bootloader_recovery_pins_enabled")) {
+       if (0 == strcmp(val, "true")) {
+         config.fwu_recovery_pins_enabled = true;
+@@ -952,6 +971,13 @@ static void config_validate_configuration(void)
+       }
+ 
+       prevent_device_collision(config.uart_file);
++    } else if (config.bus == TCP) {
++      if (config.tcp_server_address == NULL) {
++        FATAL("tcp_server_address is required");
++      }
++      if (config.tcp_server_port == 0) {
++        FATAL("tcp_server_port is required");
++      }
+     } else {
+       FATAL("Invalid bus configuration.");
+     }
+diff --git a/modes/normal.c b/modes/normal.c
+index 56d89f7..64a162f 100644
+--- a/modes/normal.c
++++ b/modes/normal.c
+@@ -28,6 +28,7 @@
+ 
+ #include "driver/driver_uart.h"
+ #include "driver/driver_spi.h"
++#include "driver/driver_tcp.h"
+ #include "driver/driver_ezsp.h"
+ 
+ void run_normal_mode(void)
+@@ -50,6 +51,11 @@ void run_normal_mode(void)
+                       config.spi_bitrate,
+                       config.spi_irq_chip,
+                       config.spi_irq_pin);
++    } else if (config.bus == TCP) {
++      driver_tcp_init(&fd_socket_driver_core,
++                      &fd_socket_driver_core_notify,
++                      config.tcp_server_address,
++                      config.tcp_server_port);
+     } else {
+       BUG();
+     }
+@@ -92,6 +98,10 @@ bool is_bootloader_running(void)
+                                                                   config.spi_bitrate,
+                                                                   config.spi_irq_chip,
+                                                                   config.spi_irq_pin);
++  } else if (config.bus == TCP) {
++    // Bootloader probing / firmware update over the TCP bridge is out of scope;
++    // assume the secondary is running its application.
++    secondary_running_bootloader = false;
+   } else {
+     BUG();
+   }

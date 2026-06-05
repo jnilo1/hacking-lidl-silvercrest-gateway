@@ -19,6 +19,11 @@
 #
 #   rm /userdata/panic/history
 #
+# Flash wear: this writes to the JFFS2 partition at most ONCE per re-arm
+# (a single line, only the first time after an rm). A panic is already a
+# rare event, and the first-occurrence guard means even a reboot loop costs
+# zero further writes — so there is no NOR-flash wear concern whatsoever.
+#
 # Runs after S20time (wall clock) and S25watchdog. Resolution of the culprit
 # function is best-effort: see rtl819x_wdt.c (running_timer may be NULL if the
 # panic landed between timer callbacks).

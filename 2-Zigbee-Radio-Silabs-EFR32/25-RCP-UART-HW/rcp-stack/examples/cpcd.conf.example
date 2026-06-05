@@ -1,11 +1,14 @@
 instance_name: cpcd_bringup
-bus_type: UART
-uart_device_file: /tmp/ttyCpcRcp
-uart_device_baud: 115200
-uart_hardflow: true
+# Native TCP bus: cpcd dials the gateway's in-kernel UART<->TCP bridge directly
+# and owns its own reconnection. No socat PTY shim. The UART baud lives on the
+# gateway side (the bridge), so the host does not set it here.
+bus_type: TCP
+tcp_server_address: 192.168.1.100
+tcp_server_port: 8888
 disable_encryption: true
 binding_key_file: /home/jnilo/.cpcd/binding.key
 stdout_trace: false
 trace_to_file: false
 traces_folder: /run/user/1000/rcp-stack/traces
-socket_folder: /dev/shm/cpcd/cpcd_bringup
+# No socket_folder key: cpcd v4.5.3 ignores it (warns "not recognized") and
+# derives /dev/shm/cpcd/<instance_name>/ from the compiled-in CPC_SOCKET_DIR.

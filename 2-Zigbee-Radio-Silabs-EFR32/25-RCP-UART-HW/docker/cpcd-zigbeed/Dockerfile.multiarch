@@ -11,7 +11,7 @@
 #   - zigbeed: EmberZNet 8.2.2 / EZSP 18 (from Simplicity SDK 2025.6.3)
 #
 # Architecture:
-#   TCP:8888 (gateway) -> socat -> cpcd -> zigbeed -> socat -> TCP:9999 (Z2M)
+#   TCP:8888 (gateway) -> cpcd (native TCP bus) -> zigbeed -> socat -> TCP:9999 (Z2M)
 
 # ============================================================
 # Stage 1: Generator (x86_64 only)
@@ -101,9 +101,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Build cpcd from GitHub (native compilation)
+# Build cpcd from GitHub (native compilation), patched with the native TCP bus.
+# tcp-bus.patch adds bus_type: TCP so cpcd dials the gateway's UART<->TCP bridge
+# directly — no socat-cpc PTY shim. Same v4.5.3 clone + same patch as the native
+# build_cpcd.sh, so the image's cpcd matches the host-built one.
+COPY cpcd/tcp-bus.patch /tmp/tcp-bus.patch
 RUN git clone --depth 1 --branch ${CPCD_VERSION} https://github.com/SiliconLabs/cpc-daemon.git \
     && cd cpc-daemon \
+    && git apply /tmp/tcp-bus.patch \
     && mkdir build && cd build \
     && cmake .. \
         -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -160,9 +165,9 @@ RUN ldconfig
 RUN mkdir -p /etc/cpcd /var/lib/zigbeed /run/cpcd /var/log/supervisor
 
 # Copy configuration files
-COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY cpcd.conf.template /etc/cpcd/cpcd.conf.template
-COPY entrypoint.sh /entrypoint.sh
+COPY docker/cpcd-zigbeed/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY docker/cpcd-zigbeed/cpcd.conf.template /etc/cpcd/cpcd.conf.template
+COPY docker/cpcd-zigbeed/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 # Environment variables with defaults
