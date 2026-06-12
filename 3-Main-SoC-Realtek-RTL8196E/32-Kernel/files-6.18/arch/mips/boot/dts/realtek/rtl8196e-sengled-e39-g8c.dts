@@ -10,8 +10,11 @@
 	};
 
 	reserved-memory {
+		/delete-node/ boothold@1ffe000;
+
 		boothold@3ffe000 {
 			reg = <0x03FFE000 0x1000>;  /* 4KB reserved for boothold flag (high DRAM, just below btcode stack) */
+			no-map;
 		};
 	};
 
