@@ -19,6 +19,10 @@
  *   stats                  — rx/tx/drop counters (read-only)                     [ro]
  *   nrst_pulse             — write 1: pulse EFR32 nRST low for 100 ms            [wo, root]
  *   nrst_gpio              — gpio-rtl819x line wired to EFR32 nRST (default 12)  [rw]
+ *   blmode_pulse           — write 1: reset the EFR32 INTO its bootloader
+ *                            (hold blmode through an nRST pulse)                 [wo, root]
+ *   blmode_gpio            — gpio-rtl819x line wired to the EFR32 bootloader-
+ *                            entry pin (-1 = board has none, default)            [rw]
  *   status_led_brightness  — brightness fired on 'uart-bridge-client' LED
  *                            trigger when a TCP client is connected (default 255) [rw]
  *
@@ -26,10 +30,10 @@
  * The init script S50uart_bridge sets the baud rate and writes
  * enable=1 once /dev/ttyS1 exists.
  *
- * Defaults for nrst_gpio and flow_control can be described per-board in
- * the device tree (optional /radio-bridge node, matched by compatible
- * "realtek,rtl8196e-uart-bridge"). Precedence: DT < kernel command line
- * < runtime sysfs writes. See bridge_seed_defaults_from_dt().
+ * Defaults for nrst_gpio, blmode_gpio and flow_control can be described
+ * per-board in the device tree (optional /radio-bridge node, matched by
+ * compatible "realtek,rtl8196e-uart-bridge"). Precedence: DT < kernel
+ * command line < runtime sysfs writes. See bridge_seed_defaults_from_dt().
  *
  * Rationale and architecture: see DESIGN.md in this directory.
  */
@@ -59,7 +63,7 @@
 #include <net/tcp.h>
 
 #define DRV_NAME    "rtl8196e-uart-bridge"
-#define DRV_VERSION "1.2"
+#define DRV_VERSION "1.3"
 
 /* Software flow control bytes (flow_control=sw): sent bare by a radio
  * firmware built for XON/XOFF (e.g. NCP-UART-SW); such firmware escapes
@@ -69,14 +73,16 @@
 
 static DEFINE_MUTEX(bridge_lock);
 /*
- * Serializes nrst_pulse callers without blocking the UART->TCP hot path.
- * Held across the claim / assert / msleep / release sequence in
- * param_set_nrst_pulse(); bridge_lock is never taken there, so
- * bridge_port_receive_buf() can keep forwarding bytes to any TCP client
- * still connected (the radio reset is expected to drop in-flight bytes
- * on the wire, but it should not stall a concurrent stats reader or
- * receive_buf invocation that holds no relation to the reset).
- * Also guards rtl_nrst_gpio, read by the pulse path.
+ * Serializes nrst_pulse and blmode_pulse callers without blocking the
+ * UART->TCP hot path. Held across the claim / assert / msleep / release
+ * sequence in param_set_nrst_pulse() and param_set_blmode_pulse() (the
+ * latter holds it ~5.1 s — a concurrent pulse writer just waits);
+ * bridge_lock is never taken there, so bridge_port_receive_buf() can
+ * keep forwarding bytes to any TCP client still connected (the radio
+ * reset is expected to drop in-flight bytes on the wire, but it should
+ * not stall a concurrent stats reader or receive_buf invocation that
+ * holds no relation to the reset).
+ * Also guards rtl_nrst_gpio and rtl_blmode_gpio, read by the pulse paths.
  */
 static DEFINE_MUTEX(nrst_pulse_lock);
 
@@ -146,6 +152,9 @@ enum bridge_fc_mode {
 static int  rtl_flow_control  = BRIDGE_FC_HW;
 static bool rtl_enable        = false;
 static int  rtl_nrst_gpio     = 12;     /* gpio-rtl819x line wired to EFR32 nRST */
+static int  rtl_blmode_gpio   = -1;     /* EFR32 bootloader-entry pin; -1 = none
+					 * (the Lidl board has no such pin —
+					 * bootloader entry is done in-band) */
 
 /* Set by the param setters (kernel cmdline or sysfs). The driver is
  * built-in, so cmdline params are applied before late_initcall — these
@@ -153,6 +162,7 @@ static int  rtl_nrst_gpio     = 12;     /* gpio-rtl819x line wired to EFR32 nRST
  * user choice with the device-tree value. */
 static bool rtl_flow_control_set_by_user;
 static bool rtl_nrst_gpio_set_by_user;
+static bool rtl_blmode_gpio_set_by_user;
 
 /* Status LED control: fire an LED trigger when a TCP client is connected,
  * clear it on disconnect. Mirrors the pre-v3.0 serialgateway behaviour
@@ -1412,6 +1422,143 @@ static const struct kernel_param_ops nrst_gpio_ops = {
 	.get = param_get_nrst_gpio,
 };
 
+/*
+ * blmode_pulse: reset the EFR32 INTO its bootloader, on boards that wire a
+ * bootloader-entry pin (e.g. the Sengled G4 — discussion #123/#126). The
+ * Gecko bootloader samples the pin after reset, so the sequence holds it
+ * through and past the nRST pulse:
+ *
+ *   assert blmode -> assert nRST -> 100 ms -> release nRST -> 5 s
+ *   (bootloader pin-sampling window) -> release blmode
+ *
+ * This is deliberately a SEPARATE trigger from nrst_pulse: nrst_pulse must
+ * keep meaning "reset into the application" (flash_efr32.sh and
+ * recover_efr32 depend on it after a flash completes) — if the presence of
+ * blmode-gpios changed nrst_pulse's behaviour, every reset would land in
+ * the bootloader and nothing could start the app.
+ *
+ * Boards without the pin (Lidl: bootloader entry is in-band via
+ * universal-silabs-flasher) keep blmode_gpio at -1 and get -ENODEV here.
+ * Like nrst_pulse, the caller is responsible for stopping the radio
+ * daemon first, and the chip is left sitting in the Gecko bootloader
+ * (Xmodem @ 38400, no flow control) until the next nrst_pulse or
+ * bootloader-driven application launch.
+ */
+static struct gpiod_lookup_table blmode_lookup = {
+	.dev_id = NULL,		/* global lookup: matched by gpiod_get(NULL, ...) */
+	.table = {
+		GPIO_LOOKUP("gpio-rtl819x", 13, "efr32-blmode",
+			    GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN),
+		{ /* sentinel */ }
+	},
+};
+
+static int param_set_blmode_pulse(const char *val, const struct kernel_param *kp)
+{
+	struct gpio_desc *blmode, *nrst;
+	bool trigger;
+	int ret;
+
+	ret = kstrtobool(val, &trigger);
+	if (ret)
+		return ret;
+	if (!trigger)
+		return 0;
+
+	mutex_lock(&nrst_pulse_lock);
+	if (rtl_blmode_gpio < 0) {
+		mutex_unlock(&nrst_pulse_lock);
+		pr_err(DRV_NAME ": blmode_pulse: no blmode pin on this board (blmode_gpio=-1)\n");
+		return -ENODEV;
+	}
+	if (rtl_blmode_gpio == rtl_nrst_gpio) {
+		mutex_unlock(&nrst_pulse_lock);
+		pr_err(DRV_NAME ": blmode_pulse: blmode_gpio and nrst_gpio are both %d\n",
+		       rtl_nrst_gpio);
+		return -EINVAL;
+	}
+
+	blmode_lookup.table[0].chip_hwnum = rtl_blmode_gpio;
+	gpiod_add_lookup_table(&blmode_lookup);
+	/* ACTIVE_LOW + OPEN_DRAIN + OUT_HIGH: blmode asserted (pad low) */
+	blmode = gpiod_get(NULL, "efr32-blmode", GPIOD_OUT_HIGH);
+	gpiod_remove_lookup_table(&blmode_lookup);
+	if (IS_ERR(blmode)) {
+		ret = PTR_ERR(blmode);
+		mutex_unlock(&nrst_pulse_lock);
+		pr_err(DRV_NAME ": blmode_pulse: GPIO %d unavailable (%d)\n",
+		       rtl_blmode_gpio, ret);
+		return ret;
+	}
+
+	nrst_lookup.table[0].chip_hwnum = rtl_nrst_gpio;
+	gpiod_add_lookup_table(&nrst_lookup);
+	nrst = gpiod_get(NULL, "efr32-nrst", GPIOD_OUT_HIGH);
+	gpiod_remove_lookup_table(&nrst_lookup);
+	if (IS_ERR(nrst)) {
+		ret = PTR_ERR(nrst);
+		gpiod_set_value_cansleep(blmode, 0);
+		gpiod_put(blmode);
+		mutex_unlock(&nrst_pulse_lock);
+		pr_err(DRV_NAME ": blmode_pulse: nRST GPIO %d unavailable (%d)\n",
+		       rtl_nrst_gpio, ret);
+		return ret;
+	}
+
+	pr_info(DRV_NAME ": blmode_pulse: entering EFR32 bootloader (blmode GPIO %d, nRST GPIO %d)\n",
+		rtl_blmode_gpio, rtl_nrst_gpio);
+	msleep(100);
+	/* logical 0 -> open-drain release: line floats, pull-up raises nRST */
+	gpiod_set_value_cansleep(nrst, 0);
+	gpiod_put(nrst);
+	/* hold blmode through the bootloader's pin-sampling window */
+	msleep(5000);
+	gpiod_set_value_cansleep(blmode, 0);
+	gpiod_put(blmode);
+	mutex_unlock(&nrst_pulse_lock);
+	pr_info(DRV_NAME ": blmode_pulse: blmode released, EFR32 in bootloader\n");
+	return 0;
+}
+
+static const struct kernel_param_ops blmode_pulse_ops = {
+	.set = param_set_blmode_pulse,
+};
+
+/* blmode_gpio: which gpio-rtl819x line blmode_pulse claims; -1 disables
+ * the trigger (boards without a bootloader-entry pin). Runtime-tunable
+ * like nrst_gpio; takes effect on the next pulse. */
+static int param_set_blmode_gpio(const char *val, const struct kernel_param *kp)
+{
+	int new_v, ret;
+
+	ret = kstrtoint(val, 0, &new_v);
+	if (ret)
+		return ret;
+	if (new_v < -1 || new_v > 31)
+		return -EINVAL;
+
+	mutex_lock(&nrst_pulse_lock);
+	rtl_blmode_gpio = new_v;
+	rtl_blmode_gpio_set_by_user = true;
+	mutex_unlock(&nrst_pulse_lock);
+	return 0;
+}
+
+static int param_get_blmode_gpio(char *buffer, const struct kernel_param *kp)
+{
+	int v;
+
+	mutex_lock(&nrst_pulse_lock);
+	v = rtl_blmode_gpio;
+	mutex_unlock(&nrst_pulse_lock);
+	return scnprintf(buffer, PAGE_SIZE, "%d\n", v);
+}
+
+static const struct kernel_param_ops blmode_gpio_ops = {
+	.set = param_set_blmode_gpio,
+	.get = param_get_blmode_gpio,
+};
+
 /* Read-only "armed" parameter: actual bridge state (vs. "enable" = intent). */
 static int param_get_armed(char *buffer, const struct kernel_param *kp)
 {
@@ -1513,6 +1660,14 @@ module_param_cb(nrst_gpio, &nrst_gpio_ops, NULL, 0644);
 MODULE_PARM_DESC(nrst_gpio,
 	"gpio-rtl819x line wired to EFR32 nRST (default 12 = pad B4 on the "
 	"Lidl gateway)");
+module_param_cb(blmode_pulse, &blmode_pulse_ops, NULL, 0200);
+MODULE_PARM_DESC(blmode_pulse,
+	"Write 1 to reset the EFR32 into its bootloader: assert blmode_gpio, "
+	"pulse nRST, hold blmode 5 s, release");
+module_param_cb(blmode_gpio, &blmode_gpio_ops, NULL, 0644);
+MODULE_PARM_DESC(blmode_gpio,
+	"gpio-rtl819x line wired to the EFR32 bootloader-entry pin "
+	"(-1 = board has none, default)");
 module_param_cb(status_led_brightness, &status_led_brightness_ops, NULL, 0644);
 MODULE_PARM_DESC(status_led_brightness,
 	"Brightness 0-255 applied to the '" BRIDGE_LED_TRIG_NAME
@@ -1521,19 +1676,23 @@ MODULE_PARM_DESC(status_led_brightness,
 /* ------------------------------------------------------------------ init */
 
 /*
- * Seed nrst_gpio and flow_control defaults from an optional board node:
+ * Seed nrst_gpio, blmode_gpio and flow_control defaults from an optional
+ * board node:
  *
  *   radio-bridge {
  *           compatible = "realtek,rtl8196e-uart-bridge";
  *           nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
+ *           blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
  *           flow-control = "hw";
  *   };
  *
- * Only the line number of nrst-gpios is consumed — the pulse path keeps
- * its hardcoded ACTIVE_LOW | OPEN_DRAIN lookup flags because EFR32 RESETn
- * is inherently open-drain active-low on any board; the DT cell flags
- * document the same fact for the reader. The node is optional: absent
- * node (or absent property) keeps the compiled-in Lidl defaults.
+ * Only the line numbers of nrst-gpios / blmode-gpios are consumed — the
+ * pulse paths keep their hardcoded ACTIVE_LOW | OPEN_DRAIN lookup flags
+ * because EFR32 RESETn (and the bootloader-entry pin as wired on known
+ * boards) is inherently open-drain active-low; the DT cell flags document
+ * the same fact for the reader. The node is optional: absent node (or
+ * absent property) keeps the compiled-in Lidl defaults — in particular,
+ * no blmode-gpios means blmode_pulse stays disabled (-1).
  * Explicit cmdline/sysfs writes win over DT (see *_set_by_user).
  */
 static void __init bridge_seed_defaults_from_dt(void)
@@ -1560,6 +1719,20 @@ static void __init bridge_seed_defaults_from_dt(void)
 		of_node_put(args.np);
 	}
 
+	if (!rtl_blmode_gpio_set_by_user &&
+	    !of_parse_phandle_with_args(np, "blmode-gpios", "#gpio-cells", 0,
+					&args)) {
+		if (args.args_count >= 1 && args.args[0] <= 31) {
+			mutex_lock(&nrst_pulse_lock);
+			rtl_blmode_gpio = args.args[0];
+			mutex_unlock(&nrst_pulse_lock);
+		} else {
+			pr_warn(DRV_NAME ": DT blmode-gpios out of range, keeping %d\n",
+				rtl_blmode_gpio);
+		}
+		of_node_put(args.np);
+	}
+
 	if (!rtl_flow_control_set_by_user &&
 	    !of_property_read_string(np, "flow-control", &fc)) {
 		if (!strcmp(fc, "hw")) {
@@ -1574,8 +1747,8 @@ static void __init bridge_seed_defaults_from_dt(void)
 		}
 	}
 
-	pr_info(DRV_NAME ": DT defaults: nrst_gpio=%d flow_control=%d\n",
-		rtl_nrst_gpio, rtl_flow_control);
+	pr_info(DRV_NAME ": DT defaults: nrst_gpio=%d blmode_gpio=%d flow_control=%d\n",
+		rtl_nrst_gpio, rtl_blmode_gpio, rtl_flow_control);
 	of_node_put(np);
 }
 

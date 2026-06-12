@@ -42,8 +42,10 @@ are live: writing flips the running bridge without reload.
 | `enable` | rw | 1 = arm the bridge, 0 = disarm. Boot default 0 |
 | `armed` | ro | 1 when both UART and listen socket are live |
 | `stats` | ro | `rx=... tx=... drops_nocli=... drops_err=... drops_tx=...` |
-| `nrst_pulse` | wo, root | write 1 to pulse the EFR32 nRST line low for 100 ms (radio recovery) |
+| `nrst_pulse` | wo, root | write 1 to pulse the EFR32 nRST line low for 100 ms (radio recovery — resets into the **application**) |
 | `nrst_gpio` | rw | gpio-rtl819x line wired to EFR32 nRST. Default 12 (pad B4, Lidl gateway) |
+| `blmode_pulse` | wo, root | write 1 to reset the EFR32 **into its bootloader**: assert `blmode_gpio`, pulse nRST 100 ms, hold blmode 5 s, release. `-ENODEV` when `blmode_gpio` is -1 |
+| `blmode_gpio` | rw | gpio-rtl819x line wired to the EFR32 bootloader-entry pin. Default -1 = board has none (the Lidl board enters the bootloader in-band) |
 | `status_led_brightness` | rw | 0-255 value fired on the `uart-bridge-client` LED trigger when a client connects (default 255; cleared on disconnect) |
 
 Example — arm the bridge manually at 115200 on loopback:
@@ -71,6 +73,7 @@ device it produces under `/sys/devices/platform/` is harmless):
 radio-bridge {
         compatible = "realtek,rtl8196e-uart-bridge";
         nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
+        blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
         flow-control = "hw";
 };
 ```
@@ -79,13 +82,18 @@ radio-bridge {
   line number is consumed; the pulse path always claims the line
   active-low + open-drain, because EFR32 RESETn is inherently both. The
   DT cell flags should spell the same for the reader.
+- `blmode-gpios` — gpio-rtl819x line wired to the EFR32 bootloader-entry
+  pin, for boards that have one (e.g. the Sengled G4; the Lidl board does
+  not and omits the property, which keeps `blmode_pulse` disabled). Same
+  line-number-only consumption as `nrst-gpios`.
 - `flow-control` — `"hw"` (RTS/CTS), `"sw"` (XON/XOFF — for boards
   without RTS/CTS wiring, paired with a software-flow-control radio
   firmware such as NCP-UART-SW) or `"none"`, matching how the board
   wires the EFR32 UART.
 
 Precedence is **DT < kernel command line < runtime sysfs writes**: the
-node only seeds the boot-time defaults of `nrst_gpio` and `flow_control`;
+node only seeds the boot-time defaults of `nrst_gpio`, `blmode_gpio` and
+`flow_control`;
 an explicit `rtl8196e_uart_bridge.nrst_gpio=...` on the command line or a
 later sysfs write always wins. With no node (or no property) the
 compiled-in Lidl defaults apply — third-party DTS files may simply omit
@@ -180,6 +188,21 @@ On the Lidl gateway nRST is wired to pad B4 = line 12 on the
 `nrst_gpio` to their own line at boot — note that the GPIO driver only
 auto-muxes pads B2–B6 (lines 10–14, PIN_MUX_SEL_2); a line outside that
 range needs its pad mux established separately.
+
+## EFR32 bootloader entry (`blmode_pulse`)
+
+Boards that wire the EFR32 bootloader-entry pin to a SoC GPIO (the
+Sengled G4 does; the Lidl board does not) can reset the radio **into the
+Gecko bootloader** with `blmode_pulse`: it asserts `blmode_gpio`, pulses
+nRST as above, then keeps blmode asserted for 5 s across the bootloader's
+pin-sampling window before releasing it. This is the first-flash path on
+boards whose stock radio firmware speaks no EZSP (no in-band
+bootloader-launch command). It is deliberately separate from
+`nrst_pulse`, which keeps meaning "reset into the application" — that is
+what `flash_efr32.sh` and `recover_efr32` rely on after a flash. The
+sysfs write blocks for the ~5.1 s of the sequence; afterwards the chip
+sits in the Gecko bootloader (Xmodem @ 38400, no flow control) until the
+next `nrst_pulse` or a bootloader-driven application launch.
 
 ## Flashing the EFR32 with the bridge armed
 
