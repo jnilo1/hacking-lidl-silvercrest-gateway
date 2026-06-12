@@ -1,5 +1,5 @@
 /*
- * board.h — Lidl Silvercrest Gateway (the reference board)
+ * board.h — Sengled Smart Hub E39-G8C ("Sengled G4")
  *
  * One directory per board under 31-Bootloader/boards/<board>/, selected
  * with `BOARD=<board> ./build_bootloader.sh` (default: lidl). Every

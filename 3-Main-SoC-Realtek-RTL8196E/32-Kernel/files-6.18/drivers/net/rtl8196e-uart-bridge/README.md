@@ -44,7 +44,7 @@ are live: writing flips the running bridge without reload.
 | `stats` | ro | `rx=... tx=... drops_nocli=... drops_err=... drops_tx=...` |
 | `nrst_pulse` | wo, root | write 1 to pulse the EFR32 nRST line low for 100 ms (radio recovery — resets into the **application**) |
 | `nrst_gpio` | rw | gpio-rtl819x line wired to EFR32 nRST. Default 12 (pad B4, Lidl gateway) |
-| `blmode_pulse` | wo, root | write 1 to reset the EFR32 **into its bootloader**: assert `blmode_gpio`, pulse nRST 100 ms, hold blmode 5 s, release. `-ENODEV` when `blmode_gpio` is -1 |
+| `blmode_pulse` | wo, root | write 1 to reset the EFR32 **into its bootloader**: assert `blmode_gpio`, pulse nRST 100 ms, hold blmode 1 s, release. `-ENODEV` when `blmode_gpio` is -1 |
 | `blmode_gpio` | rw | gpio-rtl819x line wired to the EFR32 bootloader-entry pin. Default -1 = board has none (the Lidl board enters the bootloader in-band) |
 | `status_led_brightness` | rw | 0-255 value fired on the `uart-bridge-client` LED trigger when a client connects (default 255; cleared on disconnect) |
 
@@ -194,13 +194,13 @@ range needs its pad mux established separately.
 Boards that wire the EFR32 bootloader-entry pin to a SoC GPIO (the
 Sengled G4 does; the Lidl board does not) can reset the radio **into the
 Gecko bootloader** with `blmode_pulse`: it asserts `blmode_gpio`, pulses
-nRST as above, then keeps blmode asserted for 5 s across the bootloader's
+nRST as above, then keeps blmode asserted for 1 s across the bootloader's
 pin-sampling window before releasing it. This is the first-flash path on
 boards whose stock radio firmware speaks no EZSP (no in-band
 bootloader-launch command). It is deliberately separate from
 `nrst_pulse`, which keeps meaning "reset into the application" — that is
 what `flash_efr32.sh` and `recover_efr32` rely on after a flash. The
-sysfs write blocks for the ~5.1 s of the sequence; afterwards the chip
+sysfs write blocks for the ~1.1 s of the sequence; afterwards the chip
 sits in the Gecko bootloader (Xmodem @ 38400, no flow control) until the
 next `nrst_pulse` or a bootloader-driven application launch.
 
