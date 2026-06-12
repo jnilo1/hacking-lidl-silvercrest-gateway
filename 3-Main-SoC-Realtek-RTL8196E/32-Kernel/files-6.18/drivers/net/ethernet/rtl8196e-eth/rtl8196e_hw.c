@@ -8,6 +8,7 @@
  */
 #include <linux/delay.h>
 #include <linux/errno.h>
+#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/string.h>
 #include "rtl8196e_hw.h"
@@ -305,24 +306,62 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 *   Bits [4:3] = 01 (UART1 TXD), not 00, matching vendor BSP.
 	 *   Clear bits [9:8], [11:10], [15] for MII mode.
 	 *
-	 * PIN_MUX_SEL_2 (0xB800_0044):
-	 *   Clear bits [7:6], [10:9], [13:12], [17:15] for MII/nRST.
-	 *   Preserve bits [1:0] and [4:3] — these control GPIOB2/B3
-	 *   (LAN and status LEDs), managed by the gpio-leds-pwm driver.
+	 * PIN_MUX_SEL_2 (0xB800_0044) — pads B2..B6, shared GPIO/LED_PORTn
+	 * (datasheet Table 36; same field map as gpio-rtl819x). The board
+	 * decides each pad's function through gpio-line-names on the GPIO
+	 * controller node (#124/#126):
+	 *   - pad named there  -> field = 11 (GPIO): the pad belongs to a
+	 *     GPIO consumer (LED driver, s40button, uart-bridge nRST/blmode).
+	 *     Muxing it here, not just at claim time, gives a deterministic
+	 *     boot state for lines that are claimed late or on demand —
+	 *     e.g. nRST muxed to an undriven GPIO input floats high through
+	 *     the EFR32's RESETn pull-up instead of being driven by a
+	 *     leftover bootloader function.
+	 *   - pad unnamed      -> field = 00 (LED_PORTn): the ASIC LED
+	 *     controller drives it (link/activity, LEDCREG direct mode
+	 *     below). Which port blinks is the ASIC's per-port behaviour —
+	 *     no per-board knob needed beyond the wiring itself.
+	 * Bits [17:15] (MII) are always cleared.
+	 * On the Lidl board (names at 11/status-led, 12/efr32-nrst) this
+	 * yields B2=00 (LAN LED), B3=B4=11, B5=B6=00; on the Sengled G4
+	 * (names at 11..14) B2=00 (port-0 LAN LED) and B3..B6=11.
 	 */
 	if (hw->syscon) {
+		static const struct {
+			u8 line;	/* gpio-rtl819x line number */
+			u8 shift;	/* PIN_MUX_SEL_2 field LSB */
+		} pads[] = {
+			{ 10, 0 },	/* B2 / LED_PORT0 */
+			{ 11, 3 },	/* B3 / LED_PORT1 */
+			{ 12, 6 },	/* B4 / LED_PORT2 */
+			{ 13, 9 },	/* B5 / LED_PORT3 */
+			{ 14, 12 },	/* B6 / LED_PORT4 */
+		};
+		struct device_node *gpio_np;
+		u32 mask = 7 << 15, val = 0;	/* [17:15] MII: always 0 */
+		int i;
+
+		gpio_np = of_find_compatible_node(NULL, NULL,
+						  "realtek,rtl8196e-gpio");
+		for (i = 0; i < ARRAY_SIZE(pads); i++) {
+			const char *name = NULL;
+
+			if (gpio_np)
+				of_property_read_string_index(gpio_np,
+							      "gpio-line-names",
+							      pads[i].line,
+							      &name);
+			mask |= 3 << pads[i].shift;
+			if (name && *name)
+				val |= 3 << pads[i].shift;
+		}
+		of_node_put(gpio_np);
+
 		/* PIN_MUX_SEL: bits [4:3]=01 (UART1), clear bits 8-10,15 */
 		regmap_update_bits(hw->syscon, 0x40,
 				   (3 << 8) | (3 << 10) | (3 << 3) | (1 << 15),
 				   (1 << 3));
-		/* PIN_MUX_SEL_2 (0xB800_0044): clear MII/nRST-related bits.
-		 * Preserve bits [1:0] (GPIOB2 / LED_PORT0 — LAN LED)
-		 * and bits [4:3] (GPIOB3 / LED_PORT1 — status LED),
-		 * both managed by the gpio-leds-pwm driver. */
-		regmap_update_bits(hw->syscon, 0x44,
-				   (3 << 6) | (3 << 9) |
-				   (3 << 12) | (7 << 15),
-				   0);
+		regmap_update_bits(hw->syscon, 0x44, mask, val);
 	}
 
 	/* Ensure switch core clock is active (vendor sequence) */

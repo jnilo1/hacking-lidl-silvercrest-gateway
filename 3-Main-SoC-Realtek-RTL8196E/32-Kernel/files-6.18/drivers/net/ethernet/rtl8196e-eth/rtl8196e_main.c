@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.6"
+#define RTL8196E_DRV_VERSION "2.7"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
