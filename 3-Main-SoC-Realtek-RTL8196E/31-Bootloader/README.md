@@ -34,13 +34,19 @@ Flashing: 76%
 ## Building
 
 ```bash
-./build_bootloader.sh          # build all variants
-./build_bootloader.sh clean    # clean
+./build_bootloader.sh                  # build all variants (default board: lidl)
+BOARD=<board> ./build_bootloader.sh    # build for another board (boards/<board>/board.h)
+./build_bootloader.sh clean            # clean
 ```
 
 Outputs:
 - `boot.bin` — flash image (stays in download mode after boot-code flash)
 - `btcode/build/test.bin` — RAM-test image (test without flashing)
+
+Per-board constants (DRAM size and DDR bring-up values, boothold page
+placement) live under `boards/` — see `boards/README.md` for the
+contract and how to add a board. The default `lidl` build reproduces the
+committed `boot.bin` bit-for-bit.
 
 ## Flashing
 

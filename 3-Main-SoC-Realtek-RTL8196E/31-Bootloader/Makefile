@@ -21,10 +21,12 @@
 #
 # Variables:
 #   JUMP_ADDR  - kernel entry point passed to stage-2 (default 0x80500000)
+#   BOARD      - board directory under boards/ (default lidl)
 #   XTOOLS_DIR - path to the Lexra cross-toolchain sysroot
 #   CROSS      - toolchain prefix (default mips-lexra-linux-musl-)
 
 JUMP_ADDR    ?= 0x80500000
+BOARD        ?= lidl
 XTOOLS_DIR   ?= $(HOME)/hacking-lidl-silvercrest-gateway/x-tools/mips-lexra-linux-musl
 CROSS        ?= mips-lexra-linux-musl-
 PATH         := $(XTOOLS_DIR)/bin:$(PATH)
@@ -36,15 +38,15 @@ export PATH CROSS
 all:
 	# --- boot image ---
 	$(MAKE) -C boot clean
-	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR)
+	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD)
 	$(MAKE) -C btcode clean
-	$(MAKE) -C btcode
+	$(MAKE) -C btcode BOARD=$(BOARD)
 	cp -f btcode/build/boot.bin boot.bin
 	# --- ramtest variant (btcode CFLAGS change -> clean btcode) ---
 	$(MAKE) -C boot clean
-	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) RAMTEST_TRACE=1
+	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD) RAMTEST_TRACE=1
 	$(MAKE) -C btcode clean
-	$(MAKE) -C btcode RAMTEST_TRACE=1
+	$(MAKE) -C btcode BOARD=$(BOARD) RAMTEST_TRACE=1
 
 clean:
 	$(MAKE) -C boot clean

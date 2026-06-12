@@ -30,6 +30,18 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 JUMP_ADDR="${JUMP_ADDR:-0x80500000}"
 CROSS_PREFIX="mips-lexra-linux-musl-"
 
+# --- Board selection ---------------------------------------------------------
+# Per-board constants (DRAM size/top, DDR bring-up) live in
+# boards/<board>/board.h — see boards/README.md. Default: the Lidl
+# reference board (reproduces the committed boot.bin bit-for-bit).
+
+BOARD="${BOARD:-lidl}"
+if [ ! -f "$SCRIPT_DIR/boards/$BOARD/board.h" ]; then
+    echo "ERROR: unknown BOARD '$BOARD' — no boards/$BOARD/board.h" >&2
+    echo "Available boards: $(ls "$SCRIPT_DIR/boards" | grep -v README | tr '\n' ' ')" >&2
+    exit 1
+fi
+
 # Toolchain - check project root first, then walk up the repo tree
 find_toolchain() {
     # Check in the project root directory (~/hacking-lidl-silvercrest-gateway)
@@ -109,6 +121,7 @@ echo ""
 echo "Toolchain: $TOOLCHAIN_DIR"
 echo "Compiler:  $(${CROSS_PREFIX}gcc --version | head -1)"
 echo "Jump addr: $JUMP_ADDR"
+echo "Board:     $BOARD"
 if [ -n "$REALTEK_TOOLS" ]; then
     echo "Realtek:   $REALTEK_TOOLS"
 else
@@ -119,15 +132,15 @@ fi
 echo ""
 
 # Pass tool paths to btcode Makefile (overrides hardcoded defaults)
-BTCODE_VARS="CROSS=${CROSS_PREFIX} CVIMG=${REALTEK_TOOLS}/cvimg LZMA=${REALTEK_TOOLS}/lzma"
+BTCODE_VARS="CROSS=${CROSS_PREFIX} CVIMG=${REALTEK_TOOLS}/cvimg LZMA=${REALTEK_TOOLS}/lzma BOARD=${BOARD}"
 
 # boot/ must be cleaned between variants because the Makefiles do not
 # track CFLAGS changes.
 
 # --- boot variant ---
-echo "--- Building boot image ---"
+echo "--- Building boot image (board: $BOARD) ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR"
+make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" BOARD="$BOARD"
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS
 cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot.bin"
@@ -136,7 +149,7 @@ cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot.bin"
 echo ""
 echo "--- Building ramtest variant ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" RAMTEST_TRACE=1
+make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" BOARD="$BOARD" RAMTEST_TRACE=1
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS RAMTEST_TRACE=1
 

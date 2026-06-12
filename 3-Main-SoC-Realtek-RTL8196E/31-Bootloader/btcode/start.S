@@ -72,9 +72,9 @@ lab_uart_show:
 
 rtl_8196E_four:
 	/* DDR timing configuration */
-	REG32_W(DDR_CFG_REG, DDR1_32MB_193MHZ)	/* DDR1 32MB @ 193MHz */
+	REG32_W(DDR_CFG_REG, BOARD_DDR_REG_1008)	/* per-board, boards/<board>/board.h */
 	/* Set DTR by hw_strap ck_m2x_freq_sel */
-	REG32_W(DDR_TIMING_REG, DDR_TIMING_VAL)
+	REG32_W(DDR_TIMING_REG, BOARD_DDR_REG_1004)
 	nop
 	nop
 
