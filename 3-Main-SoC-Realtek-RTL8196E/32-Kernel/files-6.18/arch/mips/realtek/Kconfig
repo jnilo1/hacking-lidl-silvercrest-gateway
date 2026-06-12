@@ -44,6 +44,11 @@ choice
 		depends on SOC_RTL8196E
 		select BUILTIN_DTB
 
+	config DTB_RTL8196E_SENGLED_E39_G8C
+		bool "Sengled Smart Hub G4 E39-G8C (rtl8196e-sengled-e39-g8c.dtb)"
+		depends on SOC_RTL8196E
+		select BUILTIN_DTB
+
 endchoice
 
 config RTL8196E_IMEM
