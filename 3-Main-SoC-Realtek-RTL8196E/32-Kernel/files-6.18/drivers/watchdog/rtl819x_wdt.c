@@ -47,6 +47,7 @@
 #include <linux/moduleparam.h>
 #include <linux/notifier.h>
 #include <linux/of.h>
+#include <linux/of_reserved_mem.h>
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
 #include <linux/timekeeping.h>
@@ -58,7 +59,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.4"
+#define DRV_VERSION		"1.5"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -137,12 +138,18 @@
  * the soft-lockup report to the volatile ramfs /var/log.
  *
  * Storage reuses the reserved-memory `no-map` page already carved out for
- * boothold (DT node boothold@1ffe000, reg = <0x1ffe000 0x1000>; see
- * 34-Userdata/boothold/src/boothold.c). boothold uses the TOP of the page,
- * growing DOWN from 0x1FFEFFC: HOLD magic (0x1FFEFFC), TFTP-IP magic
- * (0x1FFEFF8) and packed IPv4 (0x1FFEFF4) — the v3.7.0 download-mode-IP
- * handoff. This record uses the BASE of the page, growing UP from
- * 0x1FFE000 (ends at 0x1FFE0F0), leaving a ~3.8 KB gap so the two never
+ * boothold (the `boothold` DT node — `boothold@1ffe000` on the Lidl board;
+ * see 34-Userdata/boothold/src/boothold.c). The page is bound to the
+ * watchdog node through a `memory-region = <&boothold>;` phandle and
+ * resolved at probe via of_reserved_mem_lookup(), so a board that
+ * relocates the reservation (different DRAM size, e.g. the 64 MiB Sengled
+ * G4) moves the record with it — and a DTS without the property or the
+ * reservation cleanly disables the post-mortem feature instead of
+ * scribbling over unreserved RAM. boothold uses the TOP of the page,
+ * growing DOWN from page_top: HOLD magic (page_top-4), TFTP-IP magic
+ * (page_top-8) and packed IPv4 (page_top-12) — the v3.7.0
+ * download-mode-IP handoff. This record uses the BASE of the page,
+ * growing UP (ends at base+0x144), leaving a ~3.8 KB gap so the two never
  * collide even if boothold gains more fields. The page is no-map, so the
  * kernel never treats it as general RAM — the record is not clobbered
  * between the panic write and the next-boot read. A panic reboot does not
@@ -218,7 +225,6 @@
  *                           work->func (kernel-time-timer.c.patch), wheel
  *                           overdue@+0x13C, pending count@+0x140
  */
-#define WDT_REC_PHYS		0x01FFE000U
 #define WDT_REC_SIZE		0x200U
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
 #define WDT_REC_VERSION		3U
@@ -665,7 +671,9 @@ static void rtl819x_wdt_dump_bringup(struct rtl819x_wdt *wdt)
 static int rtl819x_wdt_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct reserved_mem *rmem = NULL;
 	struct rtl819x_wdt *wdt;
+	struct device_node *np;
 	struct resource *res;
 	u32 raw;
 	int ret;
@@ -729,16 +737,27 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * Map the reserved DRAM page used for the panic record (no-map, so
-	 * not in the kernel linear map — ioremap is the right accessor; it is
-	 * uncached on MIPS, which is what we need for a value that must reach
-	 * DRAM before the reset). Report-and-clear any record left by the
-	 * previous boot. A map failure only disables the post-mortem feature;
+	 * Resolve the reserved DRAM page used for the panic record from the
+	 * memory-region phandle (the board's `boothold` reservation), then
+	 * map it (no-map, so not in the kernel linear map — ioremap is the
+	 * right accessor; it is uncached on MIPS, which is what we need for
+	 * a value that must reach DRAM before the reset). Report-and-clear
+	 * any record left by the previous boot. A missing property, missing
+	 * reservation or map failure only disables the post-mortem feature;
 	 * the watchdog itself is unaffected.
 	 */
-	wdt->rec = devm_ioremap(dev, WDT_REC_PHYS, WDT_REC_SIZE);
-	if (!wdt->rec)
-		dev_warn(dev, "panic record region map failed; post-mortem disabled\n");
+	np = of_parse_phandle(dev->of_node, "memory-region", 0);
+	if (np) {
+		rmem = of_reserved_mem_lookup(np);
+		of_node_put(np);
+	}
+	if (rmem && rmem->size >= WDT_REC_SIZE) {
+		wdt->rec = devm_ioremap(dev, rmem->base, WDT_REC_SIZE);
+		if (!wdt->rec)
+			dev_warn(dev, "panic record region map failed; post-mortem disabled\n");
+	} else {
+		dev_warn(dev, "no usable memory-region reservation; post-mortem disabled\n");
+	}
 	rtl819x_wdt_report_panic_record(wdt);
 
 	rtl819x_wdt_dump_bringup(wdt);

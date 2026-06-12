@@ -24,7 +24,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SOURCE_DIR="${SCRIPT_DIR}/src"
 INSTALL_DIR="${USERDATA_PART}/skeleton/usr/bin"
 
-VERSION="1.1"
+VERSION="1.2"
 
 # Check if source exists
 if [ ! -f "${SOURCE_DIR}/boothold.c" ]; then

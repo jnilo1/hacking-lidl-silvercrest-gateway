@@ -21,7 +21,17 @@
 		#size-cells = <1>;
 		ranges;
 
-		boothold@1ffe000 {
+		/* One 4 KB page, high DRAM just below the btcode stack, shared
+		 * by three consumers that address it RELATIVE to this node:
+		 *   - boothold flag words at the page TOP (boothold tool reads
+		 *     this node at runtime via /sys/firmware/devicetree),
+		 *   - the watchdog panic record at the page BASE (bound via
+		 *     the memory-region phandle below),
+		 *   - the bootloader read side (compile-time constant per
+		 *     board — must match this address).
+		 * A board with a different DRAM size relocates the node (and
+		 * must keep the boothold: label so the phandle resolves). */
+		boothold: boothold@1ffe000 {
 			reg = <0x01FFE000 0x1000>;  /* 4KB reserved for boothold flag (high DRAM, just below btcode stack) */
 			no-map;
 		};
@@ -85,6 +95,11 @@
 
 &watchdog {
 	status = "okay";
+	/* Storage for the panic post-mortem record (base of the boothold
+	 * page). Without this property — or without the reservation — the
+	 * driver disables the post-mortem feature; the watchdog itself is
+	 * unaffected. */
+	memory-region = <&boothold>;
 };
 
 /* Configuration SPI Flash */
