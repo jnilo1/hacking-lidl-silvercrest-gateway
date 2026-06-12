@@ -46,9 +46,10 @@
 			default-state = "off";
 		};
 
-		/* LAN LED (GPIO B2 / LED_PORT0) is hardwired to the switch
-		 * ASIC LED output — GPIO has no physical effect on this LED.
-		 * It is controlled via LEDCREG in the Ethernet driver. */
+		/* LAN LED (pad B6 / LED_PORT4, see realtek,led-pads below) is
+		 * driven by the switch ASIC LED controller — GPIO has no
+		 * effect on it.  Controlled via LEDCREG in the Ethernet
+		 * driver. */
 	};
 
 	/* Board wiring of the EFR32 radio link, consumed by the in-kernel
@@ -96,11 +97,17 @@
 	 * switch's link/activity LED outputs.  The ethernet driver muxes
 	 * listed pads to the ASIC LED function (PIN_MUX_SEL_2 field 0b00),
 	 * named pads to GPIO, and pads in neither set to unclaimed GPIO
-	 * (Hi-Z).  Note the LED pad is a wiring fact, not derivable from
-	 * member-ports: both the Lidl (port 4) and the Sengled G4 (port 0)
-	 * have their LAN LED on pad B2.  Without this property every
+	 * (Hi-Z).  On both known boards the LED pad follows the Table 36
+	 * pad<->LED_PORTn naming for the member port (Lidl: port 4 ->
+	 * B6/LED_PORT4, Sengled G4: port 0 -> B2/LED_PORT0), but it stays
+	 * declared rather than derived from member-ports: it is a wiring
+	 * fact a port mask cannot prove (a member port may have no LED
+	 * wired), and only a visual check does — this value first shipped
+	 * as B2 and the dead LED was caught by eye, not by register
+	 * readback (#126).  Boards overriding gpio-line-names must also
+	 * override this property (the Sengled G4 does).  Without it every
 	 * unnamed pad falls back to the ASIC LED function. */
-	realtek,led-pads = <10>;			/* B2: LAN LED */
+	realtek,led-pads = <14>;			/* B6: LAN LED */
 };
 
 &watchdog {

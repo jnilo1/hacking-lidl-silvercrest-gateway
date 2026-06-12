@@ -671,8 +671,9 @@ static const struct ethtool_ops rtl8196e_ethtool_ops = {
  * "dim":    LEDCREG = 0 (scan mode, ~25% brightness).
  * "off":    LEDCREG = 0, DIRECTLCR = 0 (LED pin driven low, no glow).
  *
- * The LAN LED is hardwired to the switch ASIC LED_PORT0 output;
- * GPIO has no physical effect.  Only LEDCREG/DIRECTLCR control it.
+ * The LAN LED is hardwired to a switch ASIC LED_PORTn output (B6 on
+ * the Lidl, B2 on the Sengled G4); GPIO has no physical effect.
+ * Only LEDCREG/DIRECTLCR control it.
  * The STATUS LED (GPIO-driven) should be set to 255, 60, or 0 to match.
  */
 static ssize_t led_mode_show(struct device *dev,

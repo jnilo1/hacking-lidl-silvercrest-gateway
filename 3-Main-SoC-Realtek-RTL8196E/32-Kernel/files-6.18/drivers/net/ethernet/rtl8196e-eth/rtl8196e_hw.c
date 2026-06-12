@@ -319,10 +319,12 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 *     instead of being driven by a leftover bootloader function.
 	 *   - pad listed in realtek,led-pads -> field = 00 (LED_PORTn):
 	 *     the ASIC LED controller drives it (link/activity, LEDCREG
-	 *     direct mode below). The LED pad must be declared, not derived
-	 *     from member-ports: both the Lidl (port 4) and the Sengled G4
-	 *     (port 0) wire their LAN LED to pad B2, so the Table 36
-	 *     pad<->LED_PORTn naming does not predict the wiring.
+	 *     direct mode below). The LED pad is declared, not derived
+	 *     from member-ports: it is a wiring fact a port mask cannot
+	 *     prove (a member port may have no LED wired), and only a
+	 *     visual check does. On both known boards it follows the
+	 *     Table 36 1-1 naming — Lidl port 4 -> B6/LED_PORT4, Sengled
+	 *     G4 port 0 -> B2/LED_PORT0 (both verified by eye, #126).
 	 *   - neither -> field = 11 as unclaimed GPIO: the pad is Hi-Z
 	 *     (Table 36 has no disable encoding; 00/10 leave the ASIC
 	 *     driving the pin), the safe state for unknown wiring.
@@ -330,9 +332,9 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 *     pre-v2.8 behaviour, so a DTB without the property keeps its
 	 *     LAN LED.
 	 * Bits [17:15] (MII) are always cleared.
-	 * On the Lidl board (led-pads 10; names at 11/status-led,
-	 * 12/efr32-nrst) this yields B2=00 (LAN LED), B3=B4=11 and
-	 * B5=B6=11 Hi-Z; on the Sengled G4 (led-pads 10, names at 11..14)
+	 * On the Lidl board (led-pads 14; names at 11/status-led,
+	 * 12/efr32-nrst) this yields B6=00 (LAN LED), B3=B4=11 GPIO and
+	 * B2=B5=11 Hi-Z; on the Sengled G4 (led-pads 10, names at 11..14)
 	 * B2=00 (port-0 LAN LED) and B3..B6=11.
 	 */
 	if (hw->syscon) {
@@ -411,8 +413,9 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	msleep(300);
 
 	/* Enable ASIC LED controller in direct mode (link/activity).
-	 * The LAN LED (LED_PORT0) is hardwired to the switch ASIC output,
-	 * not to the GPIO pad — GPIO control has no physical effect.
+	 * The LAN LED is hardwired to a switch ASIC LED_PORTn output
+	 * (B6/LED_PORT4 on the Lidl, B2/LED_PORT0 on the Sengled G4) —
+	 * GPIO control has no physical effect on it.
 	 * LEDMODE_DIRECT gives full-brightness link/activity indication. */
 	rtl8196e_writel(LEDMODE_DIRECT, LEDCREG);
 

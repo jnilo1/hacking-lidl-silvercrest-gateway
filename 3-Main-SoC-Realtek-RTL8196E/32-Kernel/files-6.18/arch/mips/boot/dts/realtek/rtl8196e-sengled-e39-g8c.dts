@@ -42,6 +42,11 @@
 		"status-led", "blmode", "reset-button", "",	/* B4-B7  */
 		"", "", "", "", "", "", "", "",			/* C0-C7  */
 		"", "", "", "", "", "", "", "";			/* D0-D7  */
+
+	/* Port-0 LAN LED on B2/LED_PORT0 (#126).  Overrides the inherited
+	 * Lidl value (B6 — named reset-button on this board): the LED pad
+	 * is a per-board wiring fact. */
+	realtek,led-pads = <10>;			/* B2: LAN LED */
 };
 
 /* Ethernet configuration */
