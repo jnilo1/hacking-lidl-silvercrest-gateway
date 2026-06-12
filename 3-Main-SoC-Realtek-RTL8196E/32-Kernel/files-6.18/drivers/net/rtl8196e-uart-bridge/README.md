@@ -201,7 +201,7 @@ bootloader-launch command). It is deliberately separate from
 `nrst_pulse`, which keeps meaning "reset into the application" — that is
 what `flash_efr32.sh` and `recover_efr32` rely on after a flash. The
 sysfs write blocks for the ~1.1 s of the sequence; afterwards the chip
-sits in the Gecko bootloader (Xmodem @ 38400, no flow control) until the
+sits in the Gecko bootloader (Xmodem @ 115200, no flow control) until the
 next `nrst_pulse` or a bootloader-driven application launch.
 
 ## Flashing the EFR32 with the bridge armed
