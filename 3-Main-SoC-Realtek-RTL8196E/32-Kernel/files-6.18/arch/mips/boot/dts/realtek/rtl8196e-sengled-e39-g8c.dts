@@ -1,0 +1,49 @@
+// SPDX-License-Identifier: GPL-2.0
+#include "rtl8196e.dts"
+
+/ {
+	model = "Sengled Smart Hub G4 E39-G8C";
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x04000000>;  /* 64MB */
+	};
+
+	reserved-memory {
+		boothold@3ffe000 {
+			reg = <0x03FFE000 0x1000>;  /* 4KB reserved for boothold flag (high DRAM, just below btcode stack) */
+		};
+	};
+
+	leds {
+		status-led {
+			gpios = <&gpio0 12 GPIO_ACTIVE_LOW>;
+		};
+
+	};
+
+	radio-bridge {
+		nrst-gpios = <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
+		blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
+		flow-control = "sw";
+	};
+};
+
+&gpio0 {
+	gpio-line-names =
+		"", "", "", "", "", "", "", "",			/* A0-A7  */
+		"", "", "", "efr32-nrst",			/* B0-B3  */
+		"status-led", "blmode", "reset-button", "",	/* B4-B7  */
+		"", "", "", "", "", "", "", "",			/* C0-C7  */
+		"", "", "", "", "", "", "", "";			/* D0-D7  */
+};
+
+/* Ethernet configuration */
+&ethernet {
+
+	interface@0 {
+		member-ports = <0x01>;      /* Port mask: 0x01 = port 0 (bit 0 set) */
+		untag-ports = <0x01>;       /* Untagged port mask: port 0 untagged */
+	};
+
+};

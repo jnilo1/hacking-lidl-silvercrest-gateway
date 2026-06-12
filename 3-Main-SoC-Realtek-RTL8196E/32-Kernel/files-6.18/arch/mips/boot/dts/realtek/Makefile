@@ -11,6 +11,8 @@
 #   4. teach the BOARD map in build_kernel.sh about it.
 dtb-$(CONFIG_DTB_RTL8196E_GEN)	+= rtl8196e.dtb
 
+dtb-$(CONFIG_DTB_RTL8196E_SENGLED_E39_G8C)	+= rtl8196e-sengled-e39-g8c.dtb
+
 obj-y				+= $(patsubst %.dtb, %.dtb.o, $(dtb-y))
 
 # Force kbuild to make empty built-in.o if necessary
