@@ -94,7 +94,7 @@ case "$BOARD" in
     lidl) BOARD_DTB_SYM="CONFIG_DTB_RTL8196E_GEN" ;;
     sengled-e39-g8c) BOARD_DTB_SYM="CONFIG_DTB_RTL8196E_SENGLED_E39_G8C" ;;
     *)
-        echo "ERROR: unknown BOARD '$BOARD' (known boards: lidl)" >&2
+        echo "ERROR: unknown BOARD '$BOARD' (known boards: lidl, sengled-e39-g8c)" >&2
         exit 1
         ;;
 esac
