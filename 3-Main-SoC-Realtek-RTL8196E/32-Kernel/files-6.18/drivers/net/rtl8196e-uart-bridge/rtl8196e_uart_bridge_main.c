@@ -1428,7 +1428,7 @@ static const struct kernel_param_ops nrst_gpio_ops = {
  * Gecko bootloader samples the pin after reset, so the sequence holds it
  * through and past the nRST pulse:
  *
- *   assert blmode -> assert nRST -> 100 ms -> release nRST -> 5 s
+ *   assert blmode -> assert nRST -> 100 ms -> release nRST -> 1 s
  *   (bootloader pin-sampling window) -> release blmode
  *
  * This is deliberately a SEPARATE trigger from nrst_pulse: nrst_pulse must
@@ -1512,7 +1512,7 @@ static int param_set_blmode_pulse(const char *val, const struct kernel_param *kp
 	gpiod_set_value_cansleep(nrst, 0);
 	gpiod_put(nrst);
 	/* hold blmode through the bootloader's pin-sampling window */
-	msleep(5000);
+	msleep(1000);
 	gpiod_set_value_cansleep(blmode, 0);
 	gpiod_put(blmode);
 	mutex_unlock(&nrst_pulse_lock);
@@ -1663,7 +1663,7 @@ MODULE_PARM_DESC(nrst_gpio,
 module_param_cb(blmode_pulse, &blmode_pulse_ops, NULL, 0200);
 MODULE_PARM_DESC(blmode_pulse,
 	"Write 1 to reset the EFR32 into its bootloader: assert blmode_gpio, "
-	"pulse nRST, hold blmode 5 s, release");
+	"pulse nRST, hold blmode 1 s, release");
 module_param_cb(blmode_gpio, &blmode_gpio_ops, NULL, 0644);
 MODULE_PARM_DESC(blmode_gpio,
 	"gpio-rtl819x line wired to the EFR32 bootloader-entry pin "
