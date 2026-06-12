@@ -91,6 +91,16 @@
 		"efr32-nrst", "", "", "",			/* B4-B7  */
 		"", "", "", "", "", "", "", "",			/* C0-C7  */
 		"", "", "", "", "", "", "", "";			/* D0-D7  */
+
+	/* Shared pads B2-B6 (lines 10-14) that the board wires to the
+	 * switch's link/activity LED outputs.  The ethernet driver muxes
+	 * listed pads to the ASIC LED function (PIN_MUX_SEL_2 field 0b00),
+	 * named pads to GPIO, and pads in neither set to unclaimed GPIO
+	 * (Hi-Z).  Note the LED pad is a wiring fact, not derivable from
+	 * member-ports: both the Lidl (port 4) and the Sengled G4 (port 0)
+	 * have their LAN LED on pad B2.  Without this property every
+	 * unnamed pad falls back to the ASIC LED function. */
+	realtek,led-pads = <10>;			/* B2: LAN LED */
 };
 
 &watchdog {

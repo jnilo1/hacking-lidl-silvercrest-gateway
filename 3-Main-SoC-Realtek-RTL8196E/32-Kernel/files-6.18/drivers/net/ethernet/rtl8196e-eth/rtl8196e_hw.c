@@ -308,23 +308,32 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 	 *
 	 * PIN_MUX_SEL_2 (0xB800_0044) — pads B2..B6, shared GPIO/LED_PORTn
 	 * (datasheet Table 36; same field map as gpio-rtl819x). The board
-	 * decides each pad's function through gpio-line-names on the GPIO
-	 * controller node (#124/#126):
-	 *   - pad named there  -> field = 11 (GPIO): the pad belongs to a
-	 *     GPIO consumer (LED driver, s40button, uart-bridge nRST/blmode).
-	 *     Muxing it here, not just at claim time, gives a deterministic
-	 *     boot state for lines that are claimed late or on demand —
-	 *     e.g. nRST muxed to an undriven GPIO input floats high through
-	 *     the EFR32's RESETn pull-up instead of being driven by a
-	 *     leftover bootloader function.
-	 *   - pad unnamed      -> field = 00 (LED_PORTn): the ASIC LED
-	 *     controller drives it (link/activity, LEDCREG direct mode
-	 *     below). Which port blinks is the ASIC's per-port behaviour —
-	 *     no per-board knob needed beyond the wiring itself.
+	 * decides each pad's function on the GPIO controller node
+	 * (#124/#126):
+	 *   - pad named in gpio-line-names -> field = 11 (GPIO): the pad
+	 *     belongs to a GPIO consumer (LED driver, s40button,
+	 *     uart-bridge nRST/blmode). Muxing it here, not just at claim
+	 *     time, gives a deterministic boot state for lines that are
+	 *     claimed late or on demand — e.g. nRST muxed to an undriven
+	 *     GPIO input floats high through the EFR32's RESETn pull-up
+	 *     instead of being driven by a leftover bootloader function.
+	 *   - pad listed in realtek,led-pads -> field = 00 (LED_PORTn):
+	 *     the ASIC LED controller drives it (link/activity, LEDCREG
+	 *     direct mode below). The LED pad must be declared, not derived
+	 *     from member-ports: both the Lidl (port 4) and the Sengled G4
+	 *     (port 0) wire their LAN LED to pad B2, so the Table 36
+	 *     pad<->LED_PORTn naming does not predict the wiring.
+	 *   - neither -> field = 11 as unclaimed GPIO: the pad is Hi-Z
+	 *     (Table 36 has no disable encoding; 00/10 leave the ASIC
+	 *     driving the pin), the safe state for unknown wiring.
+	 *   - realtek,led-pads absent -> every unnamed pad gets 00, the
+	 *     pre-v2.8 behaviour, so a DTB without the property keeps its
+	 *     LAN LED.
 	 * Bits [17:15] (MII) are always cleared.
-	 * On the Lidl board (names at 11/status-led, 12/efr32-nrst) this
-	 * yields B2=00 (LAN LED), B3=B4=11, B5=B6=00; on the Sengled G4
-	 * (names at 11..14) B2=00 (port-0 LAN LED) and B3..B6=11.
+	 * On the Lidl board (led-pads 10; names at 11/status-led,
+	 * 12/efr32-nrst) this yields B2=00 (LAN LED), B3=B4=11 and
+	 * B5=B6=11 Hi-Z; on the Sengled G4 (led-pads 10, names at 11..14)
+	 * B2=00 (port-0 LAN LED) and B3..B6=11.
 	 */
 	if (hw->syscon) {
 		static const struct {
@@ -339,21 +348,38 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 		};
 		struct device_node *gpio_np;
 		u32 mask = 7 << 15, val = 0;	/* [17:15] MII: always 0 */
+		bool has_led_pads = false;
 		int i;
 
 		gpio_np = of_find_compatible_node(NULL, NULL,
 						  "realtek,rtl8196e-gpio");
+		if (gpio_np)
+			has_led_pads = of_property_present(gpio_np,
+							   "realtek,led-pads");
 		for (i = 0; i < ARRAY_SIZE(pads); i++) {
 			const char *name = NULL;
+			bool led = false;
+			u32 u;
 
 			if (gpio_np)
 				of_property_read_string_index(gpio_np,
 							      "gpio-line-names",
 							      pads[i].line,
 							      &name);
+			if (has_led_pads)
+				of_property_for_each_u32(gpio_np,
+							 "realtek,led-pads", u)
+					if (u == pads[i].line)
+						led = true;
 			mask |= 3 << pads[i].shift;
-			if (name && *name)
+			if (name && *name) {
 				val |= 3 << pads[i].shift;
+				if (led)
+					pr_warn("rtl8196e-eth: gpio line %u both named and in realtek,led-pads; name wins (GPIO)\n",
+						pads[i].line);
+			} else if (!led && has_led_pads) {
+				val |= 3 << pads[i].shift;
+			}
 		}
 		of_node_put(gpio_np);
 
