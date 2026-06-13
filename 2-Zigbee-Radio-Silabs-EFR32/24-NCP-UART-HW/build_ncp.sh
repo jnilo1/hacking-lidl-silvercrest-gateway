@@ -199,7 +199,15 @@ cp "${PATCHES_DIR}/app.c" .
 # sources (duplicate-symbol link error). For lidl TARGET_DEVICE is the same
 # string, so the slcp is byte-identical.
 sed -i "s/EFR32MG1B232F256GM48/${TARGET_DEVICE}/g" ncp-uart-hw.slcp
-echo "  - Copied project files from patches (device=${TARGET_DEVICE})"
+# Point the slcp's flow-control config item at the board's flow type too, so the
+# project file matches the VCOM header that apply_uart_config writes below. The
+# header is what the firmware actually compiles against (and is copied from
+# patches/ + sed'd regardless), so this slcp edit changes no binary — but a
+# stale "usartHwFlowControlCtsAndRts" here on a sw board is misleading (#130).
+# lidl resolves back to the same hw token, so the slcp stays byte-identical.
+NCP_FLOW_TOK="$(flow_control_token usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware)" || exit 1
+sed -i -E "s|(SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE, value: )[A-Za-z0-9]+|\1${NCP_FLOW_TOK}|" ncp-uart-hw.slcp
+echo "  - Copied project files from patches (device=${TARGET_DEVICE}, flow=${BOARD_UART_FLOW})"
 
 # =========================================
 # Generate project with slc

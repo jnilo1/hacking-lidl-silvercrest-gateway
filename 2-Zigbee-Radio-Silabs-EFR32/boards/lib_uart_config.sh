@@ -16,6 +16,21 @@
 #   <flow-none-token> SDK enum for no flow control (driver-specific)
 #   <flow-sw-token>   SDK enum for software XON/XOFF flow control (driver-specific)
 
+# Resolve BOARD_UART_FLOW (hw|none|sw) to the driver-specific SDK enum token.
+# The three args are the hw / none / sw tokens for the driver in question (the
+# iostream-usart and uartdrv drivers spell them differently). Echoes the token
+# on stdout; returns non-zero on an invalid BOARD_UART_FLOW.
+#   Usage: tok=$(flow_control_token <hw-tok> <none-tok> <sw-tok>) || return 1
+flow_control_token() {
+    case "$BOARD_UART_FLOW" in
+        hw)   echo "$1" ;;
+        none) echo "$2" ;;
+        sw)   echo "$3" ;;
+        *) echo "ERROR: board.env BOARD_UART_FLOW='${BOARD_UART_FLOW}' (expected hw|none|sw)" >&2
+           return 1 ;;
+    esac
+}
+
 apply_uart_config() {
     local hdr="$1" p="$2" flow_hw="$3" flow_none="$4" flow_sw="$5"
 
@@ -27,13 +42,7 @@ apply_uart_config() {
     set -- $BOARD_UART_CTS; cts_port=$1 cts_pin=$2 cts_loc=$3
     set -- $BOARD_UART_RTS; rts_port=$1 rts_pin=$2 rts_loc=$3
 
-    case "$BOARD_UART_FLOW" in
-        hw)   flow_tok="$flow_hw" ;;
-        none) flow_tok="$flow_none" ;;
-        sw)   flow_tok="$flow_sw" ;;
-        *) echo "ERROR: board.env BOARD_UART_FLOW='${BOARD_UART_FLOW}' (expected hw|none|sw)" >&2
-           return 1 ;;
-    esac
+    flow_tok="$(flow_control_token "$flow_hw" "$flow_none" "$flow_sw")" || return 1
 
     sed -i -E \
         -e "s|(#define ${p}_PERIPHERAL[[:space:]]+)[A-Za-z0-9]+|\1${BOARD_UART_PERIPHERAL}|" \

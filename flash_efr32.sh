@@ -776,15 +776,32 @@ ssh_gw "
 # v3.0.1's USF probe would otherwise hit. Requires the nrst_pulse sysfs knob
 # (kernel >= 6.18 with v3.1 rtl8196e-uart-bridge driver) — best-effort: if
 # the knob isn't there, fall through silently.
-echo "Pulsing EFR32 nRST for clean pre-probe state..."
+#
+# BUT skip the pulse if the chip is ALREADY in the Gecko Bootloader: the user
+# may have entered it deliberately (blmode_pulse, or a manual download-mode
+# reboot), and an nRST pulse would reset the chip back into the application and
+# undo that — exactly the failure reported in #130. The bootloader answers at
+# 115200/no-flow, so probe there first and only pulse when it does NOT answer.
+echo "Checking whether the chip is already in the Gecko Bootloader..."
 ssh_gw "
-    if [ -w ${BRIDGE_SYSFS}/nrst_pulse ]; then
-        echo 1 > ${BRIDGE_SYSFS}/nrst_pulse
-        sleep 1   # boot ROM + app init
-    else
-        echo '(nrst_pulse sysfs absent — skipping pre-flash reset)'
-    fi
-"
+    echo 115200 > ${BRIDGE_SYSFS}/baud
+    echo 0 > ${BRIDGE_SYSFS}/flow_control
+" >/dev/null 2>&1
+sleep 0.3
+if "$FLASHER" --device "socket://${GW_IP}:${GW_PORT}" \
+        --probe-methods "bootloader:115200" probe 2>&1 | grep -qi "Detected.*bootloader"; then
+    echo "  Chip is already in the Gecko Bootloader — skipping the nRST pulse."
+else
+    echo "Pulsing EFR32 nRST for clean pre-probe state..."
+    ssh_gw "
+        if [ -w ${BRIDGE_SYSFS}/nrst_pulse ]; then
+            echo 1 > ${BRIDGE_SYSFS}/nrst_pulse
+            sleep 1   # boot ROM + app init
+        else
+            echo '(nrst_pulse sysfs absent — skipping pre-flash reset)'
+        fi
+    "
+fi
 
 # v3.1 Z3-Router CLI fallback: when the chip is ALREADY running the router
 # firmware, USF can't probe it (router speaks only its mini-CLI, not

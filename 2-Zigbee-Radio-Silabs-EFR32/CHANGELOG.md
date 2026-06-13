@@ -34,6 +34,18 @@ generated VCOM config header, substituting only the value token on each
   Lidl placeholder pending on-hardware validation (#130) — the image is
   structurally correct but electrically wrong until then. RCP, Router and the
   bootloader remain lidl-only and are skipped for non-lidl boards.
+- The NCP `.slcp` flow-control config item now tracks the board's
+  `BOARD_UART_FLOW` (alongside the existing VCOM header substitution), so the
+  generated project file no longer shows `usartHwFlowControlCtsAndRts` on a
+  software-flow board. This changed no binary — the firmware compiles against
+  the VCOM header, which was already correct — but the stale slcp value was
+  misdiagnosed as the cause of a non-working radio (#130); lidl rebuilds
+  byte-identical.
+- `flash_efr32.sh` no longer pulses the EFR32 nRST when the chip is **already**
+  in the Gecko Bootloader. Entering the bootloader manually (`blmode_pulse` or a
+  download-mode reboot) and then running the flasher used to reset the chip back
+  into the application before the upload, so the flash silently did not take
+  (#130). It now probes the bootloader first and skips the pulse if it answers.
 
 ---
 
