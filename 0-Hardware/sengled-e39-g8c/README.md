@@ -72,7 +72,7 @@ ______________________________________________________________________
 - See markers in [Back PCB Picture](./images/pcb_back.jpg)
 - JTAG/SWD debug port for Radio IC
   - Not populated by default (1.26mm header needed)
-- RTL8196 UART0
+- RTL8196E UART0
 
 ______________________________________________________________________
 
@@ -90,7 +90,7 @@ ______________________________________________________________________
 - Status LEDs:
   - Ethernet activity
   - Zigbee communication
-  - Power Suppy
+  - Power Supply
 - See markers [Front PCB Picture](./images/pcb_front.jpg)
 - Supporting discrete components (caps, resistors, etc.)
 
