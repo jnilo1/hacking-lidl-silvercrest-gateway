@@ -194,7 +194,12 @@ cd "${BUILD_DIR}"
 cp "${PATCHES_DIR}/ncp-uart-hw.slcp" .
 cp "${PATCHES_DIR}/main.c" .
 cp "${PATCHES_DIR}/app.c" .
-echo "  - Copied project files from patches"
+# Point the project's device component at the selected board's MCU. The slcp
+# pins the lidl part; leaving it on another board pulls a second device family's
+# sources (duplicate-symbol link error). For lidl TARGET_DEVICE is the same
+# string, so the slcp is byte-identical.
+sed -i "s/EFR32MG1B232F256GM48/${TARGET_DEVICE}/g" ncp-uart-hw.slcp
+echo "  - Copied project files from patches (device=${TARGET_DEVICE})"
 
 # =========================================
 # Generate project with slc

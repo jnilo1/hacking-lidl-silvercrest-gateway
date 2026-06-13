@@ -48,10 +48,13 @@ for flow control differ between them and are supplied by each build script
 `none`→the respective `…None`). Software flow is a first-class SDK option, not
 a patch — the generated init code keys off the same `_FLOW_CONTROL_TYPE` token.
 
-> **G4 status:** a clean `BOARD=sengled-e39-g8c` build also needs MG13-specific
-> SDK component config (the first wall is `SL_DEVICE_INIT_EMU_EM4_VSCALE` in
-> `device_init_emu`, an MG13-vs-MG1B delta). That is part of the hardware port,
-> tracked in #130, and not carried by `board.env` alone.
+> **G4 status:** `BOARD=sengled-e39-g8c` builds NCP and OT-RCP end-to-end (MG13
+> target, software flow). The NCP `.slcp` pinned the lidl MCU as a device
+> component, so the build re-points it at `BOARD_TARGET_DEVICE` before
+> `slc generate` (otherwise two device families link → duplicate symbols); for
+> lidl that is the same string, so its build is unchanged. The one thing still
+> missing is the real **USART/pin routing** — the placeholder uses Lidl pins, so
+> the image is structurally correct but electrically wrong until #130 lands.
 
 ## Porting contract
 
