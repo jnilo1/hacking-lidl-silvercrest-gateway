@@ -42,6 +42,17 @@ by design), but it is one more reason `flash_efr32.sh` must drop
 `flow_control` to 0 during a flash — Xmodem payloads carry raw
 0x11/0x13. The host→radio direction is never filtered.
 
+Hardware-flow-control capability (v1.5): the `flow_control` knob is
+writable by root, but the *hardware* mode is gated by the board itself,
+not by whoever writes the knob. The DT boolean `realtek,hw-flow-control`
+declares whether RTS/CTS is physically wired; on a board that lacks it,
+`param_set_flow_control()` clamps any `hw` request down to `sw`. So a
+`flow_control=hw` write (from a bad radio.conf, a typo, or a confused
+operator) can never assert CRTSCTS on a UART that has no RTS/CTS lines —
+which on such a board would wedge the link rather than protect it. The
+clamp is a capability ceiling, enforced in the kernel regardless of the
+init scripts.
+
 ---
 
 ## Architecture

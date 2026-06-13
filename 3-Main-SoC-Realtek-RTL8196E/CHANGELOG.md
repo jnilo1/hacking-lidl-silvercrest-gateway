@@ -139,6 +139,38 @@ the builtin param lock is documented at the lock definition and the unlock
 site for any future config entry point; the Kconfig help now covers
 `blmode_pulse` / `blmode_gpio`. No data-path change.
 
+### `rtl8196e-uart-bridge` v1.5 — split flow-control capability from firmware mode (discussion #134)
+
+The devicetree `radio-bridge/flow-control = "hw"|"sw"|"none"` conflated two
+unrelated facts: whether a board physically wires the EFR32 UART's RTS/CTS
+(a hardware truth) and which mode a given radio firmware wants (a runtime
+choice). On the Lidl board both are "hw", so the conflation was invisible;
+on the Sengled G4, which does not wire RTS/CTS, "sw" really encoded "not
+hw-capable", so changing the radio firmware meant rebuilding the DTB. v1.5
+splits the two:
+
+* **Board capability → devicetree.** A new boolean `realtek,hw-flow-control`
+  on the `/radio-bridge` node declares that RTS/CTS is wired. Present on the
+  Lidl board, omitted on the G4. It seeds the `flow_control` default
+  (present → `hw`, absent → `sw`) and acts as a **ceiling**: an `hw` request
+  from sysfs or the init scripts is clamped to `sw` on a board without the
+  boolean, so CRTSCTS is never asserted on an unwired UART. The old DT
+  `flow-control` string is dropped entirely (unreleased binding, both
+  in-tree DTS converted in lockstep — no shim).
+* **Firmware mode → radio.conf.** A new optional `FIRMWARE_FLOW_CTRL=none|sw|hw`
+  key (parallel to `FIRMWARE_BAUD`) selects the mode at runtime, applied to
+  the sysfs `flow_control` knob by `S50uart_bridge` (Zigbee) and reflected in
+  the `otbr-agent` `uart-flow-control` URL by `S70otbr` (Thread). Absent ⇒
+  the devicetree per-board default stands, so **no existing `radio.conf`
+  needs to change** on either board.
+* **`flash_efr32.sh`** now accepts a non-zero `flow_control` readback when
+  re-enabling flow control after a flash (1 on a wired board, 2/`sw` on an
+  unwired one), instead of asserting exactly `1` — which would have aborted
+  the flash on a not-capable board. The off-state checks (`0`, required for
+  the Gecko Bootloader Xmodem path) are unchanged.
+
+The runtime sysfs `flow_control` 0/1/2 numeric ABI is unchanged.
+
 ### `irq-rtl819x` (irqchip) v1.0 — error-path cleanup
 
 The no-parent error path now removes the IRQ domain and NULLs the base

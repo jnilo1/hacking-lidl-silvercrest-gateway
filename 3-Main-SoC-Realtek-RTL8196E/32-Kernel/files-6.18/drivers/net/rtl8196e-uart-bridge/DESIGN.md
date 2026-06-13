@@ -177,7 +177,11 @@ Boards without RTS/CTS wiring between the SoC and the radio (e.g. the
 Sengled G4 port, discussions #119/#123) pair a software-flow-control
 radio firmware (NCP-UART-SW) with `flow_control=sw`. Such firmware
 escapes data-plane 0x11/0x13 bytes, so a bare XON/XOFF on the wire is
-genuine flow control.
+genuine flow control. From v1.5 a board no longer encodes "sw" directly
+in the DT: it declares whether it *can* do hardware flow control
+(`realtek,hw-flow-control`, see below), which sets the default and caps
+`hw` to `sw` on an unwired board; the firmware-specific mode is then an
+optional runtime `FIRMWARE_FLOW_CTRL` key.
 
 Two design points:
 
@@ -212,6 +216,23 @@ driver to platform binding for a few values wasn't worth the churn; init
 just looks the node up by compatible. Explicit kernel-cmdline or sysfs
 writes always win over the DT (the param setters record an explicit
 write; built-in modules apply cmdline params before `late_initcall`).
+
+**Capability vs mode (v1.5).** The original DT carried `flow-control =
+"hw"|"sw"|"none"`, which conflated two unrelated facts: whether the board
+*wires* RTS/CTS (a hardware truth) and which mode a given radio firmware
+*wants* (a runtime choice). On the G4, with no RTS/CTS, "sw" really meant
+"not hw-capable" — so changing firmware needed a DTB rebuild (#134). v1.5
+splits them: the DT boolean `realtek,hw-flow-control` is the board
+capability (present on Lidl, absent on the G4), seeding the default and
+acting as a ceiling — `param_set_flow_control()` clamps an `hw` request to
+`sw` when `!rtl_hw_fc_capable`, so CRTSCTS can never reach an unwired UART
+regardless of what userspace writes. The firmware mode is the optional
+`FIRMWARE_FLOW_CTRL` radio.conf key (parallel to `FIRMWARE_BAUD`), applied
+to the same sysfs `flow_control` knob by the init scripts. The capability
+is DT/compiled-only (never a writable param); the mode default it sets is
+still overridable by cmdline/sysfs, subject to the clamp. The old DT
+string parse was dropped outright — the binding was unreleased, and the
+two in-tree DTS were converted in lockstep, so no shim was needed.
 
 ### nRST pulse — one open-drain GPIO, not a pin-mux trick
 

@@ -60,12 +60,16 @@
 	 * No platform driver binds here — the bridge looks the node up by
 	 * compatible; the resulting unbound platform device is harmless.
 	 *
-	 * flow-control: "hw" (RTS/CTS), "sw" (XON/XOFF) or "none",
-	 * matching how the board wires the EFR32 UART. */
+	 * realtek,hw-flow-control: a board-capability boolean — present means
+	 * the EFR32 UART has RTS/CTS physically wired (the Lidl case). It sets
+	 * the flow_control default to hw and caps it (an hw request on a board
+	 * without it is clamped to sw). It is NOT a firmware-mode selection:
+	 * the runtime mode is chosen via radio.conf FIRMWARE_FLOW_CTRL, which
+	 * S50uart_bridge/S70otbr write to the sysfs flow_control knob. */
 	radio-bridge {
 		compatible = "realtek,rtl8196e-uart-bridge";
 		nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
-		flow-control = "hw";
+		realtek,hw-flow-control;
 	};
 };
 

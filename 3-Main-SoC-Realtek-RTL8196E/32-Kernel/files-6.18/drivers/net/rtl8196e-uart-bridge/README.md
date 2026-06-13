@@ -38,7 +38,7 @@ are live: writing flips the running bridge without reload.
 | `baud` | rw | UART baud. Applied live; take care matching EFR32 firmware |
 | `port` | rw, root | TCP listen port. Default `8888` |
 | `bind_addr` | rw, root | TCP bind address. Default `0.0.0.0`; set `127.0.0.1` for loopback-only |
-| `flow_control` | rw | `0`/`none` = off (needed during EFR32 flash), `1`/`hw` = CRTSCTS (default), `2`/`sw` = XON/XOFF handled by the bridge. Readback is always numeric |
+| `flow_control` | rw | `0`/`none` = off (needed during EFR32 flash), `1`/`hw` = CRTSCTS (default), `2`/`sw` = XON/XOFF handled by the bridge. Readback is always numeric. An `hw` request is clamped to `sw` on a board without `realtek,hw-flow-control` (no RTS/CTS wiring) |
 | `enable` | rw | 1 = arm the bridge, 0 = disarm. Boot default 0 |
 | `armed` | ro | 1 when both UART and listen socket are live |
 | `stats` | ro | `rx=... tx=... drops_nocli=... drops_err=... drops_tx=...` |
@@ -74,7 +74,7 @@ radio-bridge {
         compatible = "realtek,rtl8196e-uart-bridge";
         nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
         blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
-        flow-control = "hw";
+        realtek,hw-flow-control;
 };
 ```
 
@@ -86,18 +86,22 @@ radio-bridge {
   pin, for boards that have one (e.g. the Sengled G4; the Lidl board does
   not and omits the property, which keeps `blmode_pulse` disabled). Same
   line-number-only consumption as `nrst-gpios`.
-- `flow-control` — `"hw"` (RTS/CTS), `"sw"` (XON/XOFF — for boards
-  without RTS/CTS wiring, paired with a software-flow-control radio
-  firmware such as NCP-UART-SW) or `"none"`, matching how the board
-  wires the EFR32 UART.
+- `realtek,hw-flow-control` — a **board-capability** boolean: present means
+  the board physically wires the EFR32 UART's RTS/CTS. It is *not* a
+  firmware-mode selection. Present → the `flow_control` default is `hw`;
+  absent → the default is `sw`, **and** an `hw` request (from sysfs or the
+  init script) is clamped to `sw`, so CRTSCTS is never asserted on an
+  unwired UART. The Lidl board sets it; the Sengled G4, which does not wire
+  RTS/CTS, omits it. Choosing the runtime mode for a given radio firmware
+  is a separate concern — see `FIRMWARE_FLOW_CTRL` below.
 
 Precedence is **DT < kernel command line < runtime sysfs writes**: the
-node only seeds the boot-time defaults of `nrst_gpio`, `blmode_gpio` and
-`flow_control`;
+node seeds the boot-time defaults of `nrst_gpio` / `blmode_gpio` and the
+hw-flow-control capability (which sets the `flow_control` default);
 an explicit `rtl8196e_uart_bridge.nrst_gpio=...` on the command line or a
-later sysfs write always wins. With no node (or no property) the
-compiled-in Lidl defaults apply — third-party DTS files may simply omit
-it. This is the mechanism that lets RTL8196E-twin ports (e.g. the Sengled
+later sysfs write always wins (subject to the capability clamp on
+`flow_control`). With no node the compiled-in Lidl defaults apply
+(hw-capable) — third-party DTS files may simply omit it. This is the mechanism that lets RTL8196E-twin ports (e.g. the Sengled
 G4, discussion #119) describe their radio wiring without patching the
 driver.
 
@@ -105,21 +109,26 @@ driver.
 
 The userdata init script `S50uart_bridge`
 (`3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/etc/init.d/S50uart_bridge`)
-is the normal entry point. It reads two keys from
+is the normal entry point. It reads these keys from
 `/userdata/etc/radio.conf`:
 
 ```
-FIRMWARE_BAUD=115200 # or 460800, 691200, 892857 — match the EFR32 firmware
-BRIDGE_BIND=0.0.0.0  # or 127.0.0.1 to force SSH-tunnel-only access
+FIRMWARE_BAUD=115200       # or 460800, 691200, 892857 — match the EFR32 firmware
+BRIDGE_BIND=0.0.0.0        # or 127.0.0.1 to force SSH-tunnel-only access
+FIRMWARE_FLOW_CTRL=hw      # optional: none|sw|hw, overrides the DT per-board default
 ```
 
 then writes the corresponding sysfs knobs and flips `enable=1`. When
 `MODE=otbr` is set in the same file, the script exits early and leaves
 the UART free for `otbr-agent`.
 
-Both keys are optional — missing `FIRMWARE_BAUD` defaults to 460800,
-missing `BRIDGE_BIND` defaults to 0.0.0.0 (unchanged from v3.0
-behaviour).
+All three keys are optional — missing `FIRMWARE_BAUD` defaults to 460800,
+missing `BRIDGE_BIND` defaults to 0.0.0.0 (unchanged from v3.0 behaviour),
+and a missing `FIRMWARE_FLOW_CTRL` leaves `flow_control` at its devicetree
+per-board default (so neither the Lidl nor the G4 board needs the key). It
+exists to select the flow-control mode when a radio firmware differs from
+the board default — e.g. an XON/XOFF NCP build — and is still subject to
+the hw-flow-control capability clamp.
 
 `FIRMWARE_BAUD` is the chip-side baud written by `flash_efr32.sh` on
 every successful flash; both `S50uart_bridge` (Zigbee) and `S70otbr`

@@ -33,11 +33,23 @@ if [ -f /userdata/etc/radio.conf ]; then
         115200|230400|460800|691200|892857) FW_BAUD="$val" ;;
     esac
 fi
-# uart-flow-control=true is REQUIRED on this SoC: it tells otbr-agent to set
-# CRTSCTS on the tty, which the 8250 core then propagates as MCR_AFE on the
-# 16550A. Without it, the gateway runs without hardware RTS/CTS and the RX
-# FIFO can overrun under bursty Spinel traffic at 460800 (#89).
-RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=${FW_BAUD}&uart-flow-control=true"
+# uart-flow-control tells otbr-agent to set CRTSCTS on the tty, which the 8250
+# core then propagates as MCR_AFE on the 16550A. On the Lidl board (RTS/CTS
+# wired) it is REQUIRED: without it the RX FIFO can overrun under bursty Spinel
+# traffic at 460800 (#89). It is derived from FIRMWARE_FLOW_CTRL in radio.conf:
+# hw (or absent) => true; none|sw => false, for a board/firmware without
+# hardware flow control (e.g. the G4, which does not wire RTS/CTS). otbr-agent
+# speaks spinel straight to /dev/ttyS1 (the bridge is not in the path), so only
+# hardware flow control is meaningful here — sw simply selects "no CRTSCTS".
+UART_FC=true
+if [ -f /userdata/etc/radio.conf ]; then
+    val=$(grep '^FIRMWARE_FLOW_CTRL=' /userdata/etc/radio.conf | tail -1 | cut -d= -f2)
+    case "$val" in
+        none|sw) UART_FC=false ;;
+        hw|"")   UART_FC=true  ;;
+    esac
+fi
+RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=${FW_BAUD}&uart-flow-control=${UART_FC}"
 
 # Network interfaces
 THREAD_IF="wpan0"

@@ -31,7 +31,11 @@
 	radio-bridge {
 		nrst-gpios = <&gpio0 11 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
 		blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
-		flow-control = "sw";
+		/* The G4 does not wire RTS/CTS. This dts #includes rtl8196e.dts,
+		 * which declares realtek,hw-flow-control on this node, so delete
+		 * it here: the bridge then reports the board as not hw-capable
+		 * and defaults flow_control to sw. */
+		/delete-property/ realtek,hw-flow-control;
 	};
 };
 

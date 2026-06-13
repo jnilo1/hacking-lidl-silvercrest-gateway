@@ -583,9 +583,12 @@ if [ "$ARMED" != '1' ]; then
         echo 1 > "$BRIDGE_SYSFS/flow_control"
         echo 1 > "$BRIDGE_SYSFS/enable"
         sleep 1
+        # flow_control readback is non-zero on success: 1 on a board that wires
+        # RTS/CTS, or 2 (sw) on one that does not, where the bridge clamps the
+        # hw request. Only a literal 0 means flow control failed to engage.
         if [ "$(cat "$BRIDGE_SYSFS/armed" 2>/dev/null)" != '1' ] || \
            [ "$(cat "$BRIDGE_SYSFS/baud" 2>/dev/null)" != "$BAUD" ] || \
-           [ "$(cat "$BRIDGE_SYSFS/flow_control" 2>/dev/null)" != '1' ]; then
+           [ "$(cat "$BRIDGE_SYSFS/flow_control" 2>/dev/null)" = '0' ]; then
             emit STATUS self-arm-failed
             exit 0
         fi
@@ -708,7 +711,7 @@ if [ -n "$CONFIG_BAUD" ]; then
                 echo ${CONFIG_BAUD} > ${BRIDGE_SYSFS}/baud
                 echo 1 > ${BRIDGE_SYSFS}/flow_control
                 [ \"\$(cat ${BRIDGE_SYSFS}/baud 2>/dev/null)\" = '${CONFIG_BAUD}' ]
-                [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" = '1' ]
+                [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" != '0' ]
             "
         else
             ssh_gw "
@@ -760,7 +763,9 @@ ssh_gw "
         echo 0 > ${BRIDGE_SYSFS}/flow_control
         [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" = '0' ]
     else
-        [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" = '1' ]
+        # OTBR keeps flow control on for the probe: non-zero (1 hw, or 2 sw on
+        # a board without RTS/CTS wiring where the bridge clamps hw to sw).
+        [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" != '0' ]
     fi
     [ \"\$(cat ${BRIDGE_SYSFS}/baud 2>/dev/null)\" = '${CURRENT_BAUD}' ]
     sleep 1
@@ -812,6 +817,8 @@ router_cli_to_bootloader() {
 # etc.) before manually rebooting.
 FLASH_OK=0
 cleanup() {
+    # Re-enable flow control: request hw (1); the bridge clamps it to sw on a
+    # board without RTS/CTS wiring, so this restores the board-appropriate mode.
     ssh_gw "
         echo ${ORIG_BAUD} > ${BRIDGE_SYSFS}/baud 2>/dev/null || true
         echo 1 > ${BRIDGE_SYSFS}/flow_control 2>/dev/null || true
@@ -819,7 +826,7 @@ cleanup() {
 
     if [ "$FLASH_OK" != "1" ]; then
         echo "" >&2
-        echo "Gateway state restored to baud=${ORIG_BAUD}, flow_control=1." >&2
+        echo "Gateway state restored to baud=${ORIG_BAUD}, flow control re-enabled." >&2
         echo "Flash did not complete successfully. To reboot manually:" >&2
         echo "  ssh root@${GW_IP} reboot" >&2
     fi
@@ -864,10 +871,22 @@ set_bridge_baud() {
 
 set_bridge_flow_control() {
     local value="$1"
-    ssh_gw "
-        echo ${value} > ${BRIDGE_SYSFS}/flow_control
-        [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" = '${value}' ]
-    "
+    # On success the readback equals the request, with one exception: an hw
+    # request (1) on a board that does not wire RTS/CTS, where the bridge clamps
+    # to sw (2). So an ON request (non-zero) is satisfied by any non-zero
+    # readback; an OFF request (0) must read back exactly 0 (0 is never clamped,
+    # and the Gecko Bootloader Xmodem path genuinely needs all flow control off).
+    if [ "$value" = "0" ]; then
+        ssh_gw "
+            echo 0 > ${BRIDGE_SYSFS}/flow_control
+            [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" = '0' ]
+        "
+    else
+        ssh_gw "
+            echo ${value} > ${BRIDGE_SYSFS}/flow_control
+            [ \"\$(cat ${BRIDGE_SYSFS}/flow_control 2>/dev/null)\" != '0' ]
+        "
+    fi
 }
 
 # Probe selection. We always probe ALL four known protocols at the current

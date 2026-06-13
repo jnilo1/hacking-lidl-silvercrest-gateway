@@ -30,9 +30,12 @@
  * The init script S50uart_bridge sets the baud rate and writes
  * enable=1 once /dev/ttyS1 exists.
  *
- * Defaults for nrst_gpio, blmode_gpio and flow_control can be described
- * per-board in the device tree (optional /radio-bridge node, matched by
- * compatible "realtek,rtl8196e-uart-bridge"). Precedence: DT < kernel
+ * Defaults for nrst_gpio and blmode_gpio can be described per-board in the
+ * device tree (optional /radio-bridge node, matched by compatible
+ * "realtek,rtl8196e-uart-bridge"). The same node's "realtek,hw-flow-control"
+ * boolean declares whether the board physically wires RTS/CTS, which sets the
+ * flow_control default (present -> hw, absent -> sw) and caps it: an hw request
+ * on a board without the boolean is clamped to sw. Precedence: DT < kernel
  * command line < runtime sysfs writes. See bridge_seed_defaults_from_dt().
  *
  * Rationale and architecture: see DESIGN.md in this directory.
@@ -63,7 +66,7 @@
 #include <net/tcp.h>
 
 #define DRV_NAME    "rtl8196e-uart-bridge"
-#define DRV_VERSION "1.4"
+#define DRV_VERSION "1.5"
 
 /* Software flow control bytes (flow_control=sw): sent bare by a radio
  * firmware built for XON/XOFF (e.g. NCP-UART-SW); such firmware escapes
@@ -168,6 +171,15 @@ enum bridge_fc_mode {
 	BRIDGE_FC_SW   = 2,	/* XON/XOFF from the radio, handled in-bridge */
 };
 static int  rtl_flow_control  = BRIDGE_FC_HW;
+
+/*
+ * Board capability: does this board physically wire RTS/CTS? Seeded from the
+ * DT boolean "realtek,hw-flow-control" (compiled default true = Lidl). It is a
+ * ceiling, never a writable param: an hw request on a !capable board is clamped
+ * to sw, so CRTSCTS is never asserted on an unwired UART.
+ */
+static bool rtl_hw_fc_capable = true;
+
 static bool rtl_enable        = false;
 static int  rtl_nrst_gpio     = 12;     /* gpio-rtl819x line wired to EFR32 nRST */
 static int  rtl_blmode_gpio   = -1;     /* EFR32 bootloader-entry pin; -1 = none
@@ -1289,6 +1301,12 @@ static int param_set_flow_control(const char *val, const struct kernel_param *kp
 
 	mutex_lock(&bridge_lock);
 	rtl_flow_control_set_by_user = true;
+	/* Capability ceiling: never assert CRTSCTS on a board without RTS/CTS
+	 * wiring. Clamp (not -EINVAL) so the write still succeeds. */
+	if (new_fc == BRIDGE_FC_HW && !rtl_hw_fc_capable) {
+		pr_warn(DRV_NAME ": flow_control=hw but board has no RTS/CTS wiring; using sw\n");
+		new_fc = BRIDGE_FC_SW;
+	}
 	if (new_fc != rtl_flow_control) {
 		int old_fc = rtl_flow_control;
 
@@ -1666,7 +1684,8 @@ module_param_cb(bind_addr, &bind_ops,   NULL, 0600);
 MODULE_PARM_DESC(bind_addr, "TCP bind address (default 0.0.0.0 = all interfaces)");
 module_param_cb(flow_control, &flow_control_ops, NULL, 0644);
 MODULE_PARM_DESC(flow_control,
-	"0/none, 1/hw=RTS-CTS (default), 2/sw=XON-XOFF; set 0 for EFR32 flash");
+	"0/none, 1/hw=RTS-CTS (default), 2/sw=XON-XOFF; set 0 for EFR32 flash; "
+	"hw is clamped to sw on boards without realtek,hw-flow-control");
 module_param_cb(enable,    &enable_ops, NULL, 0644);
 MODULE_PARM_DESC(enable,    "1=arm bridge, 0=disarm (default 0, arm via init script)");
 module_param_cb(armed,     &armed_ops,  NULL, 0444);
@@ -1697,30 +1716,37 @@ MODULE_PARM_DESC(status_led_brightness,
 /* ------------------------------------------------------------------ init */
 
 /*
- * Seed nrst_gpio, blmode_gpio and flow_control defaults from an optional
- * board node:
+ * Seed nrst_gpio, blmode_gpio and the hw-flow-control capability from an
+ * optional board node:
  *
  *   radio-bridge {
  *           compatible = "realtek,rtl8196e-uart-bridge";
  *           nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
  *           blmode-gpios = <&gpio0 13 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
- *           flow-control = "hw";
+ *           realtek,hw-flow-control;   // omit on boards without RTS/CTS wiring
  *   };
  *
  * Only the line numbers of nrst-gpios / blmode-gpios are consumed — the
  * pulse paths keep their hardcoded ACTIVE_LOW | OPEN_DRAIN lookup flags
  * because EFR32 RESETn (and the bootloader-entry pin as wired on known
  * boards) is inherently open-drain active-low; the DT cell flags document
- * the same fact for the reader. The node is optional: absent node (or
- * absent property) keeps the compiled-in Lidl defaults — in particular,
- * no blmode-gpios means blmode_pulse stays disabled (-1).
- * Explicit cmdline/sysfs writes win over DT (see *_set_by_user).
+ * the same fact for the reader.
+ *
+ * "realtek,hw-flow-control" is a board-capability boolean (is RTS/CTS wired?),
+ * not a firmware-mode selection: present -> flow_control defaults to hw,
+ * absent-in-a-present-node -> defaults to sw, and an hw request is clamped to
+ * sw on a board that lacks it. The firmware-mode choice is a separate, runtime
+ * concern (radio.conf FIRMWARE_FLOW_CTRL -> the sysfs flow_control knob).
+ *
+ * The node is optional: absent node keeps the compiled-in Lidl defaults
+ * (hw-capable, blmode_pulse disabled at -1). Explicit cmdline/sysfs writes win
+ * over the DT-seeded flow_control default (see rtl_flow_control_set_by_user);
+ * the capability itself is DT/compiled-only.
  */
 static void __init bridge_seed_defaults_from_dt(void)
 {
 	struct of_phandle_args args;
 	struct device_node *np;
-	const char *fc;
 
 	np = of_find_compatible_node(NULL, NULL, "realtek,rtl8196e-uart-bridge");
 	if (!np)
@@ -1754,22 +1780,14 @@ static void __init bridge_seed_defaults_from_dt(void)
 		of_node_put(args.np);
 	}
 
-	if (!rtl_flow_control_set_by_user &&
-	    !of_property_read_string(np, "flow-control", &fc)) {
-		if (!strcmp(fc, "hw")) {
-			rtl_flow_control = BRIDGE_FC_HW;
-		} else if (!strcmp(fc, "sw")) {
-			rtl_flow_control = BRIDGE_FC_SW;
-		} else if (!strcmp(fc, "none")) {
-			rtl_flow_control = BRIDGE_FC_NONE;
-		} else {
-			pr_warn(DRV_NAME ": DT flow-control \"%s\" unknown (hw/sw/none), keeping %d\n",
-				fc, rtl_flow_control);
-		}
-	}
+	/* Board capability (DT/compiled-only, never a writable param). A present
+	 * node without the boolean means "board declares it has no RTS/CTS". */
+	rtl_hw_fc_capable = of_property_read_bool(np, "realtek,hw-flow-control");
+	if (!rtl_flow_control_set_by_user)
+		rtl_flow_control = rtl_hw_fc_capable ? BRIDGE_FC_HW : BRIDGE_FC_SW;
 
-	pr_info(DRV_NAME ": DT defaults: nrst_gpio=%d blmode_gpio=%d flow_control=%d\n",
-		rtl_nrst_gpio, rtl_blmode_gpio, rtl_flow_control);
+	pr_info(DRV_NAME ": DT defaults: nrst_gpio=%d blmode_gpio=%d hw_fc_capable=%d flow_control=%d\n",
+		rtl_nrst_gpio, rtl_blmode_gpio, rtl_hw_fc_capable, rtl_flow_control);
 	of_node_put(np);
 }
 

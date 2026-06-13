@@ -30,7 +30,7 @@ tty (`tty_kopen_exclusive`, `tty_port.client_ops`), socket (`kernel_*msg`,
 | TCP listener (default `0.0.0.0:8888`) | any peer that can route to the gateway | **Unauthenticated, plaintext EZSP/CPC/Spinel session with the radio.** Deliberate, documented, mitigated by `BRIDGE_BIND=127.0.0.1` + SSH tunnel (`SECURITY.md`). A new connection **evicts** the connected client (see BRIDGE-002). |
 | UART RX bytes (radio side) | EFR32 firmware (or whoever flashed it) | In `flow_control=sw`, bare 0x11/0x13 gate the TCP→UART direction — bounded to 1 s by the fail-open timer, so a hostile/wedged radio cannot park the worker or hang disarm. In hw/none modes, bytes are forwarded verbatim. |
 | Module parameters (sysfs) | root only — all files are root-owned with modes 0600/0644/0444/0200; write bit is owner-only on every knob | Validated setters (§1.3). Side effect: pulse knobs hold the **global** built-in `param_lock` for their duration (BRIDGE-003). |
-| Device tree `/radio-bridge` node | build-time (trusted) | Seeds `nrst_gpio` / `blmode_gpio` / `flow_control` defaults only; range-checked (`args[0] <= 31`), unknown `flow-control` strings rejected with a warning. |
+| Device tree `/radio-bridge` node | build-time (trusted) | Seeds `nrst_gpio` / `blmode_gpio` and the `realtek,hw-flow-control` capability (which sets the `flow_control` default) only; GPIO lines range-checked (`args[0] <= 31`). The capability is also a ceiling: an `hw` request is clamped to `sw` when the board lacks the boolean, so CRTSCTS is never asserted on an unwired UART. |
 
 ### 1.2 Verified correct
 

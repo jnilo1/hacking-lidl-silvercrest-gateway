@@ -242,6 +242,7 @@ to touch this file. Edit it manually only to:
 | `FIRMWARE` | `ncp`, `rcp`, `otrcp`, `router` | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_VERSION` | e.g. `7.5.1` (NCP, Router only) | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_BAUD` | `115200`, `230400`, `460800`, `691200`, `892857` | `460800` | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
+| `FIRMWARE_FLOW_CTRL` | `none`, `sw`, `hw` | (absent ⇒ devicetree per-board default) | (manual) | `S50uart_bridge`, `S70otbr` |
 | `BOOTLOADER_VERSION` | e.g. `2.4.2` | (absent) | `flash_efr32.sh` — every flash | docs / diagnostics |
 | `MODE` | `otbr` (or absent) | absent = Zigbee | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
 | `BRIDGE_BIND` | `0.0.0.0`, `127.0.0.1` | `0.0.0.0` | (manual) | `S50uart_bridge` |
@@ -258,6 +259,15 @@ for why there is no `FIRMWARE=bootloader` value:
 can only be reached through an SSH tunnel — see
 [`drivers/net/rtl8196e-uart-bridge/SECURITY.md`](./32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/SECURITY.md)
 for the rationale and the tunnel recipe.
+
+`FIRMWARE_FLOW_CTRL` is **optional and rarely needed**: with it absent the
+flow-control mode comes from the board's devicetree (hardware flow control
+on the Lidl board, software on a board without RTS/CTS wiring such as the
+Sengled G4), so neither board needs the key. Set it only to select a mode
+that differs from the board default — e.g. `FIRMWARE_FLOW_CTRL=sw` when
+running an XON/XOFF firmware (NCP-UART-SW) on a board that wires RTS/CTS. A
+request for `hw` on a board that does not wire RTS/CTS is clamped to `sw`
+by the kernel, so it can never wedge the UART.
 
 `FIRMWARE_BAUD` must match the baud the EFR32 firmware was built at.
 **`flash_efr32.sh` handles this automatically**: when you flash e.g.
