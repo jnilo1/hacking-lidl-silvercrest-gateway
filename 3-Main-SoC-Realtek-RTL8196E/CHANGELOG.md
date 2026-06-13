@@ -6,6 +6,34 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [Unreleased]
+
+_Userdata-only fixes surfaced during the G4 (Sengled) port beta (issues #131,
+#132); both board-agnostic and reproduced on the Lidl bench. Currently on the
+`v3.11.0-pre` branch for beta testing._
+
+### `s40button` v2.1 — preserve the status LED across a button press (issue #131)
+
+A button press used to switch the STATUS LED off even when it was lit before
+the press. The daemon snapshotted the LED brightness once at startup (when it
+defaults to off) and re-applied that stale snapshot on release. It now captures
+the brightness at the moment the press is confirmed and restores *that* — so a
+press leaves the LED exactly as it found it.
+
+### `linkwatch` — re-acquire DHCP after a link change (issue #132)
+
+In DHCP mode the gateway never asked for a new address after the cable was
+moved to a different subnet: busybox `udhcpc` is started once at boot and, once
+bound, never re-DISCOVERs on its own, so it sat on the stale lease until the
+lease timers expired. A new tiny static-C daemon, `linkwatch`, watches
+`/sys/class/net/eth0/carrier` and, on a down→up transition, pokes `udhcpc`
+(SIGUSR2 release + SIGUSR1 discover) so it re-acquires on whatever network is
+now present. It runs in **DHCP mode only** — static `/userdata/etc/eth0.conf`
+configurations are untouched. Written in C like `keepalive`/`s40button` so the
+long-lived poll loop never runs busybox ash (issue #109 fault class).
+
+---
+
 ## [3.10.0] - 2026-06-11
 
 _Kernel + userdata + host-tooling changes. No bootloader or rootfs change —
