@@ -1,182 +1,177 @@
-# RTL8196E INTC driver — robustness / API / perf audit
+# irq-rtl819x — driver audit
 
-Target: Linux 6.18 port of the `irq-rtl819x` interrupt controller driver
-for the Realtek RTL8196E SoC. Manages the 32-bit GIMR/GISR registers,
-programs IRR routing for peripheral → CPU IP lines, exposes an
-irqdomain of 32 hwirq, installs chained handlers on the parent CPU IP
-lines.
+| | |
+|---|---|
+| **Audit date** | 2026-06-12 |
+| **Driver version** | 1.0 (`DRV_VERSION` in `irq-rtl819x.c`) |
+| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`) |
+| **Scope** | `irq-rtl819x.c` (423 raw / 200 pure LOC) |
+| **Companions** | `DESIGN.md` (architecture, created with this audit) |
 
-Audit date: 2026-05-01. Driver version at audit time: pre-`1.0`
-(unversioned) → bumped to `1.0` as part of this pass.
+This audit **cancels and replaces** the 2026-05-01 audit. That pass produced
+driver 1.0 (findings IRQ-001/-003/-004 fixed, IRQ-002 rejected with the
+bootloader-sourced TC0 analysis, IRQ-005/-006/-007 deferred) plus the
+PERF-UART1-IRR routing swap; all of it shipped in v3.4.0 and has soaked
+through six releases since. The legacy IDs are preserved in the registry
+(§4). Everything below is re-verified against the current code only.
 
-The driver is short (~390 lines) and already carefully scoped:
-single-port MMIO, no DMA, no buffers. Audit focus was on init
-ordering, lifecycle alignment with the modern irqchip lifecycle
-(`.irq_unmask` semantics), DT vs hardcoded parent IRQ assumptions, and
-hot-path duplicate work. Plus one perf tuning specific to the gateway's
-actual workload.
+---
 
-## Summary of findings
+## 1. Security review
 
-7 findings total. 3 fixed in driver `1.0`, 1 perf tuning applied
-(IRR1 swap), 3 rejected after analysis.
+### 1.1 Attack surface
 
-| ID | Type | Severity | Confidence | Status | One-liner |
-|----|------|----------|------------|--------|-----------|
-| IRQ-001 | ROBUSTNESS / PERF | high | probable | **fixed** | GIMR enabled all child sources globally at init, before consumers requested |
-| IRQ-002 | ROBUSTNESS / PLATFORM | high | hypothesis | **rejected** | TC0 dual-routed (IRR1 + GIMR + direct IP7) — actually required by HW (see analysis) |
-| IRQ-003 | API / ROBUSTNESS | medium | certain | **fixed** | DT declared one parent IRQ but driver chained on three (IP2/IP3/IP4) |
-| IRQ-004 | ROBUSTNESS / PERF | medium | probable | **fixed** | GISR ack happened twice per IRQ (parent-side W1C + `.irq_ack` via level flow) |
-| IRQ-005 | API / ROBUSTNESS | medium | probable | **deferred** | `irq_domain_create_legacy` with fixed base 16 — works, no measured gain to migrating |
-| IRQ-006 | ROBUSTNESS / PLATFORM | low | certain | **deferred** | hardcoded source bits 12/13/15 not validated against DT — current DT matches |
-| IRQ-007 | PLATFORM / PERF | low | certain | **deferred** | virq cache without `READ_ONCE/WRITE_ONCE` — single-core only, no race |
+Effectively none. The driver exposes no userspace interface — no sysfs, no
+ioctl, no module parameters. Its inputs are the device tree (build-time,
+trusted), MMIO registers at `intc@3000`, and the kernel-internal irqchip
+callbacks. The only "remote" influence is a peripheral raising its interrupt
+line, which is the driver's job to handle; a storm from a peripheral is that
+peripheral driver's problem (and is what issue #99's instrumentation
+watches), not an INTC vulnerability.
 
-Plus one **perf tuning**, not from the audit but from the post-fix
-analysis of `plat_irq_dispatch()` priority ordering for the actual
-gateway workload:
+### 1.2 Verified correct
 
-| ID | Type | Status | One-liner |
-|----|------|--------|-----------|
-| PERF-UART1-IRR | PERF | **applied** | swap UART1↔Switch IRR routing so UART1 sits on IP4 (higher priority than IP3 Switch) |
+- **Bounds checks.** `mask`/`unmask`/`ack` all reject `hwirq >= 32` before
+  touching `BIT(hwirq)` — no out-of-range register write is reachable even
+  through a misprogrammed consumer.
+- **GIMR RMW locking.** Mask/unmask take `raw_spin_lock_irqsave` around the
+  read-modify-write; callable safely from process and hardirq context. The
+  GISR ack is a lock-free single W1C write, which is correct (no RMW).
+- **Chained-handler flow.** `chained_irq_enter`/`exit` bracket the dispatch;
+  `pending = GIMR & GISR` ensures masked sources are never dispatched; an
+  unmapped pending bit hits `pr_warn_ratelimited`, not a NULL dispatch
+  (`generic_handle_irq` is guarded by `likely(virq)`).
+- **Cross-IP drain is benign (and intentional).** All three chained parents
+  (IP2/IP3/IP4) share one handler that drains *every* pending GIMR&GISR bit.
+  When two IPs assert together, the first invocation services both sources
+  and the sibling IP's invocation finds `pending == 0` — exactly the
+  "spurious" path the in-code comment documents (enter/exit, no loop).
+  Single-core, IRQs disabled in the handler: no double dispatch is possible.
+  Within one invocation `__ffs` services the lowest bit first — UART0 (12),
+  UART1 (13), switch (15) — which keeps the UART-before-Ethernet intent of
+  the PERF-UART1-IRR swap even on the drain path.
+- **virq cache has no race.** The three cached virqs are written in
+  `intc_map()`, which the legacy domain runs eagerly at create time —
+  strictly before any chained handler is installed. IRQ-007's deferral
+  (no `READ_ONCE` needed on UP) remains correct.
+- **TC0 invariant intact.** `GIMR = BIT(8)` at init is still the only
+  unconditional arm, and the IRQ-002 analysis still holds: there is no
+  direct TC0→IP7 hardware path, so clearing bit 8 would hang the kernel at
+  clocksource init. The block comment above the write carries the full
+  rationale with bootloader line references — good.
+- **Init ordering.** IRR routing is programmed before the domain exists and
+  before GIMR enables anything; UART/switch sources stay disabled until
+  their consumer's `request_irq()` walks `.irq_unmask` (IRQ-001 fix,
+  re-verified).
 
-## Applied fixes — driver 1.0
+### 1.3 Verdict
 
-All commits on `private/main` between `3912e3f..0b9405a`. Detailed
-mapping:
+No security-relevant flaw; no userspace-reachable surface at all. The
+remaining items are hygiene and dead-weight notes below.
 
-### IRQ-001 — only arm TC0 in GIMR at init; let .irq_unmask enable the rest
+---
 
-Commit `3912e3f`. The previous init wrote GIMR = `BIT(TC0) | BIT(UART0) |
-BIT(UART1) | BIT(SW_CORE)` before any consumer driver had registered a
-handler. The chained dispatcher could then receive sources whose virq
-was not yet mapped and would only log via `pr_warn_ratelimited`.
+## 2. Findings (new this audit)
 
-For UART0 / UART1 / Switch the fix is to rely on the standard
-`.irq_unmask` path: `serial8250_register_8250_port` and `rtl8196e-eth`'s
-`request_irq()` both trigger `realtek_soc_irq_unmask()` which sets the
-GIMR bit at the right moment.
+### IRQ-008 — no SPDX identifier; non-kernel indentation (info)
 
-**TC0 has to stay unconditional.** The timer DT node is parented to
-`&cpuintc/<7>` and the timer driver requests CPU IRQ 7 directly, so it
-never traverses this irqdomain's `.irq_unmask`. Yet the only hardware
-path from TC0 to a CPU IP is via INTC IRR1 + GIMR — verified against
-the open-source bootloader (`31-Bootloader/boot/monitor.c:163,190`
-routing TC0 to IP4 via IRR1, `irq.c:39,142-153` arming GIMR bit 8 in
-its `request_IRQ()`). Clearing GIMR bit 8 here would silence IP7 and
-hang the kernel at `clocksource_init`. **This is also why IRQ-002 is
-rejected** — see below.
+The file opens with the long-form GPL-2.0 paragraph instead of an
+`// SPDX-License-Identifier: GPL-2.0` line (every other custom driver in
+this tree carries one), and the body is indented with 4 spaces rather than
+tabs. Purely cosmetic on a private tree, but it is the only driver here that
+would fail `checkpatch.pl` on sight. Fix opportunistically when the file is
+next touched (IRQ-S01).
 
-### IRQ-003 — describe and parse IP2/IP3/IP4 parent IRQs from DT
+### IRQ-009 — error path leaks the irq domain (info)
 
-Commit `cc8ce9d`. The `intc@3000` node previously declared a single
-parent IRQ (`interrupts = <2>`) but the driver hardcoded
-`irq_set_chained_handler_and_data()` against the constants
-`REALTEK_CPU_IRQ_CASCADE/UART1/SWITCH` (2/3/4). The DT was therefore
-lying about which CPU IPs the controller actually chains on, and the C
-side silently depended on the cpuintc legacy domain numbering.
+In `intc_of_init()`, if the DT describes no parent IRQ the code jumps to
+`err_iounmap` without `irq_domain_remove(domain)`. Unreachable in practice
+(the in-tree DT always has `interrupts = <2>, <3>, <4>` and a system that
+took this path would be unbootable anyway — no peripheral interrupts), so
+this is recorded for completeness, not urgency.
 
-Move the parent IRQ list into the DT (`interrupts = <2>, <3>, <4>;
-interrupt-names = "cascade", "uart1", "switch";` — names later updated
-to `"cascade", "switch", "uart1"` after the IRR1 swap below) and resolve
-them at runtime with `irq_of_parse_and_map()`. The driver no longer
-references the CPU IP numbers; the `REALTEK_CPU_IRQ_*` constants are
-gone.
+### IRQ-010 — virq cache is now near-redundant (info, keep as is)
 
-### IRQ-004 — drop redundant GISR ack in chained handler
+The legacy domain allocates a contiguous revmap, so `irq_find_mapping()` on
+the default path is an O(1) array lookup; the three-case `switch` saves only
+a function call and its checks. The cache stays — it is correct, costs
+nothing, and sits in a hot `__iram` path on a bench-gated platform where
+removal would buy no measurable win in exchange for churn — but it should
+not be *extended* to new sources; new mappings should just rely on
+`irq_find_mapping()`.
 
-Commit `28893f1`. The chained dispatcher was W1C-clearing the
-per-source GISR pending bit before calling `generic_handle_irq(virq)`.
-The child IRQ is wired to `handle_level_irq`, which then runs
-`realtek_soc_irq_ack()` on the same bit through the standard flow. That
-made every IRQ cost two identical MMIO writes to GISR.
+---
 
-Drop the parent ack and rely on the child `.irq_ack` via the level
-flow handler. Sources stay correct: GISR mirrors the per-source latch
-and clears when the peripheral handler drains its hardware (the stock
-bootloader follows the same pattern in `monitor.c:128` — `TC_IR` is
-W1C'd without ever touching GISR).
+## 3. Simplification / 6.18 alignment
 
-### Version bump 1.0 + boot banner
+The driver already uses the current API surface (`IRQCHIP_DECLARE`,
+`irq_domain_create_legacy` with `fwnode_handle`, `irq_of_parse_and_map`
+walking the DT parent list). Candidates:
 
-Commit `9f3bf39`. Added `DRV_VERSION "1.0"` and updated the boot
-`pr_info()` to display the version + the IP routing summary.
+| ID | Change | Value |
+|---|---|---|
+| IRQ-S01 | SPDX line + retab to kernel style | Closes IRQ-008; zero functional risk |
+| IRQ-S02 | `irq_domain_remove()` on the no-parent error path | Closes IRQ-009 |
 
-## Perf tuning — UART1 / Switch IRR1 swap
+### Considered and rejected (this audit)
 
-Commit `0b9405a`. Not from the audit, but applied in the same window
-because the IRR1 routing is naturally re-examined when the audit
-exposes the parent IRQ topology.
+- **Legacy → linear domain migration** (IRQ-005). Still deferred: all
+  consumers resolve through the DT, nothing depends on the fixed virq base
+  16, `irq_domain_create_legacy` is alive and well in 6.18, and the linear
+  variant would change `/proc/interrupts` numbering for zero gain.
+- **Dropping the virq cache** (mirror of IRQ-010). Equivalent performance
+  either way; removal is churn in an `__iram` hot path on a platform where
+  every perf change is bench-gated. Not worth a test cycle.
+- **Combined `.irq_mask_ack` callback.** `handle_level_irq` currently runs
+  mask (lock + RMW + write) then ack (write) as two calls; a fused callback
+  would save one lock round-trip per interrupt. At 200 MHz bus that is a few
+  hundred ns on a path measured in µs — below this platform's 1 Mbit/s
+  regression threshold and below measurability. Rejected.
+- **DT-driven source-bit validation / IRR routing tables** (IRQ-006). The
+  `REALTEK_HW_*_BIT` constants match the in-tree DT, and the one external
+  port in progress (Sengled G4) is the same SoC with the same routing. A
+  mismatch would fail loudly (no interrupts), not silently. Still deferred.
+- **`READ_ONCE`/`WRITE_ONCE` on the virq cache** (IRQ-007). Single-core,
+  and §1.2 shows the writes complete before any reader exists. Still
+  rejected.
 
-`plat_irq_dispatch()` services pending MIPS IPs in fixed order
-IP7 > IP4 > IP3 > IP2. Previously UART1 sat on IP3 and the Ethernet
-switch on IP4, so under simultaneous activity the Ethernet ISR would
-preempt the UART1 ISR. For this gateway the priority should be
-inverted:
+---
 
-* **UART1** carries the Zigbee link to the EFR32 radio. The 8250 has a
-  16-byte RX FIFO; at 460800 baud that is roughly 350 µs of latency
-  budget. An overrun drops a Zigbee frame and forces Z2M / ZHA to
-  reconnect — visible to the user.
-* **Ethernet** uses DMA descriptor rings plus NAPI, so a delayed switch
-  IRQ at most translates to a TCP retransmit — invisible.
+## 4. Finding ID registry
 
-Move UART1 to IP4 and Switch to IP3 by swapping the corresponding
-nibbles in IRR1, update the DT `interrupt-names` accordingly, and
-refresh the boot banner. The driver itself is mapping-agnostic since
-IRQ-003 made it parse parents from the DT, so no driver logic change.
+Legacy IDs from the 2026-05-01 pass (statuses re-verified against current
+code), then this audit's additions:
 
-Validated by the overnight OTBR 460800 soak: 8h+ stable, zero
-`HandleRcpTimeout`, ttyS1 LSR shows `THRE | TEMT` only (no overrun bit
-set on the periodic sampler).
+| ID | Severity | Status | Summary |
+|---|---|---|---|
+| IRQ-001 | high | **fixed (v3.4.0)** | GIMR armed all sources at init, before consumers existed |
+| IRQ-002 | high | rejected | TC0 "dual-routing" is the only hardware path (bootloader-verified); change would hang boot |
+| IRQ-003 | medium | **fixed (v3.4.0)** | parent IPs now declared in DT and parsed, not hardcoded |
+| IRQ-004 | medium | **fixed (v3.4.0)** | duplicate GISR ack dropped; `.irq_ack` via level flow only |
+| IRQ-005 | medium | deferred | legacy domain with base 16 — works, no gain migrating |
+| IRQ-006 | low | deferred | hardcoded source bits not validated against DT (DT matches; fails loudly) |
+| IRQ-007 | low | rejected | `READ_ONCE` on virq cache — UP, writes precede readers |
+| PERF-UART1-IRR | perf | **applied (v3.4.0)** | UART1→IP4 / Switch→IP3 swap; soak-validated |
+| IRQ-008 | info | fixed (2026-06-12) | no SPDX line; 4-space indentation |
+| IRQ-009 | info | fixed (2026-06-12) | irq domain not removed on no-parent error path |
+| IRQ-010 | info | accepted | virq cache redundant vs legacy revmap; keep, don't extend |
+| IRQ-S01..S02 | — | implemented (2026-06-12) | see §3 and the note in §5 |
 
-## Rejected after analysis
+---
 
-### IRQ-002 — TC0 dual-routed (IRR1 + GIMR + direct IP7)
+## 5. Conclusion
 
-The audit posited that TC0 might have a hardware path direct to IP7
-independent of the INTC, in which case `IRR1[3:0]=0x7` + `GIMR bit 8
-set` would be redundant. Examined the open-source bootloader source
-(`31-Bootloader/boot/monitor.c:163,190` and `irq.c`): the bootloader
-**explicitly** routes TC0 to IP4 via IRR1 and arms GIMR bit 8 via
-`unmask_irq()`. **No direct TC0→IP7 path exists in hardware.** The
-kernel's current setup (route to IP7 via IRR1, leave GIMR bit 8 set,
-have the timer driver request CPU IRQ 7 directly via `&cpuintc`)
-is the only way the timer can fire. The kernel's chained INTC handler
-on IP7 is intentionally absent (we only chain on IP2/IP3/IP4) so there
-is no double-dispatch — GISR bit 8 clears naturally when the timer
-driver W1Cs `TC_IR` (the bootloader confirms: it never touches GISR in
-its `timer_interrupt`).
+The smallest and cleanest driver audited so far (200 pure LOC), and the
+2026-05 fixes have held: init arms exactly one source, the DT is the single
+source of truth for the parent topology, and the TC0 special case is
+documented in the code at the point of risk. No security surface exists.
+The only open items are two hygiene nits (IRQ-S01/S02) suitable for the next
+time the file is touched for any other reason — neither justifies a kernel
+rebuild on its own.
 
-Conclusion: applying the proposed change would silence IP7 → kernel
-hang at `clocksource_init`. Rejected.
-
-### IRQ-005 — `irq_domain_create_legacy` → `irq_domain_create_linear`
-
-Functionally valid migration, no measured gain (DT consumers go through
-`irq_of_parse_and_map`, no global numbering dependency). The legacy
-domain works, costs nothing. Deferred.
-
-### IRQ-006 — DT validation of source bits
-
-Current DT matches the hardcoded `REALTEK_HW_*_BIT` constants. A future
-DT change would simply not work, which is detectable. No silent
-mis-binding risk on this codebase. Deferred.
-
-### IRQ-007 — `READ_ONCE/WRITE_ONCE` on virq cache
-
-Optimisation for the SMP case which this platform is not. Single-core
-RLX4181 — no race possible on these reads. Deferred.
-
-## Validation
-
-* Boot banner `irq-rtl819x v1.0 (J. Nilo) - Timer:IP7, UART1:IP4,
-  Switch:IP3, UART0:IP2`.
-* `/proc/interrupts` shows ttyS1 on IRQ 29 / hwirq 13 (IP4) and eth on
-  IRQ 31 / hwirq 15 (IP3) after the swap — confirms IRR1 took effect.
-* `ERR: 0` on the irq controller line (no spurious).
-* Overnight soak: 8h+ OT-RCP at 460800 baud, two paired Sleepy End
-  Devices, zero overruns measured by the periodic LSR sampler.
-
-## How this maps to the public release
-
-Driver `1.0` plus the IRR1 perf swap ship in **v3.4.0**.
+**Implementation note (2026-06-12):** S01–S02 implemented on maintainer
+request: SPDX `GPL-2.0-only` header (long-form GPL paragraph dropped),
+file retabbed to kernel style, `irq_domain_remove()` on the no-parent
+error path (plus `rtl819x_intc_base` NULLed after iounmap). No
+functional change on the success path; boot-verified on the .88 gateway
+(`/proc/interrupts` normal, ERR=0).

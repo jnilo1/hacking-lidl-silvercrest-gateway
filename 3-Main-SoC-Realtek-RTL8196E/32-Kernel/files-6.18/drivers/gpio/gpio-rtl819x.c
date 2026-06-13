@@ -24,15 +24,23 @@
  * Note: Other RTL819x variants (RTL8196C, RTL8197F) may have different
  * pinmux register layouts. This driver is tested on RTL8196E only.
  *
+ * The get/set/direction ops are provided by the generic MMIO GPIO core
+ * (GPIO_GENERIC, gpio-mmio.c): DATA at 0x0C and DIR at 0x08 (1=out) are
+ * exactly its single read/write register model, and its default
+ * direction_output writes the value before flipping the direction —
+ * the same glitch-free order the hand-rolled v1.x ops used. Only
+ * `.request` is ours: it muxes the pad (PIN_MUX_SEL_2) and drops the
+ * pin out of peripheral mode (CNR).
+ *
  * Author: Jacques Nilo
  */
 
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/gpio/driver.h>
+#include <linux/gpio/generic.h>
 #include <linux/io.h>
-#include <linux/of.h>
-#include <linux/of_device.h>
+#include <linux/mod_devicetable.h>
 #include <linux/spinlock.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
@@ -42,24 +50,26 @@
 #define RTL819X_GPIO_REG_DIR    0x08    /* Direction: 0=in, 1=out */
 #define RTL819X_GPIO_REG_DATA   0x0C    /* Data register */
 #define RTL819X_GPIO_REG_ISR    0x10    /* Interrupt status */
-#define RTL819X_GPIO_REG_IMR    0x14    /* Interrupt mask */
+/*
+ * Two interrupt-mask registers, 16 bits per port (2 bits per pin) —
+ * unused until an irqchip materializes (GPIO-004, deferred), declared
+ * to match the hardware so the lone-define/header-comment drift does
+ * not recur (GPIO-S07).
+ */
+#define RTL819X_GPIO_REG_PAB_IMR 0x14   /* Port A/B interrupt mask */
+#define RTL819X_GPIO_REG_PCD_IMR 0x18   /* Port C/D interrupt mask */
 
 #define RTL819X_GPIO_NUM        32      /* 4 ports x 8 bits */
 
 #define DRIVER_NAME             "gpio-rtl819x"
-#define DRV_VERSION             "1.0"
+#define DRV_VERSION             "1.2"
 
 struct rtl819x_gpio {
-    struct gpio_chip        gc;
-    void __iomem            *base;
-    struct regmap           *syscon;    /* PIN_MUX_SEL_2 for LED/GPIO mux */
-    spinlock_t              lock;
+	struct gpio_generic_chip chip;
+	void __iomem            *base;
+	struct regmap           *syscon;    /* PIN_MUX_SEL_2 for LED/GPIO mux */
+	spinlock_t              lock;       /* serializes the CNR RMW in .request */
 };
-
-static inline struct rtl819x_gpio *to_rtl819x_gpio(struct gpio_chip *gc)
-{
-    return container_of(gc, struct rtl819x_gpio, gc);
-}
 
 /*
  * Configure PIN_MUX_SEL_2 for GPIO B2-B6 (shared with LED_PORT0-4)
@@ -72,225 +82,149 @@ static inline struct rtl819x_gpio *to_rtl819x_gpio(struct gpio_chip *gc)
  */
 static int rtl819x_gpio_configure_pinmux(struct rtl819x_gpio *rg, unsigned int offset)
 {
-    u32 mask = 0, bits = 0;
+	u32 mask = 0, bits = 0;
 
-    if (!rg->syscon)
-        return 0;
+	switch (offset) {
+	case 10: /* GPIO B2 - LED_PORT0 */
+		mask = 0x3 << 0;
+		bits = 0x3 << 0;
+		break;
+	case 11: /* GPIO B3 - LED_PORT1 */
+		mask = 0x3 << 3;
+		bits = 0x3 << 3;
+		break;
+	case 12: /* GPIO B4 - LED_PORT2 */
+		mask = 0x3 << 6;
+		bits = 0x3 << 6;
+		break;
+	case 13: /* GPIO B5 - LED_PORT3 */
+		mask = 0x3 << 9;
+		bits = 0x3 << 9;
+		break;
+	case 14: /* GPIO B6 - LED_PORT4 */
+		mask = 0x3 << 12;
+		bits = 0x3 << 12;
+		break;
+	default:
+		return 0; /* No pinmux needed for other GPIOs */
+	}
 
-    switch (offset) {
-    case 10: /* GPIO B2 - LED_PORT0 */
-        mask = 0x3 << 0;
-        bits = 0x3 << 0;
-        break;
-    case 11: /* GPIO B3 - LED_PORT1 */
-        mask = 0x3 << 3;
-        bits = 0x3 << 3;
-        break;
-    case 12: /* GPIO B4 - LED_PORT2 */
-        mask = 0x3 << 6;
-        bits = 0x3 << 6;
-        break;
-    case 13: /* GPIO B5 - LED_PORT3 */
-        mask = 0x3 << 9;
-        bits = 0x3 << 9;
-        break;
-    case 14: /* GPIO B6 - LED_PORT4 */
-        mask = 0x3 << 12;
-        bits = 0x3 << 12;
-        break;
-    default:
-        return 0; /* No pinmux needed for other GPIOs */
-    }
+	/*
+	 * Fail loudly when the pad cannot be muxed: without the syscon the
+	 * request would otherwise succeed while the pin stays electrically
+	 * in peripheral mode — a dead LED/button with no trace beyond one
+	 * probe-time warning (GPIO-008).
+	 */
+	if (!rg->syscon) {
+		dev_err(rg->chip.gc.parent,
+			"GPIO %u needs PIN_MUX_SEL_2 but syscon is missing\n",
+			offset);
+		return -ENODEV;
+	}
 
-    return regmap_update_bits(rg->syscon, 0x44, mask, bits);
+	return regmap_update_bits(rg->syscon, 0x44, mask, bits);
 }
 
 static int rtl819x_gpio_request(struct gpio_chip *gc, unsigned int offset)
 {
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    unsigned long flags;
-    u32 val;
-    int ret;
+	struct rtl819x_gpio *rg = gpiochip_get_data(gc);
+	unsigned long flags;
+	u32 val;
+	int ret;
 
-    /* Configure pinmux for GPIO B2-B6 (shared with LED ports) */
-    ret = rtl819x_gpio_configure_pinmux(rg, offset);
-    if (ret) {
-        dev_err(gc->parent, "pinmux setup failed for GPIO %u: %d\n", offset, ret);
-        return ret;
-    }
+	/* Configure pinmux for GPIO B2-B6 (shared with LED ports) */
+	ret = rtl819x_gpio_configure_pinmux(rg, offset);
+	if (ret) {
+		dev_err(gc->parent, "pinmux setup failed for GPIO %u: %d\n", offset, ret);
+		return ret;
+	}
 
-    spin_lock_irqsave(&rg->lock, flags);
+	spin_lock_irqsave(&rg->lock, flags);
 
-    /* Enable GPIO function (clear bit in CNR = GPIO mode) */
-    val = readl(rg->base + RTL819X_GPIO_REG_CNR);
-    val &= ~BIT(offset);
-    writel(val, rg->base + RTL819X_GPIO_REG_CNR);
+	/* Enable GPIO function (clear bit in CNR = GPIO mode) */
+	val = readl(rg->base + RTL819X_GPIO_REG_CNR);
+	val &= ~BIT(offset);
+	writel(val, rg->base + RTL819X_GPIO_REG_CNR);
 
-    spin_unlock_irqrestore(&rg->lock, flags);
+	spin_unlock_irqrestore(&rg->lock, flags);
 
-    return 0;
-}
-
-static void rtl819x_gpio_free(struct gpio_chip *gc, unsigned int offset)
-{
-    /* Nothing to do - leave GPIO configured */
-}
-
-static int rtl819x_gpio_get_direction(struct gpio_chip *gc, unsigned int offset)
-{
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    unsigned long flags;
-    u32 val;
-
-    spin_lock_irqsave(&rg->lock, flags);
-    val = readl(rg->base + RTL819X_GPIO_REG_DIR);
-    spin_unlock_irqrestore(&rg->lock, flags);
-
-    /* DIR bit: 0=input, 1=output (per RTL8196E datasheet) */
-    if (val & BIT(offset))
-        return GPIO_LINE_DIRECTION_OUT;
-    else
-        return GPIO_LINE_DIRECTION_IN;
-}
-
-static int rtl819x_gpio_direction_input(struct gpio_chip *gc, unsigned int offset)
-{
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    unsigned long flags;
-    u32 val;
-
-    spin_lock_irqsave(&rg->lock, flags);
-
-    val = readl(rg->base + RTL819X_GPIO_REG_DIR);
-    val &= ~BIT(offset);    /* 0 = input */
-    writel(val, rg->base + RTL819X_GPIO_REG_DIR);
-
-    spin_unlock_irqrestore(&rg->lock, flags);
-
-    return 0;
-}
-
-static int rtl819x_gpio_direction_output(struct gpio_chip *gc,
-                                         unsigned int offset, int value)
-{
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    unsigned long flags;
-    u32 val;
-
-    spin_lock_irqsave(&rg->lock, flags);
-
-    /* Set value first */
-    val = readl(rg->base + RTL819X_GPIO_REG_DATA);
-    if (value)
-        val |= BIT(offset);
-    else
-        val &= ~BIT(offset);
-    writel(val, rg->base + RTL819X_GPIO_REG_DATA);
-
-    /* Then set direction to output */
-    val = readl(rg->base + RTL819X_GPIO_REG_DIR);
-    val |= BIT(offset);     /* 1 = output */
-    writel(val, rg->base + RTL819X_GPIO_REG_DIR);
-
-    spin_unlock_irqrestore(&rg->lock, flags);
-
-    return 0;
-}
-
-static int rtl819x_gpio_get(struct gpio_chip *gc, unsigned int offset)
-{
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    u32 val;
-
-    val = readl(rg->base + RTL819X_GPIO_REG_DATA);
-
-    return !!(val & BIT(offset));
-}
-
-static int rtl819x_gpio_set(struct gpio_chip *gc, unsigned int offset, int value)
-{
-    struct rtl819x_gpio *rg = to_rtl819x_gpio(gc);
-    unsigned long flags;
-    u32 val;
-
-    spin_lock_irqsave(&rg->lock, flags);
-
-    val = readl(rg->base + RTL819X_GPIO_REG_DATA);
-    if (value)
-        val |= BIT(offset);
-    else
-        val &= ~BIT(offset);
-    writel(val, rg->base + RTL819X_GPIO_REG_DATA);
-
-    spin_unlock_irqrestore(&rg->lock, flags);
-    return 0;
+	return 0;
 }
 
 static int rtl819x_gpio_probe(struct platform_device *pdev)
 {
-    struct device *dev = &pdev->dev;
-    struct rtl819x_gpio *rg;
-    struct resource *res;
-    int ret;
+	struct device *dev = &pdev->dev;
+	struct rtl819x_gpio *rg;
+	int ret;
 
-    rg = devm_kzalloc(dev, sizeof(*rg), GFP_KERNEL);
-    if (!rg)
-        return -ENOMEM;
+	rg = devm_kzalloc(dev, sizeof(*rg), GFP_KERNEL);
+	if (!rg)
+		return -ENOMEM;
 
-    res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-    rg->base = devm_ioremap_resource(dev, res);
-    if (IS_ERR(rg->base))
-        return PTR_ERR(rg->base);
+	rg->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(rg->base))
+		return PTR_ERR(rg->base);
 
-    /* Get syscon regmap for PIN_MUX_SEL_2 pinmux configuration */
-    rg->syscon = syscon_regmap_lookup_by_phandle(dev->of_node, "realtek,syscon");
-    if (IS_ERR(rg->syscon)) {
-        dev_warn(dev, "no syscon, LED GPIOs may not work\n");
-        rg->syscon = NULL;
-    }
+	/* Get syscon regmap for PIN_MUX_SEL_2 pinmux configuration */
+	rg->syscon = syscon_regmap_lookup_by_phandle(dev->of_node, "realtek,syscon");
+	if (IS_ERR(rg->syscon)) {
+		dev_warn(dev, "no syscon, LED GPIOs may not work\n");
+		rg->syscon = NULL;
+	}
 
-    spin_lock_init(&rg->lock);
+	spin_lock_init(&rg->lock);
 
-    rg->gc.label            = DRIVER_NAME;
-    rg->gc.parent           = dev;
-    rg->gc.owner            = THIS_MODULE;
-    rg->gc.request          = rtl819x_gpio_request;
-    rg->gc.free             = rtl819x_gpio_free;
-    rg->gc.get_direction    = rtl819x_gpio_get_direction;
-    rg->gc.direction_input  = rtl819x_gpio_direction_input;
-    rg->gc.direction_output = rtl819x_gpio_direction_output;
-    rg->gc.get              = rtl819x_gpio_get;
-    rg->gc.set              = rtl819x_gpio_set;
-    rg->gc.base             = -1;       /* dynamic — DT consumers use phandles */
-    rg->gc.ngpio            = RTL819X_GPIO_NUM;
-    rg->gc.can_sleep        = false;
+	{
+		const struct gpio_generic_chip_config config = {
+			.dev    = dev,
+			.sz     = 4,
+			.dat    = rg->base + RTL819X_GPIO_REG_DATA,
+			.dirout = rg->base + RTL819X_GPIO_REG_DIR,
+		};
 
-    ret = devm_gpiochip_add_data(dev, &rg->gc, rg);
-    if (ret) {
-        dev_err(dev, "failed to register gpio chip: %d\n", ret);
-        return ret;
-    }
+		ret = gpio_generic_chip_init(&rg->chip, &config);
+		if (ret) {
+			dev_err(dev, "generic chip init failed: %d\n", ret);
+			return ret;
+		}
+	}
 
-    platform_set_drvdata(pdev, rg);
+	/*
+	 * Post-init overrides: the generic core labels the chip after
+	 * dev_name() and leaves base at 0 — keep the v1.x label and the
+	 * dynamic base. `.request` stays ours (pinmux + CNR); everything
+	 * else (get/set/directions, multiple variants for free) is the
+	 * generic implementation.
+	 */
+	rg->chip.gc.label   = DRIVER_NAME;
+	rg->chip.gc.owner   = THIS_MODULE;
+	rg->chip.gc.request = rtl819x_gpio_request;
+	rg->chip.gc.base    = -1;   /* dynamic — DT consumers use phandles */
 
-    dev_info(dev, "v" DRV_VERSION " (J. Nilo) - %d GPIOs registered\n",
-             RTL819X_GPIO_NUM);
+	ret = devm_gpiochip_add_data(dev, &rg->chip.gc, rg);
+	if (ret) {
+		dev_err(dev, "failed to register gpio chip: %d\n", ret);
+		return ret;
+	}
 
-    return 0;
+	dev_info(dev, "v" DRV_VERSION " (J. Nilo) - %d GPIOs registered\n",
+			 RTL819X_GPIO_NUM);
+
+	return 0;
 }
 
 static const struct of_device_id rtl819x_gpio_of_match[] = {
-    { .compatible = "realtek,rtl8196e-gpio" },
-    { /* sentinel */ }
+	{ .compatible = "realtek,rtl8196e-gpio" },
+	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, rtl819x_gpio_of_match);
 
 static struct platform_driver rtl819x_gpio_driver = {
-    .probe  = rtl819x_gpio_probe,
-    .driver = {
-        .name           = DRIVER_NAME,
-        .of_match_table = rtl819x_gpio_of_match,
-    },
+	.probe  = rtl819x_gpio_probe,
+	.driver = {
+		.name           = DRIVER_NAME,
+		.of_match_table = rtl819x_gpio_of_match,
+	},
 };
 
 module_platform_driver(rtl819x_gpio_driver);

@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.8"
+#define RTL8196E_DRV_VERSION "2.13"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -39,14 +39,6 @@ static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
 MODULE_PARM_DESC(link_poll_ms, "Link poll interval in ms (0=disabled)");
 
-static unsigned int rtl8196e_debug;
-module_param(rtl8196e_debug, uint, 0644);
-MODULE_PARM_DESC(rtl8196e_debug, "Enable extra debug logging (default=0)");
-
-static unsigned int rtl8196e_force_trap;
-module_param(rtl8196e_force_trap, uint, 0644);
-MODULE_PARM_DESC(rtl8196e_force_trap, "Force all unknown traffic to CPU (debug)");
-
 static unsigned int rtl8196e_cpu_port_mask = RTL8196E_CPU_PORT_MASK;
 module_param(rtl8196e_cpu_port_mask, uint, 0644);
 MODULE_PARM_DESC(rtl8196e_cpu_port_mask, "CPU port mask for VLAN/L2 (default=0x20)");
@@ -58,7 +50,6 @@ struct rtl8196e_priv {
 	struct rtl8196e_ring *ring;
 	struct rtl8196e_dt_iface iface;
 	struct timer_list link_timer;
-	struct timer_list dbg_timer;
 	u16 vlan_id;
 	u16 portmask;
 	int phy_port;
@@ -67,13 +58,6 @@ struct rtl8196e_priv {
 	u32 l2_check_ok;
 	u32 l2_check_fail;
 	int l2_check_last;
-	u32 tx_debug_once;
-	u32 tx_dbg_portmask;
-	u32 tx_dbg_vid;
-	u32 tx_dbg_len;
-	u32 tx_dbg_submit;
-	u32 dbg_tx_idx;
-	u32 dbg_irqs;
 };
 
 /* Return the port number (0-5) for the lowest set bit in mask, or -EINVAL. */
@@ -108,92 +92,23 @@ static void rtl8196e_link_timer_fn(struct timer_list *t)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
 }
 
-/* Debug timer: dump TX/RX descriptor state and key IRQ registers to dmesg. */
-static void rtl8196e_dbg_timer_fn(struct timer_list *t)
-{
-	struct rtl8196e_priv *priv = timer_container_of(priv, t, dbg_timer);
-	struct rtl8196e_ring *ring = priv->ring;
-	u32 idx = priv->dbg_tx_idx;
-	u32 rx_idx;
-	u32 entry = 0;
-	u32 rx_entry = 0;
-	u32 rx_mbuf_entry = 0;
-	struct rtl_pktHdr *ph = NULL;
-	struct rtl_pktHdr *rx_ph = NULL;
-	struct rtl_mBuf *rx_mb = NULL;
-	u32 isr, imr, icr;
-
-	if (!rtl8196e_debug || !ring)
-		return;
-
-	if (idx < rtl8196e_ring_tx_count(ring))
-		entry = rtl8196e_ring_tx_entry(ring, idx);
-
-	rx_idx = rtl8196e_ring_rx_index(ring);
-	rx_entry = rtl8196e_ring_rx_pkthdr_entry(ring, rx_idx);
-	rx_mbuf_entry = rtl8196e_ring_rx_mbuf_entry(ring, rx_idx);
-
-	isr = rtl8196e_readl(CPUIISR);
-	imr = rtl8196e_readl(CPUIIMR);
-	icr = rtl8196e_readl(CPUICR);
-
-	if (entry)
-		ph = (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
-	if (ph)
-		dma_cache_inv((unsigned long)ph, sizeof(*ph));
-
-	netdev_info(priv->ndev,
-		    "dbg: CPUICR=0x%08x CPUIIMR=0x%08x CPUIISR=0x%08x\n",
-		    icr, imr, isr);
-	netdev_info(priv->ndev,
-		    "dbg: CPUTPDCR0=0x%08x CPURPDCR0=0x%08x CPURMDCR0=0x%08x\n",
-		    rtl8196e_readl(CPUTPDCR0),
-		    rtl8196e_readl(CPURPDCR0),
-		    rtl8196e_readl(CPURMDCR0));
-	netdev_info(priv->ndev,
-		    "dbg: CPUQDM0=0x%08x CPUQDM2=0x%08x CPUQDM4=0x%08x\n",
-		    rtl8196e_readl(CPUQDM0),
-		    rtl8196e_readl(CPUQDM2),
-		    rtl8196e_readl(CPUQDM4));
-
-	if (ph) {
-		netdev_info(priv->ndev,
-			    "dbg: TX idx=%u entry=0x%08x own=%u len=%u flags=0x%04x port=0x%02x vid=%u\n",
-			    idx, entry, entry & RTL8196E_DESC_OWNED_BIT ? 1 : 0,
-			    ph->ph_len, ph->ph_flags, ph->ph_portlist, ph->ph_vlanId);
-	}
-
-	if (rx_entry) {
-		rx_ph = (struct rtl_pktHdr *)(rx_entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
-		if (!(rx_entry & RTL8196E_DESC_OWNED_BIT) && rx_ph)
-			dma_cache_inv((unsigned long)rx_ph, sizeof(*rx_ph));
-	}
-	if (rx_mbuf_entry) {
-		rx_mb = (struct rtl_mBuf *)(rx_mbuf_entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
-		if (!(rx_mbuf_entry & RTL8196E_DESC_OWNED_BIT) && rx_mb)
-			dma_cache_inv((unsigned long)rx_mb, sizeof(*rx_mb));
-	}
-
-	netdev_info(priv->ndev,
-		    "dbg: RX idx=%u entry=0x%08x own=%u mbuf=0x%08x own=%u\n",
-		    rx_idx,
-		    rx_entry, rx_entry & RTL8196E_DESC_OWNED_BIT ? 1 : 0,
-		    rx_mbuf_entry, rx_mbuf_entry & RTL8196E_DESC_OWNED_BIT ? 1 : 0);
-	if (rx_ph && !(rx_entry & RTL8196E_DESC_OWNED_BIT)) {
-		netdev_info(priv->ndev,
-			    "dbg: RX ph len=%u flags=0x%04x port=0x%02x vid=%u\n",
-			    rx_ph->ph_len, rx_ph->ph_flags, rx_ph->ph_portlist, rx_ph->ph_vlanId);
-	}
-}
-
-/* Bring the interface up: init HW, program rings, setup VLAN/NETIF/L2, enable IRQs. */
+/*
+ * Bring the interface up: program rings, setup VLAN/NETIF/L2, enable IRQs.
+ *
+ * The one-time SoC bring-up (pinmux, switch-clock toggle, MEMCR,
+ * FULL_RST, L2 table clear — ~650 ms of sleeps) runs once at probe
+ * (ETH-S03), not here: open() only reprograms the volatile per-open
+ * state (ring bases, PHY, VLAN/NETIF/L2 entries) and starts the core,
+ * so a down/up cycle costs milliseconds. Note the 0x44 pad write moved
+ * with it — nothing re-clears pad muxes at runtime since v2.7, so a
+ * single boot-time board-state write is the whole contract.
+ */
 static int rtl8196e_open(struct net_device *ndev)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	int ret;
 	bool link;
 
-	rtl8196e_hw_init(&priv->hw);
 	rtl8196e_hw_set_rx_rings(&priv->hw,
 				   rtl8196e_ring_rx_pkthdr_base(priv->ring),
 				   rtl8196e_ring_rx_mbuf_base(priv->ring));
@@ -216,10 +131,6 @@ static int rtl8196e_open(struct net_device *ndev)
 		return ret;
 	}
 	rtl8196e_hw_l2_setup(&priv->hw);
-	if (rtl8196e_force_trap) {
-		netdev_warn(ndev, "L2 trap-all debug enabled\n");
-		rtl8196e_hw_l2_trap_enable(&priv->hw);
-	}
 	ret = rtl8196e_hw_l2_add_cpu_entry(&priv->hw, ndev->dev_addr, 0, 0);
 	if (ret) {
 		priv->l2_check_last = ret;
@@ -247,6 +158,7 @@ static int rtl8196e_open(struct net_device *ndev)
 	napi_enable(&priv->napi);
 	rtl8196e_hw_enable_irqs(&priv->hw);
 
+	netdev_reset_queue(ndev);	/* rings are pristine (stop() reset them) */
 	netif_start_queue(ndev);
 	link = rtl8196e_hw_link_up(&priv->hw, priv->phy_port);
 	if (link)
@@ -265,11 +177,19 @@ static int rtl8196e_stop(struct net_device *ndev)
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 
 	netif_stop_queue(ndev);
+	/*
+	 * NAPI first (ETHDRV-009): napi_disable() waits out an in-flight
+	 * poll, so its napi_complete_done() branch can no longer re-arm
+	 * CPUIIMR after we mask below. An RX IRQ landing in the short
+	 * window before the mask is acked by the ISR and dropped
+	 * (napi_schedule_prep refuses on a disabled NAPI) — harmless on
+	 * an interface going down.
+	 */
+	napi_disable(&priv->napi);
 	rtl8196e_hw_disable_irqs(&priv->hw);
 	rtl8196e_hw_stop(&priv->hw);
 	/* W1C any latched status so a subsequent open() starts clean. */
 	rtl8196e_writel(rtl8196e_readl(CPUIISR), CPUIISR);
-	napi_disable(&priv->napi);
 
 	/*
 	 * Reset both rings before timers go away. Without this, an
@@ -284,9 +204,9 @@ static int rtl8196e_stop(struct net_device *ndev)
 		rtl8196e_ring_tx_reset(priv->ring);
 		rtl8196e_ring_rx_reset(priv->ring);
 	}
+	netdev_reset_queue(ndev);
 
 	timer_delete_sync(&priv->link_timer);
-	timer_delete_sync(&priv->dbg_timer);
 	netif_carrier_off(ndev);
 
 	return 0;
@@ -342,6 +262,8 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 	{
 		unsigned int rpkts = 0, rbytes = 0;
 		rtl8196e_ring_tx_reclaim(priv->ring, &rpkts, &rbytes, 0);
+		if (rpkts)
+			netdev_completed_queue(ndev, rpkts, rbytes);
 	}
 
 	/* Flush packet data — skb->len already covers the (possibly padded) frame. */
@@ -349,36 +271,29 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 
 	ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
 					     priv->vlan_id, priv->portmask,
-					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
 
-	if (unlikely(priv->tx_debug_once == 0)) {
-		priv->tx_debug_once = 1;
-		priv->tx_dbg_portmask = priv->portmask;
-		priv->tx_dbg_vid = priv->vlan_id;
-		priv->tx_dbg_len = skb->len;
-		priv->tx_dbg_submit = (ret == 0);
-		priv->dbg_tx_idx = rtl8196e_ring_last_tx_submit(priv->ring);
-		netdev_dbg(ndev, "xmit first packet len=%u portmask=0x%x vid=%u\n",
-			    skb->len, priv->portmask, priv->vlan_id);
-		if (rtl8196e_debug)
-			mod_timer(&priv->dbg_timer, jiffies + msecs_to_jiffies(200));
-	}
 	if (unlikely(ret < 0)) {
 		unsigned int pkts = 0, bytes = 0;
 
 		if (net_ratelimit())
 			netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
 		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
+		if (pkts)
+			netdev_completed_queue(ndev, pkts, bytes);
 		ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
 					     priv->vlan_id, priv->portmask,
-					     PKTHDR_USED | PKT_OUTGOING,
 					     &was_empty);
 		if (ret < 0) {
 			netif_stop_queue(ndev);
 			return NETDEV_TX_BUSY;
 		}
 	}
+
+	/* BQL (ETH-S05): account after the submit is final (a BUSY return
+	 * above hands the skb back to the stack unaccounted). Completion
+	 * sides: the three reclaim sites and the reset paths. */
+	netdev_sent_queue(ndev, skb->len);
 
 	rtl8196e_ring_kick_tx(priv->ring, was_empty);
 
@@ -410,6 +325,8 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
 	rtl8196e_ring_tx_reset(priv->ring);
+	/* Ring rebuilt from scratch — restart BQL accounting with it. */
+	netdev_reset_queue(ndev);
 	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
 
 	rtl8196e_hw_start(&priv->hw);
@@ -429,6 +346,8 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	work_done = rtl8196e_ring_rx_poll(priv->ring, budget, napi, priv->ndev);
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, budget);
+	if (pkts)
+		netdev_completed_queue(priv->ndev, pkts, bytes);
 
 	/* Flush any deferred kick_tx pulses before going idle. */
 	rtl8196e_ring_kick_drain(priv->ring);
@@ -461,10 +380,6 @@ static __iram irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 
 	status = rtl8196e_readl(CPUIISR);
 	mask = rtl8196e_readl(CPUIIMR);
-	if (rtl8196e_debug && priv->dbg_irqs < 3) {
-		netdev_info(ndev, "dbg: ISR status=0x%08x\n", status);
-		priv->dbg_irqs++;
-	}
 	status &= mask;
 	if (unlikely(!status))
 		return IRQ_NONE;
@@ -502,12 +417,28 @@ static int rtl8196e_set_mac_address(struct net_device *ndev, void *p)
 	return eth_mac_addr(ndev, p);
 }
 
+/*
+ * Same F2 pattern for the MTU (ETHDRV-012): the NETIF table holds the
+ * open-time value, so a live change would update ndev->mtu without the
+ * hardware following — a silent inconsistency. Refuse while UP; the
+ * core has already clamped new_mtu to [min_mtu, max_mtu], and the next
+ * open() programs the NETIF table from ndev->mtu.
+ */
+static int rtl8196e_change_mtu(struct net_device *ndev, int new_mtu)
+{
+	if (netif_running(ndev))
+		return -EBUSY;
+	WRITE_ONCE(ndev->mtu, new_mtu);
+	return 0;
+}
+
 static const struct net_device_ops rtl8196e_netdev_ops = {
 	.ndo_open = rtl8196e_open,
 	.ndo_stop = rtl8196e_stop,
 	.ndo_start_xmit = rtl8196e_start_xmit,
 	.ndo_tx_timeout = rtl8196e_tx_timeout,
 	.ndo_set_mac_address = rtl8196e_set_mac_address,
+	.ndo_change_mtu = rtl8196e_change_mtu,
 };
 
 /* ethtool: identify the driver and the underlying platform device. */
@@ -567,7 +498,7 @@ static int rtl8196e_get_link_ksettings(struct net_device *ndev,
 	return 0;
 }
 
-#define RTL8196E_ETHTOOL_STATS_COUNT 24
+#define RTL8196E_ETHTOOL_STATS_COUNT 20
 
 /* ethtool: return the number of driver-specific statistics. */
 static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
@@ -585,10 +516,6 @@ static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 		"rtl8196e_l2_check_ok",
 		"rtl8196e_l2_check_fail",
 		"rtl8196e_l2_check_last_result",
-		"rtl8196e_tx_dbg_portmask",
-		"rtl8196e_tx_dbg_vid",
-		"rtl8196e_tx_dbg_len",
-		"rtl8196e_tx_dbg_submit",
 		"rtl8196e_tx_kicks_total",
 		"rtl8196e_tx_kicks_cold",
 		"rtl8196e_tx_kicks_threshold",
@@ -628,31 +555,27 @@ static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 	data[0] = priv->l2_check_ok;
 	data[1] = priv->l2_check_fail;
 	data[2] = priv->l2_check_last;
-	data[3] = priv->tx_dbg_portmask;
-	data[4] = priv->tx_dbg_vid;
-	data[5] = priv->tx_dbg_len;
-	data[6] = priv->tx_dbg_submit;
 	if (priv->ring) {
 		rtl8196e_ring_kick_stats_get(priv->ring, &cold, &thresh, &drain, &total);
 		rtl8196e_ring_diag_get(priv->ring, &diag);
 	}
-	data[7] = total;
-	data[8] = cold;
-	data[9] = thresh;
-	data[10] = drain;
-	data[11] = diag.rx_wild_pkthdr;
-	data[12] = diag.rx_wild_mbuf;
-	data[13] = diag.rx_bad_len;
-	data[14] = diag.rx_no_skb;
-	data[15] = diag.rx_alloc_fail;
-	data[16] = diag.rx_rearm_badidx;
-	data[17] = diag.tx_bad_args;
-	data[18] = diag.tx_bad_len;
-	data[19] = diag.tx_ring_full;
-	data[20] = diag.tx_reclaim_no_skb;
-	data[21] = diag.tx_bad_pkthdr;
-	data[22] = diag.tx_bad_mbuf;
-	data[23] = diag.rx_mbuf_no_shadow;
+	data[3] = total;
+	data[4] = cold;
+	data[5] = thresh;
+	data[6] = drain;
+	data[7] = diag.rx_wild_pkthdr;
+	data[8] = diag.rx_wild_mbuf;
+	data[9] = diag.rx_bad_len;
+	data[10] = diag.rx_no_skb;
+	data[11] = diag.rx_alloc_fail;
+	data[12] = diag.rx_rearm_badidx;
+	data[13] = diag.tx_bad_args;
+	data[14] = diag.tx_bad_len;
+	data[15] = diag.tx_ring_full;
+	data[16] = diag.tx_reclaim_no_skb;
+	data[17] = diag.tx_bad_pkthdr;
+	data[18] = diag.tx_bad_mbuf;
+	data[19] = diag.rx_mbuf_no_shadow;
 }
 
 static const struct ethtool_ops rtl8196e_ethtool_ops = {
@@ -815,7 +738,6 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	}
 
 	timer_setup(&priv->link_timer, rtl8196e_link_timer_fn, 0);
-	timer_setup(&priv->dbg_timer, rtl8196e_dbg_timer_fn, 0);
 
 	/* NAPI deferral tuning: on this slow CPU (Lexra RLX4181 @ 380 MHz),
 	 * the driver drains the RX ring faster than packets arrive (~3 pkt/poll).
@@ -854,6 +776,67 @@ static int rtl8196e_probe(struct platform_device *pdev)
 		ret = irq;
 		goto err_ring;
 	}
+
+	/*
+	 * Claim and map the three DT register windows (ETH-S01). The
+	 * accessors keep the compile-time KSEG1 constants from
+	 * rtl8196e_regs.h — on this in-order core they fold to lui+lw/sw
+	 * with no pointer load, and ioremap() of a low-512MB physical
+	 * address returns the very same KSEG1 alias anyway — so instead
+	 * of carrying the mapping around, probe *verifies* it: a DT or
+	 * platform change that moved a window fails loudly here rather
+	 * than silently splitting MMIO between two addresses. The claim
+	 * also makes /proc/iomem honest and detects window conflicts.
+	 */
+	{
+		static const struct {
+			unsigned long kseg1;
+			const char *name;
+		} win[] = {
+			{ 0xB8010000UL, "cpu-interface" },
+			{ 0xBB000000UL, "asic-table" },
+			{ 0xBB800000UL, "switch-core" },
+		};
+		int i;
+
+		for (i = 0; i < ARRAY_SIZE(win); i++) {
+			void __iomem *base;
+
+			base = devm_platform_ioremap_resource(pdev, i);
+			if (IS_ERR(base)) {
+				ret = PTR_ERR(base);
+				goto err_ring;
+			}
+			if ((unsigned long)base != win[i].kseg1) {
+				dev_err(&pdev->dev,
+					"%s window mapped at %p, expected KSEG1 0x%08lx - constant-address accessors are stale\n",
+					win[i].name, base, win[i].kseg1);
+				ret = -ENXIO;
+				goto err_ring;
+			}
+		}
+	}
+
+	/*
+	 * One-time SoC bring-up (ETH-S03): pinmux + board 0x44 pad state,
+	 * switch-clock toggle, MEMCR, FULL_RST, LED controller, queue
+	 * mapping, L2 table clear. ~650 ms of msleeps — paid once here in
+	 * process context instead of on every open().
+	 */
+	ret = rtl8196e_hw_init(&priv->hw);
+	if (ret)
+		goto err_ring;
+
+	/*
+	 * Quiesce before unmasking the line (ETHDRV-010): the bootloader
+	 * uses this NIC for TFTP and is not guaranteed to leave CPUIIMR
+	 * masked or CPUIISR clean, so the ISR could otherwise run against
+	 * a not-yet-registered netdev (a latched LINK_CHANGE_IP would
+	 * drive netif_carrier_* on it). Mirrors what stop() does. Sits
+	 * after hw_init so nothing FULL_RST latches survives either.
+	 */
+	rtl8196e_hw_disable_irqs(&priv->hw);
+	rtl8196e_writel(rtl8196e_readl(CPUIISR), CPUIISR);
 
 	ret = request_irq(irq, rtl8196e_isr, 0, RTL8196E_DRV_NAME, ndev);
 	if (ret)

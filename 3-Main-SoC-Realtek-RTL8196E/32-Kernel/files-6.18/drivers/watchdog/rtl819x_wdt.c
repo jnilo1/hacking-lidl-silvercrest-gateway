@@ -3,30 +3,9 @@
  * Watchdog driver for the Realtek RTL8196E SoC
  *
  * The SoC exposes a single 32-bit Watchdog Timer Control Register
- * (WDTCNR) at sysc + 0x311C. Field layout (verified against the
- * RTL8196E-CG datasheet, Track ID JATR-3375-16 Rev. 1.0, table 27):
- *
- *   [31:24] WDTE         0xA5 = stop, anything else = run
- *   [23]    WDTCLR       Write 1 to clear the up-counter (kick)
- *   [22:21] OVSEL[1:0]   Lower overflow-select bits
- *   [20]    WDIND        Set on a watchdog-triggered reset (W1C)
- *   [19]    NRFRstType   POR-strap; not relevant at runtime
- *   [18:17] OVSEL[3:2]   Higher overflow-select bits
- *   [16:0]  reserved
- *
- * OVSEL[3:0] is a 4-bit selector that picks the overflow tick count:
- *
- *   0000:2^15  0001:2^16  0010:2^17  0011:2^18  (SDK V3.4.7.3 default)
- *   0100:2^19  0101:2^20  0110:2^21  0111:2^22
- *   1000:2^23  1001:2^24  (max bucket)
- *
- * The watchdog tick is derived from CDBR (sysc + 0x3118), which is
- * shared with Timer0/Timer1: tick = system_clock / DivFactor. As of
- * v3.5.0 (WDT-005 closed), `timer-rtl819x` is fed a 25 kHz `slowclk`
- * fixed-clock so DivFactor=8000 (matching the SDK BSP). At 25 kHz
- * the OVSEL=1001 bucket overflows in ~671 s, giving a userspace
- * BusyBox `watchdog -t 30 /dev/watchdog` ~22× margin against the
- * largest reachable timeout.
+ * (WDTCNR) at sysc + 0x311C. The field layout, the OVSEL bucket
+ * table and the CDBR tick derivation are documented once, at the
+ * register #define block below.
  *
  * The driver also registers a system restart handler so a kernel
  * `reboot` flows through the notifier chain (firing before the
@@ -43,6 +22,7 @@
 #include <linux/hrtimer.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
 #include <linux/notifier.h>
@@ -59,7 +39,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.5"
+#define DRV_VERSION		"1.6"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -113,16 +93,21 @@
 #define WDT_DISABLE_PATTERN	(WDTE_STOP | WDT_OVSEL_MAX)
 
 /*
- * Default and bounds for `struct watchdog_device::timeout`. The chip
- * is always armed with OVSEL=1001 (~671 s overflow at slowclk=25 kHz);
- * `timeout` is the soft contract with userspace / the framework, not
- * a hardware register. The framework pings at timeout/2 when
- * WDOG_HW_RUNNING is set, so default=60 s lines up with the BusyBox
- * S25watchdog `-t 30 /dev/watchdog` cadence.
+ * Default and minimum for `struct watchdog_device::timeout`, plus the
+ * fixed hardware window. The chip is always armed with OVSEL=1001
+ * (2^24 ticks ≈ 671 s at slowclk=25 kHz); that window is what the
+ * hardware really enforces, so it is reported to the core as
+ * max_hw_heartbeat_ms rather than faked as a max_timeout. `timeout`
+ * stays the soft contract with userspace / the framework, not a
+ * hardware register. The framework pings at min(timeout, window)/2
+ * when WDOG_HW_RUNNING is set — default=60 s lines up with the
+ * BusyBox S25watchdog `-t 30 /dev/watchdog` cadence — and a soft
+ * timeout larger than the window is honored by core-generated bridge
+ * pings instead of being rejected.
  */
 #define WDT_TIMEOUT_SECS_DEFAULT	60U
 #define WDT_TIMEOUT_SECS_MIN		1U
-#define WDT_TIMEOUT_SECS_MAX		671U
+#define WDT_HW_WINDOW_MS		671000U	/* OVSEL=1001 @ 25 kHz CDBR */
 
 /*
  * Sysc range we dump at probe for diagnostics. The block at sysc+0x3100
@@ -164,8 +149,12 @@
  *   +0x08  u32   uptime_sec  seconds since boot at panic (boottime clock,
  *                            not jiffies/HZ — jiffies starts at INITIAL_JIFFIES
  *                            ~= -300*HZ to flush wrap bugs, so it is not 0 at
- *                            boot; ktime_get_boottime_seconds() matches
- *                            /proc/uptime and is safe to read in atomic context)
+ *                            boot). Read via the NMI-safe fast accessor
+ *                            ktime_get_boot_fast_ns(): the ordinary seqcount
+ *                            accessors can spin forever if the panic
+ *                            interrupted a timekeeping writer (WDT-011), and
+ *                            this read sits ahead of the chip-arm writes.
+ *                            Matches /proc/uptime to the second.
  *   +0x0C  u32   fn_addr     running timer callback addr, or 0 (resolved to
  *                            a symbol at next-boot read via %pS — never in
  *                            the atomic panic path)
@@ -295,15 +284,19 @@ static int rtl819x_wdt_stop(struct watchdog_device *wdd)
 static int rtl819x_wdt_ping(struct watchdog_device *wdd)
 {
 	struct rtl819x_wdt *wdt = to_rtl819x_wdt(wdd);
-	u32 val;
 
 	/*
-	 * RMW with WDTCLR=1 — the up-counter resets on the rising edge of
-	 * bit 23. Hardware auto-clears the bit so subsequent reads return
-	 * the OVSEL pattern unchanged.
+	 * Constant write, same pattern as .start: the up-counter resets
+	 * on the rising edge of WDTCLR (bit 23), which hardware then
+	 * auto-clears. Deliberately NOT a read-modify-write: the RMW used
+	 * through v1.5 paid an uncached MMIO read per kick and, worse,
+	 * read WDIND back and wrote it back set — W1C-erasing the one
+	 * reset-cause bit WDT-001 is still hoping to observe. Side
+	 * effect: a chip adopted with a non-max OVSEL is normalized to
+	 * the max bucket on the first kick — exactly what .start would
+	 * have done anyway.
 	 */
-	val = readl(wdt->base);
-	writel(val | WDTCLR, wdt->base);
+	writel(WDT_ENABLE_PATTERN | WDTCLR, wdt->base);
 	return 0;
 }
 
@@ -314,20 +307,12 @@ static int rtl819x_wdt_set_timeout(struct watchdog_device *wdd,
 	 * No OVSEL recalculation: the chip is always armed at the maximum
 	 * bucket (~671 s overflow at slowclk=25 kHz), and `timeout` is the
 	 * soft contract that drives userspace / framework ping cadence.
-	 * Framework already clamps to [min_timeout, max_timeout].
+	 * The framework validates against min_timeout and, because we
+	 * declare max_hw_heartbeat_ms, bridges any longer soft timeout
+	 * with core-generated pings instead of rejecting it.
 	 */
 	wdd->timeout = timeout;
 	return 0;
-}
-
-static unsigned int rtl819x_wdt_get_timeleft(struct watchdog_device *wdd)
-{
-	/*
-	 * The hardware does not expose a readable countdown. The
-	 * configured timeout is a conservative upper bound on time-until-
-	 * reset for any caller that just kicked the chip.
-	 */
-	return wdd->timeout;
 }
 
 static int rtl819x_wdt_restart(struct watchdog_device *wdd,
@@ -442,7 +427,18 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		size_t n = strnlen(reason, WDT_REC_REASON_MAX - 1);
 
 		writel(WDT_REC_VERSION, wdt->rec + WDT_REC_OFF_VERSION);
-		writel((u32)ktime_get_boottime_seconds(), wdt->rec + WDT_REC_OFF_UPTIME);
+		/*
+		 * NMI-safe fast accessor, NOT ktime_get_boottime_seconds():
+		 * the coarse accessors retry on the timekeeping seqcount and
+		 * spin forever if the panic interrupted a timekeeping writer
+		 * (CONFIG_PANIC_ON_OOPS promotes an oops in that window to a
+		 * panic). This read runs BEFORE the chip-arm writes, so an
+		 * unbounded wait here would cost the record AND the fast
+		 * reset (WDT-011). div_u64: cold path, Lexra soft-divide
+		 * cost irrelevant.
+		 */
+		writel((u32)div_u64(ktime_get_boot_fast_ns(), NSEC_PER_SEC),
+		       wdt->rec + WDT_REC_OFF_UPTIME);
 		writel((u32)(uintptr_t)fn, wdt->rec + WDT_REC_OFF_FNADDR);
 		writel(regs ? (u32)regs->cp0_epc : 0, wdt->rec + WDT_REC_OFF_EPC);
 		writel(regs ? (u32)regs->regs[31] : 0, wdt->rec + WDT_REC_OFF_RA);
@@ -634,7 +630,12 @@ static const struct watchdog_ops rtl819x_wdt_ops = {
 	.stop		= rtl819x_wdt_stop,
 	.ping		= rtl819x_wdt_ping,
 	.set_timeout	= rtl819x_wdt_set_timeout,
-	.get_timeleft	= rtl819x_wdt_get_timeleft,
+	/*
+	 * No .get_timeleft: the hardware has no readable countdown, and
+	 * the v1.5 op returned the constant `timeout`, which is not a
+	 * time-left. Absent the op the core answers WDIOC_GETTIMELEFT
+	 * with EOPNOTSUPP — honest. BusyBox `watchdog` never calls it.
+	 */
 	.restart	= rtl819x_wdt_restart,
 };
 
@@ -674,7 +675,6 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	struct reserved_mem *rmem = NULL;
 	struct rtl819x_wdt *wdt;
 	struct device_node *np;
-	struct resource *res;
 	u32 raw;
 	int ret;
 
@@ -682,17 +682,16 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	if (!wdt)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	wdt->base = devm_ioremap_resource(dev, res);
+	wdt->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(wdt->base))
 		return PTR_ERR(wdt->base);
 
-	wdt->wdd.info		= &rtl819x_wdt_info;
-	wdt->wdd.ops		= &rtl819x_wdt_ops;
-	wdt->wdd.parent		= dev;
-	wdt->wdd.min_timeout	= WDT_TIMEOUT_SECS_MIN;
-	wdt->wdd.max_timeout	= WDT_TIMEOUT_SECS_MAX;
-	wdt->wdd.timeout	= WDT_TIMEOUT_SECS_DEFAULT;
+	wdt->wdd.info			= &rtl819x_wdt_info;
+	wdt->wdd.ops			= &rtl819x_wdt_ops;
+	wdt->wdd.parent			= dev;
+	wdt->wdd.min_timeout		= WDT_TIMEOUT_SECS_MIN;
+	wdt->wdd.max_hw_heartbeat_ms	= WDT_HW_WINDOW_MS;
+	wdt->wdd.timeout		= WDT_TIMEOUT_SECS_DEFAULT;
 
 	/* DT timeout-sec wins over the default if specified. */
 	watchdog_init_timeout(&wdt->wdd, 0, dev);
@@ -785,8 +784,6 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	ret = devm_add_action_or_reset(dev, rtl819x_wdt_panic_unregister, wdt);
 	if (ret)
 		return ret;
-
-	platform_set_drvdata(pdev, wdt);
 
 	dev_info(dev, "v" DRV_VERSION " (J. Nilo) - timeout:%us, nowayout:%d\n",
 		 wdt->wdd.timeout, nowayout);

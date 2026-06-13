@@ -67,7 +67,6 @@ struct rtl8196e_ring {
 	unsigned int tx_prod;
 	unsigned int tx_cons;
 	unsigned int rx_idx;
-	unsigned int last_tx_submit;
 	unsigned int rx_debug_once;
 	unsigned int rx_debug_bad;
 	size_t buf_size;
@@ -89,6 +88,16 @@ static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 	void *p = kmalloc(size, GFP_KERNEL);
 	if (!p)
 		return NULL;
+	/*
+	 * Flush-and-discard the cached alias before the memory is ever
+	 * touched through KSEG1 (ETHDRV-008): the lines may still sit
+	 * dirty in the write-back L1 from the allocation's previous
+	 * lifetime (kfree does not flush), and a later eviction would
+	 * write that stale data over ring entries maintained through the
+	 * uncached alias — corrupt ownership bits or wild descriptor
+	 * pointers. One-time cost at ring creation.
+	 */
+	dma_cache_wback_inv((unsigned long)p, size);
 	if (orig_out)
 		*orig_out = p;
 	return rtl8196e_uncached_addr(p);
@@ -326,7 +335,7 @@ void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring)
 /* Fill the next TX descriptor with @skb's data and hand ownership to the hardware. */
 __iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
-				   u16 vid, u16 portlist, u16 flags,
+				   u16 vid, u16 portlist,
 				   bool *was_empty)
 {
 	unsigned int next;
@@ -369,7 +378,6 @@ __iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 		ring->diag.tx_bad_mbuf++;
 		return -EIO;
 	}
-	ring->last_tx_submit = ring->tx_prod;
 
 	mb->m_len = len;
 	mb->m_extsize = len;
@@ -381,7 +389,8 @@ __iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	ph->ph_vlanId = vid;
 	ph->ph_portlist = portlist & 0x3f;
 	ph->ph_srcExtPortNum = 0;
-	ph->ph_flags = flags;
+	/* Constant at every call site since the bring-up era — owned here. */
+	ph->ph_flags = PKTHDR_USED | PKT_OUTGOING;
 
 	/* Flush descriptors (packet data flushed by caller) */
 	dma_cache_wback_inv((unsigned long)ph, sizeof(*ph));
@@ -868,53 +877,4 @@ void rtl8196e_ring_tx_reset(struct rtl8196e_ring *ring)
 
 	ring->tx_prod = 0;
 	ring->tx_cons = 0;
-	ring->last_tx_submit = 0;
-}
-
-/* Return the ring index of the last successfully submitted TX descriptor (for debug). */
-unsigned int rtl8196e_ring_last_tx_submit(struct rtl8196e_ring *ring)
-{
-	if (!ring)
-		return 0;
-	return ring->last_tx_submit;
-}
-
-/* Return the total capacity (number of slots) of the TX ring. */
-unsigned int rtl8196e_ring_tx_count(struct rtl8196e_ring *ring)
-{
-	if (!ring)
-		return 0;
-	return ring->tx_cnt;
-}
-
-/* Return the raw descriptor entry at @idx in the TX ring (for debug). */
-u32 rtl8196e_ring_tx_entry(struct rtl8196e_ring *ring, unsigned int idx)
-{
-	if (!ring || idx >= ring->tx_cnt)
-		return 0;
-	return ring->tx_ring[idx];
-}
-
-/* Return the current RX consumer index. */
-unsigned int rtl8196e_ring_rx_index(struct rtl8196e_ring *ring)
-{
-	if (!ring)
-		return 0;
-	return ring->rx_idx;
-}
-
-/* Return the raw pkthdr descriptor entry at @idx in the RX ring (for debug). */
-u32 rtl8196e_ring_rx_pkthdr_entry(struct rtl8196e_ring *ring, unsigned int idx)
-{
-	if (!ring || idx >= ring->rx_cnt)
-		return 0;
-	return ring->rx_pkthdr_ring[idx];
-}
-
-/* Return the raw mbuf descriptor entry at @idx in the RX mbuf ring (for debug). */
-u32 rtl8196e_ring_rx_mbuf_entry(struct rtl8196e_ring *ring, unsigned int idx)
-{
-	if (!ring || idx >= ring->rx_mbuf_cnt)
-		return 0;
-	return ring->rx_mbuf_ring[idx];
 }

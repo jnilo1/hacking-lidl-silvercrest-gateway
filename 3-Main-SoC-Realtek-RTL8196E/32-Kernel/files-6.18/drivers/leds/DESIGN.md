@@ -1,5 +1,16 @@
 # LED management on the Silvercrest/Lidl Zigbee gateway (RTL8196E)
 
+| | |
+|---|---|
+| **Last updated** | 2026-06-12 |
+| **Driver version** | 1.1 (`leds-gpio-pwm.c`) |
+| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`) |
+
+This is the design companion to [`AUDIT.md`](AUDIT.md) (code-level audit of
+`leds-gpio-pwm.c`). It covers the hardware story both drivers share: the
+software-PWM STATUS LED here, and the ASIC-wired LAN LED handled by the
+Ethernet driver's `led_mode`.
+
 ## Hardware
 
 The gateway has two front-panel LEDs, active-low, wired to RTL8196E
@@ -12,7 +23,7 @@ and Table 36 (PIN_MUX_SEL_2).
 
 | LED    | Label  | Pin | GPIO pad | LED function | PIN_MUX_SEL_2 bits | 00 = LED   | 11 = GPIO |
 |--------|--------|-----|----------|--------------|---------------------|------------|-----------|
-| LAN    | lan    | 117 | GPIOB[2] | LED_PORT0    | [1:0]               | LED_PORT0  | GPIOB2    |
+| LAN    | lan    | 116 | GPIOB[6] | LED_PORT4    | [13:12]             | LED_PORT4  | GPIOB6    |
 | STATUS | status | 114 | GPIOB[3] | LED_PORT1    | [4:3]               | LED_PORT1  | GPIOB3    |
 
 Default value at reset: **10b (Reserved)** — neither LED nor GPIO mode.
@@ -27,13 +38,13 @@ same (fairly high) brightness.
 The vendor BSP is based on Linux 3.10 but carries over several
 drivers from the older 2.6.30 SDK (Ethernet, GPIO, ASIC layer).
 
-Both LED pads (B2 and B3) are routed to the switch ASIC LED controller
-by the SDK's ASIC L2 init (`rtl865x_asicL2.c` line 6041):
+All five shared pads (B2–B6) are routed to the switch ASIC LED
+controller by the SDK's ASIC L2 init (`rtl865x_asicL2.c`):
 
 ```c
-REG32(PIN_MUX_SEL2) &= ~((3<<0) | (3<<3) | ...);
-//                        ^^^^^^   ^^^^^^
-//                        B2/LED0  B3/LED1  → both set to 0b00 = ASIC LED mode
+REG32(PIN_MUX_SEL2) &= ~((3<<0) | (3<<3) | (3<<6) | (3<<9) | (3<<12) | (7<<15));
+//          all five LED fields (B2..B6) set to 0b00 = ASIC LED mode,
+//          including B6 = LED_PORT4, the actual LAN-LED pad (#126)
 ```
 
 A custom Tuya-specific kernel driver (`leds-rtl8196e.c` — not part of
@@ -64,7 +75,7 @@ REG32(LEDCREG) = (2<<20) | 0;                       // LEDMODE_DIRECT, mode 0
 - **Mode 0 = Link / Activity**: the LED is **solidly ON** whenever the
   Ethernet link is up, and blinks off briefly during traffic.
 
-Both pads (B2 for LAN, B3 for STATUS) are routed to the ASIC LED
+Both pads (B6 for LAN, B3 for STATUS) are routed to the ASIC LED
 controller via pin mux (`PIN_MUX_SEL2` bits set to 0b00).  The ASIC
 drives the pins entirely in hardware with the same electrical
 characteristics, which is why both LEDs glow at the **same high
@@ -186,41 +197,48 @@ leds {
 | File | Role |
 |------|------|
 | `leds-gpio-pwm.c`                  | Driver source                          |
-| `LED-DESIGN-NOTES.md`              | This document                          |
+| `DESIGN.md`              | This document                          |
+| `AUDIT.md`                         | Dated code audit (finding IDs LED-*)   |
 | `patches-6.18/drivers-leds-Kconfig.patch`| Adds `CONFIG_LEDS_GPIO_PWM` to Kconfig |
 | `patches-6.18/drivers-leds-Makefile.patch`| Adds build rule to Makefile           |
 
-## LAN LED — hardwired to switch ASIC (hardware discovery)
+## LAN LED — ASIC-driven on pad B6 (hardware discovery, corrected #126)
 
-### The problem
+### The wrong-pad detour
 
-Despite the datasheet documenting GPIO B2 (pin 117) as a dual-function
-pad switchable between LED_PORT0 and GPIOB2 via `PIN_MUX_SEL_2` bits
-[1:0], **testing revealed that GPIO has no physical effect on the LAN
-LED**.
+Early bring-up assumed the LAN LED sat on pad B2 (pin 117, LED_PORT0 —
+the first LED field in Table 36). Driving B2 as a GPIO was fully
+functional electrically (mux `0b11`, `PABCD_CNR`/`DIR`/`DAT` all
+responding to `gpiod_set_value()` and devmem) yet the physical LED
+never changed, while `LEDCREG` writes did change it. That was misread
+as "the LAN LED is hardwired to the ASIC LED_PORT0 output, bypassing
+the pin mux".
 
-Evidence:
-- `PIN_MUX_SEL_2` set to `0b11` (GPIO mode) for bits [1:0] ✓
-- `PABCD_CNR` bit 10 = 0 (GPIO function) ✓
-- `PABCD_DIR` bit 10 = 1 (output) ✓
-- `PABCD_DAT` bit 10 toggles correctly with `gpiod_set_value()` ✓
-- Direct `devmem` writes to the DATA register also toggle bit 10 ✓
-- **The physical LED does not change.**
+The 2026-06-12 visual re-test (#126, prompted by hlyi's question about
+the Table 36 1-1 port naming) falsified the bypass theory: the LED is
+simply **not on B2**. It is on **pad B6 (pin 116) = LED_PORT4**,
+matching the board's switch port (4) exactly as the datasheet's 1-1
+naming suggests:
 
-Conversely, writing to `LEDCREG` (0xBB80_4300) immediately changes the
-LAN LED behaviour:
+- B6 field `0b11` (unclaimed GPIO, Hi-Z) → LED dead even under traffic;
+- B6 field `0b00` (LED function) → link/activity indication returns;
+- B2 in any state → no effect on the LED (whatever B2 is wired to on
+  the Lidl, it is not LED-related).
+
+The pin mux is therefore fully effective on the LAN LED. The detour had
+a real cost: eth v2.8 first shipped `realtek,led-pads = <10>` (B2) on
+the strength of the wrong conclusion, and the floated B6 killed the
+LAN LED until the value was corrected to `<14>` — a regression no
+register readback could catch.
+
+### What remains true
+
+With B6 in LED function the LED is driven entirely by the switch ASIC
+LED controller — GPIO state is out of the path; only
+`LEDCREG`/`DIRECTLCR` control brightness and on/off:
 - `LEDCREG = 0x0020_0000` (LEDMODE_DIRECT) → full brightness,
   link/activity
 - `LEDCREG = 0x0000_0000` (scan mode) → dim blinking (~25 % of full)
-
-The STATUS LED (GPIO B3) works correctly via GPIO in both GPIO and
-ASIC LED modes.
-
-### Conclusion
-
-The LAN LED is physically connected to the switch ASIC's LED_PORT0
-output, bypassing the pin mux.  This is likely a PCB design choice by
-Tuya/Lidl.  Only `LEDCREG` controls it.
 
 ### DIRECTLCR register — true LED off
 

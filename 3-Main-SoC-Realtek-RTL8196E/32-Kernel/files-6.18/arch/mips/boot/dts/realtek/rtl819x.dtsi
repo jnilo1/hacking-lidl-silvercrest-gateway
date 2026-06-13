@@ -136,7 +136,12 @@
 
 		timer: timer@3100 {
 			compatible = "realtek,rtl819x-timer";
-			reg = <0x00003100 0x20>;
+			/* 0x1c, not 0x20: the timer block ends at CLOCK_DIV
+			 * (0x3118); 0x311c is WDTCNR, owned by watchdog@311c.
+			 * A 0x20 window overlapped the watchdog reg (audit
+			 * TMR-009) — harmless only while this driver maps
+			 * without claiming. */
+			reg = <0x00003100 0x1c>;
 			interrupt-parent = <&cpuintc>;
 			interrupts = <7>;
 			/*
@@ -181,7 +186,16 @@
 
 		ethernet: ethernet@10000 {
 			compatible = "realtek,rtl8196e-mac";
-			reg = <0x00010000 0x1000>;
+			/*
+			 * Three windows (ETH-S01): CPU interface, switch
+			 * ASIC indirect-table window (type << 16 selector)
+			 * and the switch-core register block.
+			 */
+			reg = <0x00010000 0x1000>,
+			      <0x03000000 0x100000>,
+			      <0x03800000 0x8000>;
+			reg-names = "cpu-interface", "asic-table",
+				    "switch-core";
 			interrupt-parent = <&intc>;
 			interrupts = <15>;
 			realtek,syscon = <&sysc>;

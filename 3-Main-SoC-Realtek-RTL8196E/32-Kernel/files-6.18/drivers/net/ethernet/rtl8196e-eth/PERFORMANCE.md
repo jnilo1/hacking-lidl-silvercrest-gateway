@@ -129,6 +129,159 @@ with no driver change), so the −2.2 % vs the v3.8.0 confirmation is variance,
 not a 6.18.35 cost — consistent with the script's own embedded v3.4.1
 baseline (RX 93.7 → 93.8, TX 70.0 → 69.9).
 
+## Driver v2.9 gate run (June 2026, audit-fix batch)
+
+`scripts/test_rtl8196e_eth_iperf3.sh`, kernel 6.18.35 + the full June
+audit batch (8250 v1.4, clocksource v1.2 timer_of, gpio v1.2, wdt v1.6).
+Driver 2.8 → 2.9: ETHDRV-008 (ring-array cache flush before KSEG1
+aliasing), ETHDRV-009 (stop() napi_disable-first ordering), ETHDRV-010
+(probe IRQ quiesce), ETHDRV-012 (ndo_change_mtu, F2 pattern) — all
+probe/teardown-path changes, zero hot-path edits. Bridge armed but idle
+(no TCP client) in both runs; same-day baseline captured under
+identical conditions.
+
+| Workload                    | Same-day baseline (v2.8) | v2.9 |
+|-----------------------------|-------------------------:|-----:|
+| TCP RX (host → gateway)     | 93.9                     | 93.9 |
+| TCP TX (gateway → host)     | 68.2                     | 73.2 |
+
+Parallel TCP RX: 94.0 (4 streams) / 93.8 (8 streams), both identical to
+baseline. Stress (300 s TCP RX): 93.9 sustained vs 93.6 baseline.
+RetransSegs 0.0000 % in both directions. UDP RX: 10M → 0 % loss,
+50M → 43.7 delivered (13 % loss), 100M → 31.8 delivered (68 % loss),
+bidir 50M+50M → clean at the 8.5 effective ceiling — the usual
+rcvbuf-bound receiver profile (eth0 rx_dropped 0).
+
+No regression; the TX delta (+5.0) is the documented run-to-run layout
+spread (69.3–72.8 historically; the 68.2 baseline run sat at the low
+edge), not a v2.9 effect. Functional checks the same session: down/up
+cycle with traffic after (ETHDRV-009), `ip link set mtu` refused with
+EBUSY while UP / accepted while down (ETHDRV-012), nRST RSTACK proof
+after an eth flap (mux ownership intact).
+
+## Driver v2.10 gate run (June 2026, scaffolding removal)
+
+Same session as v2.9. Driver 2.9 → 2.10: ETH-S02 (debug scaffolding
+removed: dbg_timer, tx_debug_once, tx_dbg_* ethtool slots, dbg_irqs,
+force_trap, rtl8196e_debug param, six orphaned ring accessors —
+ETHDRV-011 closed by deletion), S04 (dead defines, Kconfig help),
+S06 (hw.base member, (void)hw casts), S07 (tx_submit flags folded into
+the ring layer). Net −~190 lines; the only hot-path effect is the
+*removal* of two always-tested branches (xmit first-packet capture,
+ISR debug print).
+
+| Workload                    | v2.9 | v2.10 |
+|-----------------------------|-----:|------:|
+| TCP RX (host → gateway)     | 93.9 | 93.9  |
+| TCP TX (gateway → host)     | 73.2 | 70.2  |
+
+Parallel TCP RX: 94.0 / 93.9. Stress (300 s): **94.1** sustained (best
+recorded). UDP profile unchanged (10M 0 % / 50M 16 % / 100M 68 %).
+Two confirmation single-stream TX runs: 69.9, 70.2 — v2.10 sits
+mid-spread where v2.9 measured at the high edge (documented layout
+spread 69.3–72.8 with no driver change); deletion of dead branches has
+no mechanism for a real cost, classified variance like the v3.9.0
+−2.2 % case. ethtool stat renumbering verified on-target.
+
+## Driver v2.11 gate run (June 2026, bring-up hoisted to probe)
+
+Same session. Driver 2.10 → 2.11: ETH-S03 — the one-time SoC bring-up
+(pinmux/0x44 board state, switch-clock toggle, MEMCR, FULL_RST, L2
+clear; ~650 ms of sleeps) runs once at probe; `ndo_open` keeps only
+per-open programming and measures **~30 ms** (was >1 s).
+
+| Workload                    | v2.10 | v2.11 |
+|-----------------------------|------:|------:|
+| TCP RX (host → gateway)     | 93.9  | 93.9  |
+| TCP TX (gateway → host)     | 70.2  | 69.7  |
+
+Parallel TCP RX: 94.0 / 93.8. Stress (300 s): 94.0 sustained. UDP
+profile unchanged (10M 0 % / 50M 14 % / 100M 67 %). TX within the
+layout spread. Functional: down/up flap followed by an nRST RSTACK
+proof — pad muxes stay correct without the per-open 0x44 re-write.
+
+## Driver v2.12 gate run (June 2026, DT resource model)
+
+Same session. Driver 2.11 → 2.12: ETH-S01 resource-claim variant — the
+three register windows are declared in the DT, claimed at probe and
+verified against the compile-time KSEG1 constants (probe fails on
+mismatch); the hot-path accessors are unchanged by design (see the
+rationale in `rtl8196e_regs.h`). Zero hot-path edits.
+
+| Workload                    | v2.11 | v2.12 |
+|-----------------------------|------:|------:|
+| TCP RX (host → gateway)     | 93.9  | 93.9  |
+| TCP TX (gateway → host)     | 69.7  | 71.3  |
+
+Parallel TCP RX: 94.0 / 93.9. Stress (300 s): 94.1 sustained. UDP
+profile unchanged. TX wobble within the layout spread, as expected for
+a probe-only change.
+
+## Driver v2.13 gate run (June 2026, BQL)
+
+Same session. Driver 2.12 → 2.13: ETH-S05 — BQL on the single TX queue
+(sent/completed/reset hooks; both sides account `skb->len`). Purpose is
+TX latency under load (bufferbloat control), not throughput; the gate
+checks it costs nothing.
+
+**Why it is worth keeping (the case the gate cannot show).** The TX ring
+is 128 descriptors. Unthrottled, the stack can fill it: 128 × ~1514 B
+≈ 194 KB of frames committed FIFO below the qdisc, which at 100 Mbit/s
+(~12.5 MB/s) is **~15 ms of dumb buffering**. BQL caps the *bytes in
+flight* instead — measured `byte_queue_limits/limit` converges to
+**~2.5 KB** (< 2 full frames ≈ **~0.2 ms**) under the iperf load, so the
+worst-case ring-induced latency drops ~75× for a throughput cost that is
+≤1 % and below the measurement floor (see the A/B below). This matters
+*here specifically* because the box is a Zigbee/Thread coordinator: the
+in-kernel UART↔TCP bridge (TCP:8888) carries EZSP/CPC/Spinel control
+frames over the same eth0 as any bulk transfer (log pull, OTA, dev
+iperf), and ASH/CPC retransmit timers and OpenThread MLE/keepalive
+timing do not tolerate ~15 ms of head-of-line jitter — that jitter is
+what spawns spurious retransmits and, at the extreme, dropped
+CPC/Thread sessions. BQL is also the *enabler* for the qdisc: a qdisc
+(`pfifo_fast` today, a future `tc … fq_codel`) can only schedule
+packets still in the qdisc — once they escape into the deep ring they
+are FIFO-committed and unreorderable, so without BQL even fq_codel is
+short-circuited. It is, besides, the standard hygiene expected of any
+modern soft-reclaim Linux NIC driver, which is the stated goal of this
+rewrite.
+
+| Workload                    | v2.12 | v2.13 |
+|-----------------------------|------:|------:|
+| TCP RX (host → gateway)     | 93.9  | 94.0  |
+| TCP TX (gateway → host)     | 71.3  | 69.5  |
+
+Parallel TCP RX: 93.8 / 93.9. Stress (300 s): 94.1 sustained. UDP
+profile unchanged. Single-stream RetransSegs 0. TX within the layout
+spread. `byte_queue_limits/limit` observed converged (~2.5 KB) after
+the suite — BQL is active and bounding the queue.
+
+### TX median A/B, v2.9 vs v2.13 (5 reps each)
+
+The single-run gate figures above understate the run-to-run spread, so
+the BQL TX cost was isolated with a 5-rep TX-only median (gateway → host
+reverse, 20 s, 2 s warmup omitted, OTBR quiesced, same final kernel
+flashed for each side):
+
+| Driver | runs (Mbit/s)              | median | range      |
+|--------|---------------------------|-------:|-----------:|
+| v2.9   | 70.5 70.0 72.1 70.8 69.6  |  70.5  | 69.6–72.1  |
+| v2.13  | 70.3 71.9 69.8 68.8 68.7  |  69.8  | 68.7–71.9  |
+
+Median Δ = **0.7 Mbit/s (~1 %)**, v2.13 lower — but the ranges overlap
+almost entirely (69.6–71.9 common) and each median sits inside the
+other's range, so at n=5 it is **not distinguishable from layout/I-cache
+noise** and is below the project's 1 Mbit/s "investigate" threshold.
+There is a faint consistent lean (v2.13's two lowest, 68.7/68.8, fall
+under v2.9's worst, 69.6), the order of magnitude expected from BQL's
+per-packet `netdev_sent_queue`/`netdev_completed_queue` atomics on this
+in-order CPU; it cannot be attributed cleanly because the v2.9→v2.13
+span also *removed* hot-path branches (v2.10), so the measured net is
+the sum of all changes. Note the v2.9 gate single-run (73.2) was a
+high outlier — well above its own 5-rep median of 70.5. BQL stays: its
+benefit is TX latency/bufferbloat control, and any throughput cost is
+≤1 % and buried in noise.
+
 ## TX path per-packet decomposition (driver v2.4 + Track A, probe-on)
 
 Captured during the v3.4.1 perf session with the optional `ktime_get()`

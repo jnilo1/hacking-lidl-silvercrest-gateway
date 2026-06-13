@@ -10,8 +10,7 @@
  * Key features:
  * - 28-bit hardware counters with configurable clock divider
  * - Proper memory barriers (writel/readl) for safe MMIO access
- * - Comprehensive error checking and validation
- * - Modern kernel APIs (request_irq, ioremap)
+ * - timer_of framework for base/clock/irq init (v1.2 conversion)
  *
  * Copyright (C) 2019 Gaspare Bruno <gaspare@anlix.io>
  * Copyright (C) 2025 Jacques Nilo (security improvements)
@@ -22,33 +21,20 @@
  */
 
 #include <linux/interrupt.h>
-#include <linux/reset.h>
 #include <linux/init.h>
-#include <linux/time.h>
 #include <linux/of.h>
-#include <linux/of_irq.h>
-#include <linux/of_address.h>
 #include <linux/clockchips.h>
 #include <linux/clocksource.h>
-#include <linux/clk-provider.h>
 #include <linux/sched_clock.h>
 #include <linux/clk.h>
 
-#define DRV_VERSION "1.0"
+#include "timer-of.h"
+
+#define DRV_VERSION "1.2"
 
 /* ========================================================================== */
 /* Hardware Definitions */
 /* ========================================================================== */
-
-/* Global pointer to timer register base */
-static void __iomem *rtl819x_timer_base;
-
-/*
- * Helper macros for timer register access with memory barriers
- * Use writel/readl (not __raw_*) for proper MMIO ordering
- */
-#define tc_w32(val, reg) writel(val, rtl819x_timer_base + reg)
-#define tc_r32(reg)      readl(rtl819x_timer_base + reg)
 
 /* Timer Controller Registers */
 #define REALTEK_TC_REG_DATA0		0x00	/* Timer0 data register */
@@ -71,6 +57,49 @@ static void __iomem *rtl819x_timer_base;
 #define REALTEK_TIMER_RESOLUTION	28
 #define RTLADJ_TICK(x)			((x) >> (32 - REALTEK_TIMER_RESOLUTION))
 
+static int rtl819x_set_state_shutdown(struct clock_event_device *cd);
+static int rtl819x_set_state_oneshot(struct clock_event_device *cd);
+static int rtl819x_timer_set_next_event(unsigned long delta,
+					struct clock_event_device *evt);
+static irqreturn_t rtl819x_timer_interrupt(int irq, void *dev_id);
+
+/*
+ * Single timer instance (this is the platform's only system timer).
+ * timer_of owns the register mapping, the refclk and the IRQ; the
+ * clocksource read and sched_clock paths reach the base through it.
+ */
+static struct timer_of to = {
+	.flags = TIMER_OF_BASE | TIMER_OF_CLOCK | TIMER_OF_IRQ,
+	/*
+	 * No .of_base.name on purpose: that selects plain of_iomap(), no
+	 * region claim — the watchdog@311c neighbour owns its own window
+	 * (audit TMR-009; the timer node's reg was shrunk to 0x1c so a
+	 * future claiming accessor stays safe too).
+	 */
+	.of_clk = {
+		.name = "refclk",
+	},
+	.of_irq = {
+		.handler = rtl819x_timer_interrupt,
+		.flags = IRQF_TIMER,
+	},
+	.clkevt = {
+		.name			= "rtl819x-timer",
+		.rating			= 100,
+		.features		= CLOCK_EVT_FEAT_ONESHOT,
+		.set_next_event		= rtl819x_timer_set_next_event,
+		.set_state_oneshot	= rtl819x_set_state_oneshot,
+		.set_state_shutdown	= rtl819x_set_state_shutdown,
+	},
+};
+
+/*
+ * Helper macros for timer register access with memory barriers
+ * Use writel/readl (not __raw_*) for proper MMIO ordering
+ */
+#define tc_w32(val, reg) writel(val, timer_of_base(&to) + reg)
+#define tc_r32(reg)      readl(timer_of_base(&to) + reg)
+
 /* ========================================================================== */
 /* Clocksource Implementation (Timer1) */
 /* ========================================================================== */
@@ -91,7 +120,7 @@ static u64 rtl819x_tc1_count_read(struct clocksource *cs)
  *
  * Provides high-resolution time for scheduler. Must be fast and notrace.
  */
-static u64 __maybe_unused notrace rtl819x_read_sched_clock(void)
+static u64 notrace rtl819x_read_sched_clock(void)
 {
 	return RTLADJ_TICK(tc_r32(REALTEK_TC_REG_COUNT1));
 }
@@ -108,8 +137,7 @@ static struct clocksource rtl819x_clocksource = {
  * @freq: Timer frequency in Hz
  *
  * Configures Timer1 as free-running counter and registers with kernel
- * timekeeping. Also registers scheduler clock if CPU frequency scaling
- * is disabled.
+ * timekeeping, then registers the scheduler clock.
  *
  * Return: 0 on success, negative error from clocksource_register_hz().
  */
@@ -138,10 +166,8 @@ static int __init rtl819x_clocksource_init(unsigned long freq)
 	if (ret)
 		return ret;
 
-#ifndef CONFIG_CPU_FREQ
-	/* Register scheduler clock (if CPU freq is fixed) */
+	/* Register scheduler clock (CPU clock is fixed on this platform) */
 	sched_clock_register(rtl819x_read_sched_clock, REALTEK_TIMER_RESOLUTION, freq);
-#endif
 	return 0;
 }
 
@@ -218,6 +244,12 @@ static int rtl819x_timer_set_next_event(unsigned long delta, struct clock_event_
  * @dev_id: Pointer to clock event device
  *
  * Acknowledges interrupt and calls event handler to advance kernel time.
+ *
+ * Robust against the timer_of init window: request_irq() runs inside
+ * timer_of_init(), before Timer0 is quiesced and before clockevents
+ * installs event_handler. A stale pending bit (bootloader / soft-reset
+ * state) therefore fires here at most once at unmask time: the W1C ack
+ * clears it and the NULL event_handler check skips the dispatch.
  */
 static irqreturn_t rtl819x_timer_interrupt(int irq, void *dev_id)
 {
@@ -238,15 +270,6 @@ static irqreturn_t rtl819x_timer_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-/* Clock event device definition */
-static struct clock_event_device rtl819x_clockevent = {
-	.rating			= 100,
-	.features		= CLOCK_EVT_FEAT_ONESHOT,
-	.set_next_event		= rtl819x_timer_set_next_event,
-	.set_state_oneshot	= rtl819x_set_state_oneshot,
-	.set_state_shutdown	= rtl819x_set_state_shutdown,
-};
-
 /* ========================================================================== */
 /* Driver Initialization */
 /* ========================================================================== */
@@ -255,52 +278,31 @@ static struct clock_event_device rtl819x_clockevent = {
  * rtl819x_timer_init - Initialize timer driver from device tree
  * @np: Device tree node
  *
- * Main initialization function:
- * - Maps hardware registers (using modern ioremap)
- * - Validates clock rate (prevents division by zero)
- * - Configures clock divider
- * - Initializes clocksource (Timer1)
- * - Registers clock event device (Timer0)
- * - Sets up interrupt handler (using modern request_irq)
+ * timer_of_init() maps the registers, enables the refclk and requests
+ * the IRQ; this function then programs the divider from the busclk,
+ * brings up the clocksource (Timer1), quiesces Timer0 and registers the
+ * clockevent. Every failure panics: this is the platform's only timer
+ * (audit TMR-006).
  *
- * Return: 0 on success, negative error code on failure
+ * Ordering note vs the pre-timer_of driver: request_irq() now happens
+ * *before* the Timer0 quiesce (it is part of timer_of_init), relaxing
+ * the v3.4.0 TMR-002 ordering. That is safe because the IRQ handler is
+ * self-contained against the window — see its kernel-doc.
+ *
+ * Return: 0 on success (any failure panics)
  */
 static int __init rtl819x_timer_init(struct device_node *np)
 {
-	struct resource res;
-	struct clk *clk;
 	unsigned long timer_rate;
 	u32 div_fac;
 	int ret;
 
-	if (of_address_to_resource(np, 0, &res))
-		panic("Failed to get resource for %s", np->name);
-
-	/* Use ioremap (not deprecated ioremap_nocache) */
-	rtl819x_timer_base = ioremap(res.start, resource_size(&res));
-	if (!rtl819x_timer_base)
-		panic("Failed to map memory for %s", np->name);
-
-	rtl819x_clockevent.name = np->name;
-	rtl819x_clockevent.irq = irq_of_parse_and_map(np, 0);
-	if (!rtl819x_clockevent.irq) {
-		pr_err("%s: Failed to map interrupt\n", np->name);
-		goto err_iounmap;
-	}
-	rtl819x_clockevent.cpumask = cpumask_of(0);
-
-	/* Get and validate clock */
-	clk = of_clk_get(np, 0);
-	if (IS_ERR_OR_NULL(clk))
-		panic("Cannot find reference clock for timer!\n");
-	ret = clk_prepare_enable(clk);
+	ret = timer_of_init(np, &to);
 	if (ret)
-		panic("Cannot enable reference clock for timer!\n");
-	timer_rate = clk_get_rate(clk);
-	if (unlikely(timer_rate == 0))
-		panic("Invalid timer rate!\n");
-	/* Clock stays enabled (timer runs forever), but release the reference */
-	clk_put(clk);
+		panic("Failed to init timer_of for %pOF: %d", np, ret);
+
+	to.clkevt.cpumask = cpumask_of(0);
+	timer_rate = timer_of_rate(&to);
 
 	{
 		struct clk *busclk;
@@ -313,7 +315,7 @@ static int __init rtl819x_timer_init(struct device_node *np)
 				if (!bus_rate)
 					bus_rate = 200000000;
 			}
-			clk_put(busclk);
+			/* Reference held forever (audit TMR-007). */
 		}
 		if (timer_rate > bus_rate)
 			panic("Invalid timer divider input: bus_rate=%u < timer_rate=%lu\n",
@@ -331,11 +333,9 @@ static int __init rtl819x_timer_init(struct device_node *np)
 		panic("Failed to register timer clocksource: %d\n", ret);
 
 	/*
-	 * Quiesce Timer0 before requesting the IRQ: clear any stale pending
-	 * bit (bootloader / soft-reset state) and disable both the timer and
-	 * its interrupt source. Without this an interrupt could fire as soon
-	 * as request_irq() unmasks the line, before clockevents has had a
-	 * chance to install its event_handler.
+	 * Quiesce Timer0 before exposing the clockevent to the core: clear
+	 * any stale pending bit (bootloader / soft-reset state) and disable
+	 * both the timer and its interrupt source.
 	 */
 	{
 		u32 ctrl, ir;
@@ -350,15 +350,6 @@ static int __init rtl819x_timer_init(struct device_node *np)
 		tc_w32(ir, REALTEK_TC_REG_IR);
 	}
 
-	/* Install IRQ handler before exposing the clockevent to the core */
-	ret = request_irq(rtl819x_clockevent.irq, rtl819x_timer_interrupt,
-			  IRQF_TIMER, np->name, &rtl819x_clockevent);
-	if (ret) {
-		pr_err("%s: Failed to request IRQ %d: %d\n",
-		       np->name, rtl819x_clockevent.irq, ret);
-		panic("Failed to setup timer interrupt!\n");
-	}
-
 	/*
 	 * min_delta is expressed in clock ticks at `timer_rate` Hz. We use 8
 	 * ticks because the slowclk rework (closing WDT-005) drops timer_rate
@@ -368,25 +359,14 @@ static int __init rtl819x_timer_init(struct device_node *np)
 	 * was fine at 25 MHz (~31 µs) but would force a 30 ms minimum at
 	 * 25 kHz — incompatible with HZ=250 scheduling.
 	 */
-	clockevents_config_and_register(&rtl819x_clockevent, timer_rate, 8,
+	clockevents_config_and_register(&to.clkevt, timer_rate, 8,
 					(1 << REALTEK_TIMER_RESOLUTION) - 1);
 
-	if (timer_rate >= 1000000)
-		pr_info("timer-rtl819x v" DRV_VERSION " (J. Nilo) - IRQ:%d, CLK:%lu.%03luMHz, mult:%d, shift:%d\n",
-			rtl819x_clockevent.irq,
-			timer_rate / 1000000, (timer_rate / 1000) % 1000,
-			rtl819x_clockevent.mult, rtl819x_clockevent.shift);
-	else
-		pr_info("timer-rtl819x v" DRV_VERSION " (J. Nilo) - IRQ:%d, CLK:%lu.%03lukHz, mult:%d, shift:%d\n",
-			rtl819x_clockevent.irq,
-			timer_rate / 1000, timer_rate % 1000,
-			rtl819x_clockevent.mult, rtl819x_clockevent.shift);
+	pr_info("timer-rtl819x v" DRV_VERSION " (J. Nilo) - IRQ:%d, CLK:%lu Hz, mult:%d, shift:%d\n",
+		timer_of_irq(&to), timer_rate,
+		to.clkevt.mult, to.clkevt.shift);
 
 	return 0;
-
-err_iounmap:
-	iounmap(rtl819x_timer_base);
-	return -EINVAL;
 }
 
 /* ========================================================================== */

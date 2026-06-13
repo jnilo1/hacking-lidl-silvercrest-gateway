@@ -1,10 +1,17 @@
 # rtl8196e-uart-bridge — design notes
 
+| | |
+|---|---|
+| **Last updated** | 2026-06-12 |
+| **Driver version** | 1.4 |
+| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`) |
+
 This document explains what the driver does, why it exists, and the key
 choices that shaped the stabilised code in
 `rtl8196e_uart_bridge_main.c`. The companion operator reference is
 [`README.md`](README.md); the SSH-tunnel hardening recipe lives in
-[`SECURITY.md`](SECURITY.md).
+[`SECURITY.md`](SECURITY.md); the code-level security and simplification
+review is [`AUDIT.md`](AUDIT.md).
 
 ## Scope
 
@@ -90,16 +97,21 @@ listen socket, one client at a time.
 The radio has exactly one consumer at any given moment — Z2M, `cpcd`,
 or `otbr-agent`. Supporting multiple simultaneous TCP clients would
 require duplicating the byte stream and tracking per-client state in a
-path that already runs on a tight CPU budget. The bridge accepts one,
-refuses additional connects until the first closes, and stops worrying
-about it. Clients that reconnect immediately after a disconnect simply
-win the next `kernel_accept()`.
+path that already runs on a tight CPU budget. The bridge serves one
+client at a time; a new connection **replaces** the current one — the
+old socket is released and the newcomer takes over (`"replacing
+previous client"` in the log). That is what lets a restarted Z2M /
+`cpcd` reclaim the bridge without operator action; the flip side is
+that any peer able to reach the port can evict the connected client at
+any time, which is part of why an untrusted segment calls for the
+loopback + SSH-tunnel deployment in `SECURITY.md` (see also
+AUDIT.md BRIDGE-002).
 
 ### Sysfs-only control interface
 
 All knobs (`tty`, `baud`, `port`, `bind_addr`, `flow_control`,
-`enable`, `nrst_pulse`, `nrst_gpio`, `status_led_brightness`) are
-exposed as module parameters under
+`enable`, `nrst_pulse`, `nrst_gpio`, `blmode_pulse`, `blmode_gpio`,
+`status_led_brightness`) are exposed as module parameters under
 `/sys/module/rtl8196e_uart_bridge/parameters/`. Writes are applied
 live — the set callbacks teardown and rebuild only the subsystem they
 touch (e.g. changing `baud` reconfigures `ktermios` without dropping
@@ -191,11 +203,12 @@ and takes the exact v1.1 single-send code otherwise.
 
 ### DT-seeded defaults (v1.2), module params still in charge
 
-Board ports kept patching the two genuinely board-specific knobs (nRST
-line, flow-control wiring), so v1.2 lets an optional `/radio-bridge` DT
-node seed their boot defaults (see README "Device tree configuration").
+Board ports kept patching the genuinely board-specific knobs (nRST
+line, flow-control wiring — and from v1.3 the bootloader-entry line,
+`blmode-gpios`), so v1.2 lets an optional `/radio-bridge` DT node seed
+their boot defaults (see README "Device tree configuration").
 The bridge stays a non-platform driver — converting a field-stable
-driver to platform binding for two values wasn't worth the churn; init
+driver to platform binding for a few values wasn't worth the churn; init
 just looks the node up by compatible. Explicit kernel-cmdline or sysfs
 writes always win over the DT (the param setters record an explicit
 write; built-in modules apply cmdline params before `late_initcall`).
@@ -213,6 +226,30 @@ sources. The pad mux to GPIO mode comes for free from the gpio-rtl819x
 `request()` hook, and the line is claimed per pulse, so it stays free
 for other consumers between pulses and `nrst_gpio` changes take effect
 on the next pulse without driver state.
+
+### blmode pulse (v1.3) — bootloader entry stays a separate trigger
+
+Boards that wire the EFR32 bootloader-entry pin to a SoC GPIO (the
+Sengled G4; the Lidl board has none) get `blmode_pulse`
+(discussions #123/#126): assert `blmode_gpio` → nRST pulse as above →
+hold blmode 5 s across the Gecko bootloader's pin-sampling window →
+release. Both lines are claimed per pulse with the same open-drain
+semantics; `blmode_gpio` defaults to -1 ("no such pin", the trigger
+returns `-ENODEV`) and is DT-seeded from `blmode-gpios`.
+
+The design decision worth recording: this is deliberately **not**
+folded into `nrst_pulse`. `nrst_pulse` must keep meaning "reset into
+the application" — `flash_efr32.sh` and `recover_efr32` depend on it
+after a flash — so a presence-of-blmode-gpios behaviour switch would
+leave a blmode-wired board unable to ever start its application. Two
+knobs, two meanings. The sequence holds `nrst_pulse_lock` for ~5.1 s;
+a concurrent pulse writer just waits, the UART→TCP hot path is
+untouched (the lock is never taken there). One system-level nuance
+(AUDIT.md BRIDGE-003): the kernel serializes every built-in module's
+sysfs parameter access on a single global lock (`kernel/params.c`), so
+during the 5.1 s sequence *all* built-in param reads/writes — including
+this driver's own `stats` — queue behind it. Only the hot path is
+truly unaffected.
 
 Driver v1.0 instead set PIN_MUX_SEL_2 bits {7,10,13} — three separate
 mux fields copied wholesale from the chip's reset-default value — which

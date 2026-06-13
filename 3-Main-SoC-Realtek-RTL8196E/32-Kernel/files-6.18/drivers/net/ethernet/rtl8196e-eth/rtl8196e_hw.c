@@ -480,7 +480,6 @@ int rtl8196e_hw_vlan_setup(struct rtl8196e_hw *hw, u16 vid, u8 fid,
 	int ret;
 	u32 port;
 
-	(void)hw;
 	if (vid == 0 || vid >= 4096)
 		return -EINVAL;
 
@@ -526,7 +525,6 @@ int rtl8196e_hw_netif_setup(struct rtl8196e_hw *hw, const u8 *mac, u16 vid,
 	u32 port;
 	int ret;
 
-	(void)hw;
 	if (!mac || vid == 0 || vid >= 4096 || mtu < 576)
 		return -EINVAL;
 
@@ -572,7 +570,6 @@ int rtl8196e_hw_init_phy(struct rtl8196e_hw *hw, int port, int phy_id)
 	u16 bmcr;
 	int ret;
 
-	(void)hw;
 	if (port < 0 || phy_id < 0)
 		return -EINVAL;
 
@@ -596,7 +593,6 @@ bool rtl8196e_hw_link_up(struct rtl8196e_hw *hw, int port)
 {
 	u32 status;
 
-	(void)hw;
 	if (port < 0)
 		return false;
 
@@ -614,7 +610,6 @@ void rtl8196e_hw_link_status(struct rtl8196e_hw *hw, int port,
 	u32 status;
 	u32 spd;
 
-	(void)hw;
 	if (port < 0) {
 		if (link) *link = false;
 		if (speed_mbps) *speed_mbps = -1;
@@ -651,7 +646,6 @@ void rtl8196e_hw_l2_setup(struct rtl8196e_hw *hw)
 	u32 port;
 	u32 pcr;
 
-	(void)hw;
 	swtcr1 = rtl8196e_readl(SWTCR1);
 	swtcr1 |= ENNATT2LOG | ENFRAGTOACLPT;
 	rtl8196e_writel(swtcr1, SWTCR1);
@@ -709,7 +703,6 @@ void rtl8196e_hw_l2_trap_enable(struct rtl8196e_hw *hw)
 	u32 ffcr;
 	u32 cscr;
 
-	(void)hw;
 	swtcr = rtl8196e_readl(SWTCR0);
 	swtcr &= ~LIMDBC_MASK;
 	swtcr |= LIMDBC_VLAN | NAPTF2CPU;
@@ -734,7 +727,6 @@ int rtl8196e_hw_l2_add_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid, 
 	u32 word1;
 	u32 member;
 
-	(void)hw;
 	if (!mac)
 		return -EINVAL;
 
@@ -780,7 +772,6 @@ int rtl8196e_hw_l2_check_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid
 	int ret;
 	int tries;
 
-	(void)hw;
 	if (!mac)
 		return -EINVAL;
 
@@ -814,7 +805,6 @@ int rtl8196e_hw_l2_check_cpu_entry(struct rtl8196e_hw *hw, const u8 *mac, u8 fid
 void rtl8196e_hw_start(struct rtl8196e_hw *hw)
 {
 	u32 icr = TXCMD | RXCMD | BUSBURST_32WORDS | MBUF_2048BYTES | EXCLUDE_CRC;
-	(void)hw;
 	rtl8196e_writel(icr, CPUICR);
 	/* Start TX/RX after rings and CPUICR are set */
 	rtl8196e_writel(TRXRDY, SIRR);
@@ -824,7 +814,6 @@ void rtl8196e_hw_start(struct rtl8196e_hw *hw)
 void rtl8196e_hw_stop(struct rtl8196e_hw *hw)
 {
 	u32 icr = rtl8196e_readl(CPUICR);
-	(void)hw;
 	icr &= ~(TXCMD | RXCMD);
 	rtl8196e_writel(icr, CPUICR);
 	rtl8196e_writel(0, SIRR);
@@ -838,7 +827,6 @@ void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 	 * Do NOT apply rtl8196e_uncached_addr() again — the OR is idempotent
 	 * but masks a conceptual error about who owns the address conversion.
 	 */
-	(void)hw;
 	rtl8196e_writel((u32)pkthdr, CPURPDCR0);
 	rtl8196e_writel((u32)pkthdr, CPURPDCR1);
 	rtl8196e_writel((u32)pkthdr, CPURPDCR2);
@@ -852,7 +840,6 @@ void rtl8196e_hw_set_rx_rings(struct rtl8196e_hw *hw, void *pkthdr, void *mbuf)
 void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 {
 	/* Caller passes a KSEG1 pointer — do not double-convert */
-	(void)hw;
 	rtl8196e_writel((u32)pkthdr, CPUTPDCR0);
 }
 
@@ -864,13 +851,11 @@ void rtl8196e_hw_set_tx_ring(struct rtl8196e_hw *hw, void *pkthdr)
 void rtl8196e_hw_enable_irqs(struct rtl8196e_hw *hw)
 {
 	u32 mask = RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL;
-	(void)hw;
 	rtl8196e_writel(mask, CPUIIMR);
 }
 
 /* Mask all interrupts by writing 0 to CPUIIMR. */
 void rtl8196e_hw_disable_irqs(struct rtl8196e_hw *hw)
 {
-	(void)hw;
 	rtl8196e_writel(0, CPUIIMR);
 }

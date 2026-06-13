@@ -57,7 +57,7 @@ rtl819x-wdt 1800311c.watchdog: last reset: power-on / pin reset (WDTCNR=0x...)
 rtl819x-wdt 1800311c.watchdog: bringup register dump (sysc+0x3100..0x3120):
 rtl819x-wdt 1800311c.watchdog:   +0x3100: 0x........
 ... 9 lines ...
-rtl819x-wdt 1800311c.watchdog: v1.1 (J. Nilo) - timeout:60s, nowayout:0
+rtl819x-wdt 1800311c.watchdog: v1.6 (J. Nilo) - timeout:60s, nowayout:0
 ```
 
 If `last reset:` reads `watchdog timeout` you are looking at a fresh
@@ -84,6 +84,17 @@ rtl819x-wdt
 # cat /sys/class/watchdog/watchdog0/status
 0x8000     # 0x8000 = WDOG_HW_RUNNING — the chip was already armed at probe
 ```
+
+Notes (v1.6):
+
+- `max_timeout` reads `0` — the driver declares the fixed ~671 s
+  hardware window as `max_hw_heartbeat_ms` instead, so the framework
+  accepts any soft timeout ≥ 1 s and bridges values beyond the window
+  with its own pings.
+- There is no `timeleft` attribute (and `WDIOC_GETTIMELEFT` returns
+  `EOPNOTSUPP`): the hardware has no readable countdown, and earlier
+  versions answered with the constant `timeout`, which was not a
+  time-left.
 
 ### 4. The feeder is running
 

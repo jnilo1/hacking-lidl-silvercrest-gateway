@@ -230,11 +230,12 @@ and verification steps: [`SECURITY.md`](SECURITY.md).
 
 | File | Role |
 |---|---|
-| `rtl8196e_uart_bridge_main.c` | driver source (~1400 lines, single file) |
+| `rtl8196e_uart_bridge_main.c` | driver source (~1800 lines, single file) |
 | `Kconfig` / `Makefile` | in-tree build glue |
 | `README.md` | this file |
 | `DESIGN.md` | rationale + design notes (what was built and why) |
 | `SECURITY.md` | SSH-tunnel deployment and threat model |
+| `AUDIT.md` | dated security / simplification audit (finding IDs BRIDGE-*) |
 
 The driver header comment at the top of `rtl8196e_uart_bridge_main.c`
 is the authoritative reference for the sysfs knobs and their runtime

@@ -63,7 +63,7 @@
 #include <net/tcp.h>
 
 #define DRV_NAME    "rtl8196e-uart-bridge"
-#define DRV_VERSION "1.3"
+#define DRV_VERSION "1.4"
 
 /* Software flow control bytes (flow_control=sw): sent bare by a radio
  * firmware built for XON/XOFF (e.g. NCP-UART-SW); such firmware escapes
@@ -71,6 +71,21 @@
 #define BRIDGE_XON  0x11
 #define BRIDGE_XOFF 0x13
 
+/*
+ * Guards all bridge_state transitions and the UART->TCP hot path.
+ *
+ * Config-transition atomicity (audit BRIDGE-001 / S01): the disarm and
+ * relisten paths drop this mutex around blocking teardown
+ * (kernel_sock_shutdown / kthread_stop) and retake it to finish clearing
+ * state. Nothing rebuilds a consistent config view inside that window.
+ * Today this is safe ONLY because every entry point that can mutate the
+ * configuration is a built-in module-param setter, and kernel/params.c
+ * serializes all built-in param sysfs access on one global `param_lock`
+ * mutex — two setters can never interleave. If a non-param entry point
+ * (ioctl, netlink, platform-driver bind, ...) is ever added, it will NOT
+ * hold param_lock and the mid-teardown window becomes a live race:
+ * introduce a dedicated config mutex held across whole transitions first.
+ */
 static DEFINE_MUTEX(bridge_lock);
 /*
  * Serializes nrst_pulse and blmode_pulse callers without blocking the
@@ -79,9 +94,12 @@ static DEFINE_MUTEX(bridge_lock);
  * latter holds it ~5.1 s — a concurrent pulse writer just waits);
  * bridge_lock is never taken there, so bridge_port_receive_buf() can
  * keep forwarding bytes to any TCP client still connected (the radio
- * reset is expected to drop in-flight bytes on the wire, but it should
- * not stall a concurrent stats reader or receive_buf invocation that
- * holds no relation to the reset).
+ * reset is expected to drop in-flight bytes on the wire, but it must
+ * not stall a concurrent receive_buf invocation that holds no relation
+ * to the reset). Note that sysfs readers are NOT protected by this
+ * design: every built-in param read shares the global param_lock in
+ * kernel/params.c, so `cat stats` still blocks for the duration of a
+ * pulse (~100 ms nrst, ~1.1 s blmode) — audit BRIDGE-003.
  * Also guards rtl_nrst_gpio and rtl_blmode_gpio, read by the pulse paths.
  */
 static DEFINE_MUTEX(nrst_pulse_lock);
@@ -394,7 +412,7 @@ static int bridge_worker_thread(void *data)
 
 			state.client_sock = NULL;
 			mutex_unlock(&bridge_lock);
-			pr_info(DRV_NAME ": replacing previous client\n");
+			pr_info_ratelimited(DRV_NAME ": replacing previous client\n");
 			sock_release(old);
 			mutex_lock(&bridge_lock);
 			/* Re-check after we released the lock for sock_release:
@@ -426,10 +444,10 @@ static int bridge_worker_thread(void *data)
 
 			if (kernel_getpeername(newsock,
 					       (struct sockaddr *)&peer) >= 0)
-				pr_info(DRV_NAME ": client connected from %pI4:%u\n",
+				pr_info_ratelimited(DRV_NAME ": client connected from %pI4:%u\n",
 					&peer.sin_addr, ntohs(peer.sin_port));
 			else
-				pr_info(DRV_NAME ": client connected\n");
+				pr_info_ratelimited(DRV_NAME ": client connected\n");
 		}
 
 		/* ---- phase 2: TCP -> UART shovel ---- */
@@ -510,7 +528,7 @@ static int bridge_worker_thread(void *data)
 		}
 
 		/* ---- disconnect: release the client if still ours ---- */
-		pr_info(DRV_NAME ": client disconnected (recvmsg=%d%s)\n",
+		pr_info_ratelimited(DRV_NAME ": client disconnected (recvmsg=%d%s)\n",
 			last_recv, last_recv == 0 ? " EOF" : "");
 		/* Extinguish the STATUS LED. A replace-client path clears
 		 * state.client_sock under lock then re-lights it on the new
@@ -825,6 +843,9 @@ static void bridge_disarm_locked(void)
 
 	/* Drop the mutex before blocking on socket shutdown / kthread_stop
 	 * so we don't deadlock with receive_buf (which grabs the same lock).
+	 * Only the global built-in param_lock makes this drop-and-retake
+	 * window safe against concurrent config writers — see the
+	 * bridge_lock definition comment (audit BRIDGE-001).
 	 */
 	mutex_unlock(&bridge_lock);
 
@@ -1441,7 +1462,7 @@ static const struct kernel_param_ops nrst_gpio_ops = {
  * universal-silabs-flasher) keep blmode_gpio at -1 and get -ENODEV here.
  * Like nrst_pulse, the caller is responsible for stopping the radio
  * daemon first, and the chip is left sitting in the Gecko bootloader
- * (Xmodem @ 38400, no flow control) until the next nrst_pulse or
+ * (Xmodem @ 115200, no flow control) until the next nrst_pulse or
  * bootloader-driven application launch.
  */
 static struct gpiod_lookup_table blmode_lookup = {

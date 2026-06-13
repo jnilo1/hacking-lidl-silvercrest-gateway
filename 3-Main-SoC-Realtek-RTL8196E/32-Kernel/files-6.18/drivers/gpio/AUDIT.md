@@ -1,139 +1,253 @@
-# RTL8196E GPIO driver — robustness / API audit
+# RTL8196E GPIO driver (`gpio-rtl819x`) — security & code audit
 
-Target: Linux 6.18 port of the `gpio-rtl819x` GPIO bank driver for the
-Realtek RTL8196E SoC. Exposes 32 GPIOs (4 ports × 8 bits) via gpiolib,
-with PIN_MUX_SEL_2 (syscon offset `0x44`) pinmux for B2-B6 shared with
-the LED ports.
+| | |
+|---|---|
+| **Audit date** | 2026-06-11 (updated 2026-06-12: GPIO-007 closed by `rtl8196e-eth` v2.7; GPIO-008 + S-batch implemented, v1.1/v1.2) |
+| **Driver version** | **1.2** (`DRV_VERSION` in `gpio-rtl819x.c`, `MODULE_VERSION`) |
+| **Active release** | **v3.10.0** (kernel `6.18.35-rtl8196e-v3.10.0`); v1.1/v1.2 unreleased |
+| **Audited artifacts** | `gpio-rtl819x.c` (this directory); DT nodes `gpio0` (`rtl819x.dtsi`) and the board-side `&gpio0` overrides incl. `gpio-line-names` (`rtl8196e.dts`); gpiolib config (`CONFIG_GPIO_RTL819X=y`, `GPIO_CDEV=y`, `GPIO_SYSFS=y`, `GPIO_SYSFS_LEGACY` unset, `GPIO_CDEV_V1` unset); cross-driver writers of `PIN_MUX_SEL_2` (syscon `0x44`) in `rtl8196e-eth` and the 8250/uart-bridge history |
 
-Audit date: 2026-05-01. Driver version at audit time: pre-`1.0`
-(unversioned) → bumped to `1.0` as part of this pass.
+This audit **supersedes and replaces** the previous `AUDIT.md`
+(2026-05-01, pre-v3.5.0). It is a fresh audit of the current code. Legacy
+finding IDs GPIO-001…GPIO-006 are preserved in the registry at the end
+(GPIO-003 is cited as the match-table convention from other drivers'
+audits); their fixes/dispositions were re-verified against the current
+source.
 
-The driver is short (~300 lines) and already carefully scoped:
-single-port MMIO + syscon regmap, no DMA, no buffers, no IRQ chip on
-this bank (gpiolib `to_irq` not implemented — out of scope per the
-audit). Audit focus was on the gpiolib lifecycle alignment with modern
-6.x conventions, error propagation through the pinmux path, and DT
-match-table tightness.
+Audit questions, per the project audit charter:
 
-## Summary of findings
+1. **Security** — does the driver introduce exploitable flaws?
+2. **Simplification / optimization** — can the code be simplified or
+   optimized for the Linux 6.18 APIs it targets?
 
-6 findings total. 3 fixed in driver `1.0`, 3 deferred (intentional
-limitations or hardware-test-required).
+---
 
-| ID | Type | Severity | Confidence | Status | One-liner |
-|----|------|----------|------------|--------|-----------|
-| GPIO-001 | API / ROBUSTNESS | medium | certain | **fixed** | `gc.base = 0` (deprecated legacy global numbering) |
-| GPIO-002 | ROBUSTNESS / PLATFORM | medium | probable | **fixed** | `regmap_update_bits` return ignored in pinmux path |
-| GPIO-003 | PLATFORM / API | medium | certain | **fixed** | `of_match_table` accepted overly-broad compatibles |
-| GPIO-004 | ROBUSTNESS / API | low | certain | **deferred** | no IRQ chip exposed despite ISR/IMR registers — needs HW spec |
-| GPIO-005 | PLATFORM / ROBUSTNESS | low | hypothesis | **deferred** | shared B2 hardwired to switch ASIC LED — board-specific concern |
-| GPIO-006 | ROBUSTNESS / PLATFORM | low | probable | **deferred** | `free()` does not restore pinmux — needs policy decision |
+## 1. Security audit
 
-## Applied fixes — driver 1.0
+### 1.1 Attack surface
 
-All commits on `private/main` between `d815c54..4c7d029`. Detailed
-mapping:
+| Surface | Exposure | Assessment |
+|---|---|---|
+| `/dev/gpiochip0` (cdev v2 only — `GPIO_CDEV_V1` unset) | `crw------- root root` (0600) | Root-only. All offsets are validated by the gpiolib core (`offset < ngpio`) before any driver op runs; line claims are exclusive. |
+| sysfs | `GPIO_SYSFS=y` but the deprecated export/unexport ABI is compiled out (`GPIO_SYSFS_LEGACY` unset) | Read-only class info; no line manipulation path. |
+| Module parameters / ioctls / procfs | none | Driver adds zero interfaces beyond gpiolib. |
+| syscon `0x44` writes | fixed masks/values selected by a `switch` on the (core-validated) offset | No user-controlled value ever reaches the regmap write. |
 
-### GPIO-001 — dynamic GPIO base (-1) instead of hardcoded 0
+The driver parses no input, owns no buffers, does no DMA, and never
+copies to/from userspace. **No trust boundary is crossed.** Root misuse
+of a GPIO (e.g. toggling `efr32-nrst` by hand) is a root capability by
+design, not a flaw.
 
-Commit `d815c54`. The driver pinned `gc.base = 0`, which is the legacy
-global GPIO numbering pattern that struct gpio_chip in 6.x explicitly
-deprecates (non-negative bases). All in-tree DT consumers go through
-phandles (`<&gpio0 N ...>`), so a fixed base provides no benefit and
-risks collisions if a second gpiochip is ever added downstream.
+### 1.2 Internal correctness re-verified (current code)
 
-Switch to `gc.base = -1` to let gpiolib allocate the chip range
-dynamically. Verified: `rtl8196e.dts` (the only board using this
-driver) references the status LED via `<&gpio0 11 ...>` and never as
-a global GPIO number.
+- **Locking** — all RMW sequences (CNR, DIR, DATA) run under
+  `spin_lock_irqsave`; `.get` is a single lock-free `readl` (safe);
+  `can_sleep = false` is honest (no sleeping calls in any op — the
+  syscon regmap is MMIO-backed `fast_io`). Callable from atomic
+  consumers (LED triggers) without violation. Verified.
+- **Glitch-free output** — `direction_output` writes DATA before
+  flipping DIR. Verified.
+- **Open-drain consumers** — the chip has no native open-drain;
+  gpiolib's emulation (drive-low = output-0, release = input) maps onto
+  this driver's `direction_*` ops, which is exactly how the uart-bridge's
+  `nrst-gpios` (`GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN`) is operated.
+  Bench-verified by the discussion #121 nRST work. Verified.
+- **Pinmux error propagation (GPIO-002)** — still present: a failed
+  `regmap_update_bits` fails the `request()` with `dev_err`. Verified.
+- **Match-table tightness (GPIO-003)** — single
+  `realtek,rtl8196e-gpio` compatible; the PIN_MUX_SEL_2 field layout the
+  driver writes is RTL8196E-specific, so the narrowing is load-bearing
+  for the multi-board era. Verified.
+- **No torn RMW on `0x44`** — every kernel writer of PIN_MUX_SEL_2
+  (this driver, `rtl8196e-eth`) goes through the *same* syscon regmap,
+  whose internal lock serializes read-modify-writes. The 8250 driver
+  touches `0x40` only, and the uart-bridge delegated its B4 mux to this
+  driver in v1.1. No data race — but see GPIO-007 for the *policy* race.
 
-### GPIO-002 — propagate regmap_update_bits error from pinmux setup
+### 1.3 Security verdict
 
-Commit `73caf82`. `rtl819x_gpio_configure_pinmux()` returned `void`
-and the `regmap_update_bits()` return was discarded. A syscon write
-failure would silently leave a B2-B6 line with its LED_PORT mux still
-in peripheral mode while the GPIO request reported success — gpiolib
-would then hand out a line whose physical pin still drives the
-shared LED function.
+**No vulnerability found.** Root-only surface, core-validated inputs,
+constant-mask syscon writes. The findings below are functional
+robustness, not security.
 
-Plumb a real return code through `configure_pinmux()` and surface it
-from `.request()`, with a `dev_err()` so the failure shows up in
-dmesg. Also pulled the pinmux call out from under `rg->lock`:
-regmap-syscon on RTL8196E is `fast_io` (MMIO-backed, no sleep) so
-nesting the locks bought nothing, and the GPIO MMIO RMW below already
-has its own protection.
+---
 
-### GPIO-003 — match only realtek,rtl8196e-gpio compatible
+## 2. New findings (this audit)
 
-Commit `a465e14`. The driver header explicitly states that the
-PIN_MUX_SEL_2 layout it writes (offset `0x44`, B2-B6 fields) is
-RTL8196E-specific and may differ on RTL8196C / RTL8197F. Yet the
-`of_match_table` accepted three strings, including the generic
-`realtek,realtek-gpio` and `realtek,rtl819x-gpio`. A future DTS
-targeting another RTL819x variant could therefore bind this driver
-and corrupt syscon bits that mean something completely different
-(UART / Ethernet / LED mux).
+| ID | Type | Severity | One-liner |
+|----|------|----------|-----------|
+| GPIO-007 | FUNCTIONAL / CROSS-DRIVER | **medium** | *(closed by eth v2.7)* `rtl8196e-eth` re-cleared the B4/B5/B6 mux fields of `0x44` on **every `ndo_open`** — an `ifconfig eth0 down/up` after boot silently un-muxed GPIO lines this driver believes it owns (incl. `efr32-nrst`) |
+| GPIO-008 | ROBUSTNESS | low | with the syscon absent, `request()` on a mux-requiring line (B2–B6) silently succeeds while the pad stays in peripheral mode — one probe-time warning is the only trace |
 
-Tighten the match table to the exact `realtek,rtl8196e-gpio` string
-and update the `rtl819x.dtsi` base node accordingly. The board file
-`rtl8196e.dts` only references `gpio0` by phandle, so no consumer
-breaks.
+### GPIO-007 — last-writer-wins on PIN_MUX_SEL_2 across drivers
 
-### Version bump 1.0 + probe banner
+The mux fields this driver sets at `request()` time —
+B4 `[7:6]`, B5 `[10:9]`, B6 `[13:12]` = `0b11` for GPIO mode — are
+**cleared to 0** by `rtl8196e_hw_init()` in
+`drivers/net/ethernet/rtl8196e-eth/rtl8196e_hw.c` ("clear MII/nRST-related
+bits"), and that function is called from **`rtl8196e_open()`**, i.e. on
+every interface up, not once at probe. The eth code deliberately
+preserves B2 `[1:0]` / B3 `[4:3]` (the LED lines) but knows nothing about
+B4–B6 ownership.
 
-Commit `4c7d029`. Added `DRV_VERSION "1.0"`, exposed via
-`MODULE_VERSION`, and tagged the probe `dev_info()` with it.
+Boot ordering hides the problem: eth comes up first, the uart-bridge
+requests GPIO 12 (`efr32-nrst`, pad B4) afterwards and re-muxes it. But
+any later `ifconfig eth0 down && ifconfig eth0 up` (operator debugging, a
+DHCP/network script) re-clears `[7:6]` while the bridge still holds the
+line: gpiolib still shows the GPIO as owned and operations still write
+DATA/DIR, yet the pad is electrically disconnected from the GPIO block.
+First observable symptom would be `flash_efr32.sh` / bridge `nrst_pulse`
+no longer resetting the radio — silent and far from the cause. On a
+Sengled G4 port the same clobber hits B6 (`reset-button`), killing the
+button after an eth flap.
 
-## Deferred — intentional or HW-test-required
+There is no pinctrl subsystem on this platform; `0x40`/`0x44` are shared
+by convention only.
 
-### GPIO-004 — no IRQ chip exposed
+**Recommendation** (primary fix lands in the eth driver — this finding
+will be cross-referenced by the eth audit):
 
-The bank has `ISR` (offset `0x10`) and `IMR` (offset `0x14`) registers
-documented in the header but not wired through gpiolib. No `to_irq`,
-no `gpio_irq_chip`, no handler. Consumers that want to use a GPIO as
-an interrupt source (e.g. a future button on a physical line other
-than the front-panel one — which uses GPIO 9 polled from userspace
-via `s40button`) cannot.
+- *Minimal:* in `rtl8196e_hw_init()`, preserve any B4/B5/B6 field that
+  currently reads `0b11` (GPIO mode) — i.e. only clear fields still in a
+  peripheral state. Mirrors the existing B2/B3 preservation.
 
-Not implemented in 1.0 because the audit's own recommendation was
-"no patch without HW characterisation" — polarity, edge-vs-level,
-clear semantics, parent IRQ all need to be confirmed against the
-RTL8196E datasheet (which we do not have authoritatively). An
-approximate irqchip risks interrupt storm or lost edges, much worse
-than the current "no IRQ" state. Revisit when the use-case materialises.
+**Resolution (eth v2.7, v3.11.0-pre).** Closed in `rtl8196e-eth` v2.7 by
+a stronger variant: ownership comes from the DT contract instead of the
+current register value. `hw_init()` derives every B2–B6 field from this
+driver's node `gpio-line-names` — named pad → `0b11` (GPIO), unnamed →
+`0b00` (LED_PORTn). An eth flap now *re-asserts* the same `0b11` the
+`request()` hook set, so held lines stay electrically connected, and
+named on-demand lines (nRST, blmode) are GPIO-muxed deterministically
+from boot. Residual (v2.7): a line claimed via the cdev *without* a DTS
+name still got `0b00` on every open — closed by eth v2.8
+(`realtek,led-pads` on this node): only declared LED pads get `0b00`,
+every other unnamed pad is left `0b11` as unclaimed GPIO (Hi-Z), so an
+anonymous cdev claim survives an eth flap too. The GPIO-006 interaction
+note stands: any future
+`free()`-time restore logic must stay consistent with the line-names
+rule, not fight it.
+- *Alternative:* move the eth mux write to probe-only (it corrects
+  bootloader defaults; nothing re-breaks them at runtime).
+- *Defense in depth (this driver):* re-assert the pinmux in
+  `direction_*`/`set` is **not** recommended (hot-path regmap traffic);
+  a cheap option is re-asserting in `request()` only, which is already
+  the case — the gap is external clobbering of *held* lines, which only
+  the eth-side fix closes.
 
-### GPIO-005 — `valid_mask` for shared / hardwired pins
+### GPIO-008 — silent no-mux degradation when syscon is missing
 
-GPIO 10 (B2) is documented in the DTSI as hardwired to the switch
-ASIC LED output and has no physical effect when driven as a regular
-GPIO. Other B2-B6 pins are shared with LED_PORT0..4. The audit
-suggested `gpio-reserved-ranges` or `init_valid_mask` to filter them
-out.
+`probe()` warns once ("no syscon, LED GPIOs may not work") and then
+`configure_pinmux()` returns success-without-action for every B2–B6
+request. A consumer of `status-led` (B3) or `efr32-nrst` (B4) gets a
+fully-functional-looking GPIO whose pad never left peripheral mode. On
+the production DT the syscon phandle always resolves, so this is a
+DT-regression guard, not a field bug.
 
-Not applied in 1.0 because masking is board-specific and affects
-operator workflows on adjacent boards using the same SoC. The current
-behaviour (any GPIO request succeeds, pinmux is configured if needed)
-is permissive but not unsafe. Revisit if a concrete misuse is observed.
+**Recommendation.** Return `-ENODEV` from `configure_pinmux()` for
+offsets 10–14 when `rg->syscon` is NULL (with a per-call `dev_err`), so
+a mis-wired board DTS fails loudly at the first consumer instead of
+shipping a dead LED/button. Three lines.
 
-### GPIO-006 — `free()` does not restore pinmux
+**Resolution (v1.1).** Implemented as recommended: the syscon NULL check
+moved after the offset switch, so only mux-requiring offsets (10–14) hit
+the `-ENODEV` + `dev_err` path; everything else is unaffected. On the
+production DT the path is never taken — bench boot is unchanged.
 
-Once a B2-B6 line is requested in GPIO mode, it stays in GPIO mode
-even after gpiolib's `free()`. The audit suggested capturing the
-initial state at `request()` and restoring on `free()`, but a
-simplistic rollback could break a permanent consumer. Needs a policy
-decision (per-board?) before being implemented.
+---
 
-## Validation
+## 3. Simplification & optimization for kernel 6.18
 
-* Probe banner `gpio-rtl819x ... v1.0 (J. Nilo) - registered 32 GPIOs`.
-* `/sys/class/gpio/` shows `chip0` with the dynamic base allocation
-  (no longer pinned at 0).
-* LED status (GPIO 11 via `leds-gpio-pwm`) toggles as expected through
-  `/sys/class/leds/status/brightness`.
-* Probe rebind / module unload test not run (driver is built-in via
-  `module_platform_driver` but `CONFIG_GPIO_RTL819X=y`); devm cleanup
-  is correct by inspection.
+The driver is already idiomatic 6.x where it counts: `devm_*` lifecycle,
+`gpio_chip` with int-returning `.set` (the 6.x conversion), dynamic base
+(`-1`), DT `gpio-line-names` consumed by the core, exact compatible. The
+ops are single-register RMWs — nothing to optimize for speed. Candidates:
 
-## How this maps to the public release
+| ID | Item | Gain |
+|----|------|------|
+| GPIO-S01 | Convert get/set/direction ops to **`GPIO_GENERIC`/`bgpio_init()`** (`gpio-mmio`): DATA at 0x0C, DIR at 0x08 (1=out) is exactly the bgpio register model. Keep only the custom `.request` (CNR + pinmux). `CONFIG_GPIO_GENERIC=y` is already in the config — zero config cost | −~120 lines of hand-rolled RMW; `get_multiple`/`set_multiple` for free; bgpio's own spinlock replaces ours. *The one structural modernization* — schedule with hardware re-validation (LED, button, nRST pulse) |
+| GPIO-S02 | (If not doing S01) drop the spinlock around the single `readl` in `get_direction` — reads don't race writes on a 32-bit MMIO register | micro |
+| GPIO-S03 | `devm_platform_ioremap_resource(pdev, 0)` replaces the `platform_get_resource()` + `devm_ioremap_resource()` pair | −3 lines, canonical idiom |
+| GPIO-S04 | Drop `platform_set_drvdata()` — never read back | dead line |
+| GPIO-S05 | Drop `<linux/of_device.h>` (nothing used from it; the header is being dismantled upstream) and probably `<linux/of.h>` (no direct `of_*` call — pointer-only use of `of_node`) | include hygiene; verify with a build |
+| GPIO-S06 | **Reformat to kernel style**: the file is indented with 4 spaces throughout, unlike every sibling driver (tabs); checkpatch flags ~all lines | consistency; do it as a standalone whitespace-only commit so functional diffs stay readable |
+| GPIO-S07 | Align the IMR defines with the header comment: `REG_IMR 0x14` is PAB only; PCD_IMR at 0x18 is undeclared. Both unused until GPIO-004 — either declare the pair or drop the lone define | doc/code drift removal |
 
-Driver `1.0` ships in **v3.4.0**.
+**Considered and rejected:** implementing `set_config` for open-drain —
+the hardware has no OD mode and gpiolib's emulation is exactly right for
+the single OD consumer (nRST); a fake native OD would change semantics
+for no gain.
+
+GPIO-S02…S05/S07 are safe to batch with the GPIO-008 fix (with a
+`DRV_VERSION` bump). GPIO-S01 and GPIO-S06 each deserve their own commit;
+S06 (whitespace) should precede any functional series.
+
+**Implementation status (2026-06-12).** Landed in the audit's prescribed
+order, three commits:
+
+1. *S06* — standalone retab (tabs, continuation alignment fixed for
+   tab=8); proven whitespace-only (`diff -w` empty, rebuilt `.o`
+   byte-identical).
+2. *v1.1* — GPIO-008 (+`-ENODEV`), S03 (`devm_platform_ioremap_resource`),
+   S04 (drvdata dropped), S05 (`of.h`/`of_device.h` dropped,
+   `mod_devicetable.h` added — build-verified), S07 (IMR pair declared:
+   `PAB_IMR` 0x14 / `PCD_IMR` 0x18, matching the header comment).
+   Bench: probe clean, LED + bridge nRST claim nominal.
+3. *v1.2 (S01)* — `gpio_generic_chip` conversion. Note: 6.18 replaced
+   the classic `bgpio_init()` with `gpio_generic_chip_init()` +
+   `struct gpio_generic_chip_config` (`<linux/gpio/generic.h>`); the
+   register model is the same (`dat` 0x0C, `dirout` 0x08, sz 4, no
+   set/clr registers → shadowed-write variant). Verified before
+   converting that the generic default `direction_output` is the
+   *value-first* variant — preserving the glitch-free DATA-before-DIR
+   contract (the dir-first variant is only selected by
+   `GPIO_GENERIC_NO_SET_ON_INPUT`, which we must never pass).
+   `GPIO_RTL819X` now `select`s `GPIO_GENERIC` (Kconfig patch). −67
+   net lines; S02 (lock-free `get_direction`) obsoleted by the
+   conversion. **Hardware re-validation gate passed** on the Lidl
+   board: LED duty bands by DATA-register sampling (0 → 40/40 off,
+   255 → 0/40, 128 → 21/40 ≈ 50 %), button via the s40button cdev path
+   (line claimed, daemon running), nRST pulse answered by the EFR32's
+   spontaneous ASH RSTACK (`1a c102029b7b 7e`) — the open-drain
+   emulation drives through the generic direction ops.
+
+---
+
+## 4. Finding ID registry (complete)
+
+Details of GPIO-001…GPIO-006 live in this repo's git history
+(pre-v3.10.0 AUDIT.md). Dispositions re-checked 2026-06-11.
+
+| ID | Status | One-liner |
+|----|--------|-----------|
+| GPIO-001 | closed (v3.4.0) | dynamic base (`-1`) instead of deprecated `base = 0` |
+| GPIO-002 | closed (v3.4.0) | pinmux `regmap_update_bits` error propagated from `.request()` |
+| GPIO-003 | closed (v3.4.0) | match table narrowed to `realtek,rtl8196e-gpio` (cited as the per-SoC convention by the wdt/clocksource audits) |
+| GPIO-004 | open — deferred | no irqchip despite ISR/IMR registers. Update 2026-06-11: the original blocker ("no authoritative datasheet") is partially lifted (RTL8196E-CG datasheet now in hand, cf. Table 36 cites), but the use-case is still absent — `s40button` v2 polls via cdev at trivial cost and `efr32-nrst` is an output. Revisit only if an edge-triggered consumer materializes |
+| GPIO-005 | open — deferred | no `valid_mask` for hardwired pins (B2/LAN-LED is ASIC-driven). Soft-mitigated since v3.10.0: `gpio-line-names` leaves such pads unnamed, so name-based lookups (the supported userspace path) cannot land on them |
+| GPIO-006 | open — deferred | `free()` restores neither pinmux nor CNR — a B2–B6 line stays in GPIO mode after release. Policy decision still pending; note it interacts with GPIO-007 (any restore logic must not fight the eth driver's clobber) |
+| GPIO-007 | **closed (eth v2.7)** | eth `ndo_open` re-cleared B4/B5/B6 mux fields under held GPIOs (§2) — fixed in `rtl8196e-eth` v2.7: 0x44 derived from `gpio-line-names` |
+| GPIO-008 | **closed (v1.1)** | silent success of mux-requiring requests without syscon — now `-ENODEV` + `dev_err` (§2) |
+| GPIO-S01 | **closed (v1.2)** | `gpio_generic_chip` conversion, HW re-validation gate passed (§3) |
+| GPIO-S02 | closed — obsolete | superseded by S01 (the hand-rolled `get_direction` no longer exists) |
+| GPIO-S03…S05, S07 | **closed (v1.1)** | probe idiom, drvdata, include hygiene, IMR pair declared (§3) |
+| GPIO-S06 | **closed** | retab landed as a standalone whitespace-only commit, `.o`-identical (§3) |
+
+---
+
+## 5. Conclusion
+
+No security findings — the driver is a thin, correctly-locked gpiolib
+bank with constant-mask syscon writes and no unprivileged surface. The
+audit's real catch was **GPIO-007**: the Ethernet driver's per-`open`
+PIN_MUX_SEL_2 clear silently disconnected held GPIO lines (nRST, and the
+G4 button) after any interface flap — **closed in `rtl8196e-eth` v2.7**
+(v3.11.0-pre), which derives the 0x44 fields from `gpio-line-names`.
+
+**Everything actionable is now implemented** (2026-06-12): GPIO-008 and
+the S-batch in v1.1, the `gpio_generic_chip` conversion in v1.2 with its
+hardware re-validation gate (LED, button, nRST — all passed). The driver
+is down to its irreducible custom part: request-time pinmux + CNR.
+Remaining open items are deliberate policy deferrals: GPIO-004 (no
+irqchip until ISR/IMR semantics are characterized), GPIO-005 (no
+valid_mask; soft-mitigated by unnamed lines), GPIO-006 (`free()` is a
+no-op pending a restore policy).

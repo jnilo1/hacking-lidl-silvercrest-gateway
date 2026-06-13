@@ -22,7 +22,10 @@ can:
 - Send arbitrary bytes to the EFR32 NCP, hijacking the Zigbee radio.
 - Read every byte the NCP emits, recovering network keys, device join
   events, and sensor payloads.
-- Impersonate the Z2M host once the legitimate client disconnects.
+- Evict the legitimate client and take over the session at any time:
+  the bridge replaces the connected client on every new accept
+  (replace-on-connect), so the attacker does not even have to wait for
+  a disconnect.
 
 IP-based allowlisting (without cryptographic authentication) does not
 stop a motivated local attacker: ARP spoofing, DHCP rebinding, or

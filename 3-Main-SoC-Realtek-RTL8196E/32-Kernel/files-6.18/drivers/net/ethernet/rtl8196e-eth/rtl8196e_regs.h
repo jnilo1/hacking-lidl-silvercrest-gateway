@@ -17,9 +17,16 @@ static inline void *rtl8196e_uncached_addr(void *p)
 }
 
 /*
- * MMIO helpers for Ethernet registers accessed via hardcoded KSEG1 addresses.
- * These remain volatile-based (not readl/writel) because the registers use
- * hardcoded virtual addresses, not __iomem pointers from ioremap.
+ * MMIO helpers for Ethernet registers accessed via compile-time KSEG1
+ * constants. Deliberately NOT routed through an ioremap()ed pointer
+ * (ETH-S01 decision): on MIPS, ioremap of these low-512MB physical
+ * windows returns the very same KSEG1 alias, so pointer routing would
+ * only replace a foldable lui+lw/sw pair with an unfoldable dependent
+ * load in __iram hot paths (ISR, kick, NAPI) -- the class of "obvious"
+ * change this platform has benched and rejected before (F11/F13/F15).
+ * The constants are an *enforced* invariant, not an assumption: probe
+ * claims the three DT reg windows and fails if any ioremap result
+ * differs from these bases (see rtl8196e_probe).
  */
 static inline void rtl8196e_writel(u32 val, u32 reg)
 {
@@ -35,9 +42,6 @@ static inline u32 rtl8196e_readl(u32 reg)
 #define SYSTEM_BASE    0xB8000000
 #define SWCORE_BASE    0xBB800000
 #define ASIC_TABLE_BASE 0xBB000000
-
-#define PIN_MUX_SEL   (SYSTEM_BASE + 0x0040)
-#define PIN_MUX_SEL2  (SYSTEM_BASE + 0x0044)
 
 #define SYS_CLK_MAG   (SYSTEM_BASE + 0x0010)
 #define CM_ACTIVE_SWCORE (1 << 11)
@@ -99,7 +103,6 @@ static inline u32 rtl8196e_readl(u32 reg)
 #define EnablePHYIf        (1 << 0)
 #define MacSwReset         (1 << 3)
 #define PortStatusLinkUp   (1 << 4)
-#define PortStatusNWayEnable (1 << 7)
 #define PortStatusDuplex   (1 << 3)
 #define PortStatusLinkSpeed_MASK (3 << 0)
 #define PortStatusLinkSpeed_OFFSET 0
@@ -213,13 +216,11 @@ static inline u32 rtl8196e_readl(u32 reg)
 #define LINK_CHANGE_IE         (1 << 31)
 #define PKTHDR_DESC_RUNOUT_IE_ALL (0x3f << 17)
 #define RX_DONE_IE_ALL         (0x3f << 3)
-#define TX_ALL_DONE_IE_ALL     (0x3 << 1)
 
 #define LINK_CHANGE_IP         (1 << 31)
 #define PKTHDR_DESC_RUNOUT_IP_ALL (0x3f << 17)
 #define MBUF_DESC_RUNOUT_IP_ALL   (1 << 16)
 #define RX_DONE_IP_ALL         (0x3f << 3)
-#define TX_ALL_DONE_IP_ALL     (0x03 << 1)
 
 /* Reset bits */
 #define FULL_RST               (1 << 2)

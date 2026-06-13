@@ -8,9 +8,119 @@ rootfs (33-), and userdata (34-).
 
 ## [Unreleased]
 
-_Userdata-only fixes surfaced during the G4 (Sengled) port beta (issues #131,
-#132); both board-agnostic and reproduced on the Lidl bench. Currently on the
-`v3.11.0-pre` branch for beta testing._
+_The driver-audit release. A per-driver hardening pass across the whole
+Linux 6.18 kernel tree (nine drivers) lands alongside two userdata fixes
+surfaced during the G4 (Sengled) port beta (issues #131, #132). Every
+change is board-agnostic and reproduced on the Lidl bench, and the kernel
+image was bench-validated on the reference hardware. Currently on the
+`v4.0.0-pre` branch for beta testing._
+
+An out-of-band audit produced an `AUDIT.md` / `DESIGN.md` pair for every
+RTL8196E kernel driver; the findings were implemented and each driver
+re-validated on the bench before the kernel image (`kernel-6.18.img`) was
+cut. No on-device behaviour regresses and the Ethernet throughput
+envelope is unchanged (RX ~94 Mbit/s, TX within the established layout
+spread, single-stream retransmits 0).
+
+### `rtl8196e-eth` v2.13 — BQL, a real DT resource model, audit fixes
+
+Five bench-gated steps on top of the v2.8 LAN-LED work:
+
+* **v2.9** — probe/teardown robustness: the uncached ring alias is
+  flush-and-discarded before first use (a dirty cached line could
+  otherwise evict over a live descriptor); `stop()` disables NAPI before
+  masking, so a finishing poll cannot re-arm the interrupt mask; probe
+  quiesces the IRQ mask/status the bootloader's TFTP path can leave
+  latched before `request_irq()`; `ndo_change_mtu` is `-EBUSY` while up.
+* **v2.10** — the first-packet/timer debug scaffolding is retired (~190
+  fewer lines), along with dead defines and the unused `tx_submit` flags.
+* **v2.11** — the one-time SoC bring-up (pinmux, board pad state, switch
+  clock, `FULL_RST`, LED controller, ~650 ms of `msleep`s) is hoisted to
+  probe; `ndo_open` now does only the volatile per-open programming and
+  measures ~30 ms instead of >1 s.
+* **v2.12** — the ethernet node declares its three register windows and
+  probe claims and maps all three, failing the probe loudly if a mapped
+  base ever diverges from the compile-time KSEG1 constants (kept, for the
+  hot path) — DT drift and conflicts can no longer corrupt MMIO silently;
+  `/proc/iomem` now shows three named windows.
+* **v2.13** — Byte Queue Limits on the TX queue (the one performance idea
+  the audit left open), landed without the throughput cost the driver's
+  earlier pointer-routing experiments warned about.
+
+### `rtl819x_wdt` v1.6 — panic-safe, with honest userspace semantics
+
+The panic notifier reads the record uptime with the NMI-safe
+`ktime_get_boot_fast_ns()` instead of a seqcount-retrying accessor that
+could spin forever if the panic interrupted a timekeeping writer — and it
+sat before the chip-arm writes, so a spin would have cost both the crash
+record and the fast reset. Userspace-visible cleanups: `WDIOC_GETTIMELEFT`
+now honestly returns `EOPNOTSUPP` (it used to report the constant timeout)
+and the bogus `timeleft` sysfs attribute is gone; the fixed ~671 s
+hardware window is declared as `max_hw_heartbeat_ms`, so the core bridges
+longer software timeouts with worker pings (the 60 s feeder cadence is
+unchanged). The kick is now a constant write, dropping one MMIO read per
+kick.
+
+### `8250_rtl819x` v1.4 — FIFO on, RX trigger pinned to 1
+
+The clone's region-claim quirk had left `ttyS1` running with `FCR=0` (FIFO
+off, 16450 char mode) since the early bring-up; the 8250 core now claims
+the window itself and the FIFOs are enabled. An A/B loopback bench showed
+the clone's trigger levels above 1 overrun non-monotonically, so the RX
+FIFO trigger is pinned to 1 — wire-identical to the proven v3.x envelope,
+full 16-byte latency cushion (`rx_trig_bytes` stays writable for
+experiments). Flow-control gating now tracks the absolute `CRTSCTS` state
+instead of edge transitions.
+
+### `timer-rtl819x` (clocksource) v1.2 — timer_of, a DT overlap closed
+
+Converted to the `timer_of` helper (base, refclk, IRQ); the timer's DT
+`reg` window is shrunk from 0x20 to 0x1c so it no longer overlaps the
+watchdog's `WDTCNR` register. An IRQ-of-parse failure now panics like the
+other init-failure paths instead of booting into a clockevent-less system
+that hangs later in scheduler bring-up with nothing pointing at the cause.
+
+### `gpio-rtl819x` v1.2 — generic MMIO core, loud failure without syscon
+
+Re-based on the kernel's generic MMIO GPIO core, keeping only the
+irreducible custom part (request-time `PIN_MUX_SEL_2` pinmux + CNR); the
+glitch-free DATA-before-DIR ordering the nRST open-drain emulation relies
+on is preserved and recorded as a design invariant. A request on a
+mux-requiring line with the syscon absent now fails with `-ENODEV` and a
+clear error instead of silently leaving the pad in peripheral mode (a dead
+LED/button whose only trace was one probe-time warning).
+
+### `leds-gpio-pwm` v1.1 — no timer at the rails, keep-state that keeps
+
+The `default-state = "keep"` path now reads the line back and re-drives it
+at that level instead of destroying the state it was meant to keep; the
+0 % and 100 % duty bands are steady GPIO levels with no timer (a 250 Hz
+timer used to run at full brightness); the initial timer arm follows the
+#120 timer-wheel rule (`jiffies`, not `jiffies+1`).
+
+### `spi-rtl819x` v1.1 — electrically correct CS, capabilities declared
+
+Chip-select deselect now parks all lines high instead of actively driving
+the sibling CS low (dormant on the Lidl board, but wrong electrically);
+`mode_bits` / `bits_per_word_mask` declare only what the hardware supports,
+so the core rejects the rest; a sub-12.5 MHz clock request that falls back
+to the next divisor warns once. Storage gate passed on the bench: squashfs
+boot and a 4 MB JFFS2 write/re-read byte-identical before and after.
+
+### `rtl8196e-uart-bridge` v1.4 — documented locking, rate-limited churn
+
+The remote-triggerable connection-lifecycle messages (connect, replace,
+disconnect) are rate-limited; the disarm/relisten window's dependency on
+the builtin param lock is documented at the lock definition and the unlock
+site for any future config entry point; the Kconfig help now covers
+`blmode_pulse` / `blmode_gpio`. No data-path change.
+
+### `irq-rtl819x` (irqchip) v1.0 — error-path cleanup
+
+The no-parent error path now removes the IRQ domain and NULLs the base
+after `iounmap`; the SPDX header and kernel-style indentation are applied,
+and the swapped parent labels in the chained-handler comment (IP3 = Switch,
+IP4 = UART1) are corrected. No functional change on the success path.
 
 ### `s40button` v2.1 — preserve the status LED across a button press (issue #131)
 

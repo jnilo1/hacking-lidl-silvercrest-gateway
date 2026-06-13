@@ -11,7 +11,6 @@
 #include "rtl8196e_regs.h"
 
 struct rtl8196e_hw {
-	void __iomem *base;
 	struct regmap *syscon;
 };
 

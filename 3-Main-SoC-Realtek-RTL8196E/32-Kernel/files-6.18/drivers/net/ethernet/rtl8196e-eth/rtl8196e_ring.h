@@ -48,7 +48,7 @@ void *rtl8196e_ring_rx_mbuf_base(struct rtl8196e_ring *ring);
 
 int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 				   void *data, unsigned int len,
-				   u16 vid, u16 portlist, u16 flags,
+				   u16 vid, u16 portlist,
 				   bool *was_empty);
 
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
@@ -71,11 +71,5 @@ void rtl8196e_ring_diag_get(struct rtl8196e_ring *ring,
 extern unsigned int rtl8196e_kick_threshold;
 void rtl8196e_ring_tx_reset(struct rtl8196e_ring *ring);
 void rtl8196e_ring_rx_reset(struct rtl8196e_ring *ring);
-unsigned int rtl8196e_ring_last_tx_submit(struct rtl8196e_ring *ring);
-unsigned int rtl8196e_ring_tx_count(struct rtl8196e_ring *ring);
-u32 rtl8196e_ring_tx_entry(struct rtl8196e_ring *ring, unsigned int idx);
-unsigned int rtl8196e_ring_rx_index(struct rtl8196e_ring *ring);
-u32 rtl8196e_ring_rx_pkthdr_entry(struct rtl8196e_ring *ring, unsigned int idx);
-u32 rtl8196e_ring_rx_mbuf_entry(struct rtl8196e_ring *ring, unsigned int idx);
 
 #endif /* RTL8196E_RING_H */

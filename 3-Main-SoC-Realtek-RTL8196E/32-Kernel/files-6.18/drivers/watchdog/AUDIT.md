@@ -1,435 +1,334 @@
-# RTL8196E watchdog driver — design audit
-
-Target: Linux 6.18 hardware-watchdog driver `rtl819x-wdt` for the
-Realtek RTL8196E SoC. Drives the single 32-bit Watchdog Timer Control
-Register (WDTCNR) at sysc + 0x311C, registers a system restart
-handler so that `reboot` falls through the same path, and adopts a
-pre-armed watchdog on probe so the chip is not briefly disarmed
-during userspace ramp-up.
-
-**Public release.** The driver makes its first user-facing appearance
-in **v3.5.0**, shipping as `DRV_VERSION "1.0"` to match the convention
-of the other rtl819x drivers (irq, gpio, timer, 8250, ...). The
-internal "1.0 / 1.1 / 1.2" milestones referenced throughout this
-document are *dev-cycle markers* — three iterations during the v3.5.0
-prep window where successive WDT-### findings were closed — **not**
-user-visible released versions.
-
-Dev-cycle history, condensed:
-
-* **1.0** — initial bring-up: WDTCNR write paths, restart handler,
-  HW_RUNNING adoption, datasheet-correct OVSEL field.
-* **1.1** — WDT-005 + WDT-007 closed: slowclk CDBR rework
-  (see TMR-005 in `drivers/clocksource/AUDIT.md`), `S25watchdog`
-  feeder activated, DT `timeout-sec=60`.
-* **1.2** — WDT-008 + WDT-009 closed: soft-lockup blind spot plugged
-  via a panic notifier + `BOOTPARAM_SOFTLOCKUP_PANIC=y`; notifier
-  pinned to `INT_MAX` so a stuck higher-priority notifier cannot
-  defeat the recovery write.
-
-All three milestones are squashed into the **v3.5.0** release as
-`DRV_VERSION "1.0"`.
-
-The bit layout was initially reverse-engineered from the Realtek SDK
-V3.4.7.3 BSP, then verified against the RTL8196E-CG datasheet
-(Track ID JATR-3375-16, Rev. 1.0, table 27). Two SDK-era assumptions
-turned out to be wrong:
-
-* OVSEL is a **4-bit field** spanning bits `[22:21]` (low) and
-  `[18:17]` (high), with ten valid encodings from `0000` (2^15
-  ticks) to `1001` (2^24 ticks). The SDK only ever writes `0011`
-  (its "longest" bucket), losing access to 64× more headroom.
-* The kick bit at `[23]` is named **WDTCLR** in the datasheet —
-  "Write 1 to clear the up-count watchdog counter" — and the
-  watchdog itself is an *up-counter* that fires on overflow, not a
-  countdown timer.
-
-The chip also exposes a one-shot reset-cause indicator at WDIND
-(bit 20), set by hardware on a watchdog-triggered reset and
-write-1-to-clear.
-
-## Summary of findings
-
-9 findings total. 4 applied in `1.0`; WDT-005 / WDT-007 closed in
-`1.1` (v3.4.2 — slowclk DT rework); WDT-008 + WDT-009 closed in `1.2`
-(soft-lockup blind spot — panic notifier + `CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y`,
-panic-notifier priority pinned to `INT_MAX`). WDT-001 still partial
-pending on-hardware reset-cause confirmation.
-
-| ID | Type | Severity | Confidence | Status | One-liner |
-|----|------|----------|------------|--------|-----------|
-| WDT-001 | OBSERVABILITY | low | partial | **partially applied** | reset-cause decoded from WDIND; bit empirically reads 0 even after watchdog reset, needs investigation |
-| WDT-002 | API / PLATFORM | medium | certain | **applied** | restart_handler at priority 192 supersedes arch_reset cleanly |
-| WDT-003 | PLATFORM / API | medium | certain | **applied** | `of_match_table` restricted to `realtek,rtl8196e-wdt` |
-| WDT-004 | ROBUSTNESS | medium | certain | **applied** | `WDOG_HW_RUNNING` adoption avoids briefly disarming a pre-armed chip |
-| WDT-005 | PLATFORM / FUNCTIONAL | **HIGH** | certain | **applied (1.1)** | shared CDBR DivFactor moved 8→8000 via slowclk DT node; OVSEL=1001 overflow grows ~671 ms→~671 s |
-| WDT-006 | API / DOCUMENTATION | low | certain | **applied** | OVSEL field corrected from 2-bit to 4-bit; driver now uses 1001 (2^24 ticks) instead of 0011 (2^18) |
-| WDT-007 | OPERATIONAL | medium | certain | **applied (1.1)** | `S25watchdog` made executable + DT `timeout-sec` 1→60 — feeder now boots and kicks |
-| WDT-008 | RECOVERY / FUNCTIONAL | **HIGH** | certain | **applied (1.2)** | soft-lockup blind spot: framework auto-kicker pets chip during userspace busy-syscall hangs; panic notifier + `BOOTPARAM_SOFTLOCKUP_PANIC=y` force reset in ~23 s |
-| WDT-009 | RECOVERY / DEFENSE-IN-DEPTH | low | certain | **applied (1.2)** | panic notifier priority pinned to `INT_MAX` so a stuck higher-priority notifier cannot defeat the WDT-008 chip-arming write |
-
-## Applied — driver 1.0
-
-### WDT-002 — restart handler supersedes arch_reset
-
-The arch-level `_machine_restart()` (in `arch/mips/realtek/setup.c`)
-currently writes `0` to WDTCNR to trigger an immediate reset, and
-that hook is installed at boot in `plat_mem_setup()`. The MIPS
-reboot path (`do_kernel_restart()`) runs the registered
-restart-notifier chain *before* falling through to
-`_machine_restart`, so a watchdog driver that registers a
-`watchdog_ops.restart` callback supersedes the arch path while it is
-loaded.
-
-`watchdog_set_restart_priority(&wdt->wdd, 192)` places this driver
-above the default-priority handlers (128). The actual reset sequence
-is identical to the arch path: `writel(0, base)` followed by an
-`mdelay(50)` to let the chip pull the line.
-
-**Net effect:** if the driver loaded successfully, `reboot` flows
-through the registered handler. If the driver is unloaded, the
-kernel falls back to `_machine_restart` from the arch code. Behaviour
-visible to the operator is unchanged.
-
-### WDT-003 — match-table tightening
-
-The driver header documents the WDTCNR layout as RTL8196E-specific.
-Other RTL819x variants (RTL8196C, RTL8197F) may have different
-register positions or selector encodings. The `of_match_table` is
-limited to a single `realtek,rtl8196e-wdt` entry; we will not bind
-on `realtek,rtl819x-wdt` or other generic compatibles. Same
-rationale as GPIO-003 in `drivers/gpio/AUDIT.md`.
-
-### WDT-004 — `WDOG_HW_RUNNING` adoption
-
-If the bootloader (or a previous Linux instance via `arch_reset`)
-left the watchdog armed, WDTE in `[31:24]` is anything other than
-`0xA5`. The driver detects this at probe and sets `WDOG_HW_RUNNING`
-instead of issuing the disable pattern. The watchdog framework then
-pings the chip every `wdd.timeout / 2` seconds (with
-`CONFIG_WATCHDOG_HANDLE_BOOT_ENABLED=y`) until userspace opens
-`/dev/watchdog`. Without this adoption, the brief window between
-probe and the first userspace open would let the chip count up past
-overflow and reset the box.
-
-### WDT-006 — OVSEL is a 4-bit field, not 2-bit
-
-The SDK V3.4.7.3 BSP (`boards/rtl8196e/bsp/timer.c`) writes only
-`0x00600000` — bits `[22:21] = 11` — and never touches the upper
-selector bits at `[18:17]`. Reading the SDK alone, OVSEL appeared to
-be a 2-bit field giving four buckets (2^15 .. 2^18 ticks). The
-datasheet is explicit: OVSEL is 4 bits, with ten valid encodings up
-to `1001` (2^24 ticks).
-
-Driver `1.0` uses OVSEL=`1001` so the gross hardware ceiling matches
-what the chip is capable of.  Even with OVSEL=`1001` the practical
-overflow is short — see WDT-005 — but at least the driver is no
-longer leaving 6 of the 4 selector bits stranded.
-
-### WDT-007 — feeder enabled in v3.4.2 (driver 1.1)
-
-`34-Userdata/skeleton/etc/init.d/S25watchdog` mode now `0755`. With
-WDT-005 closed, the BusyBox feeder kicks every 30 s against a ~671 s
-hardware ceiling — comfortable. The DT `timeout-sec` was simultaneously
-bumped 1 → 60 so the framework's heartbeat (when `WDOG_HW_RUNNING`
-adoption fires) matches the kick cadence.
-
-## Applied in 1.1 — v3.4.2
-
-### WDT-005 — CDBR clock-sharing closed via slowclk DT node
-
-The shared CDBR clock is now fed from a new 25 kHz `slowclk`
-fixed-clock node in `rtl819x.dtsi`. `timer-rtl819x` programs
-DivFactor = busclk/slowclk = 200 MHz / 25 kHz = 8000 (matching the
-SDK BSP), so the watchdog tick drops from 25 MHz to 25 kHz. At
-OVSEL=1001 the hardware overflow grows from ~671 ms to ~671 s; a
-30 s BusyBox feeder now keeps the chip alive with ~22× margin.
-
-Driver-side changes (v1.1):
-
-* `WDT_TIMEOUT_SECS_DEFAULT` 1 → 60.
-* `wdd.min_timeout`/`max_timeout` widened to `[1, 671]` (the chip's
-  real range in seconds at 25 kHz CDBR).
-* `set_timeout` actually honours the requested value rather than
-  hard-clamping to 1 s. Hardware OVSEL stays at the max bucket
-  unconditionally — `wdd.timeout` is the soft contract with
-  userspace, not a register write.
-* Probe banner reflects the new effective range.
-
-DT-side changes:
-
-* New `slowclk` fixed-clock @ 25 kHz in `rtl819x.dtsi`.
-* `timer@3100` `clocks[0]` repointed `&refclk` → `&slowclk`.
-* `watchdog@311c` `timeout-sec` bumped 1 → 60, `status = "disabled"`
-  removed from the dtsi default (the board DTS already overrode it
-  to "okay").
-
-Clocksource-side changes — see TMR-005 in
-`drivers/clocksource/AUDIT.md`. Key cross-impact: `clockevents`
-`min_delta` reduced 0x300 → 8 because 0x300 ticks at 25 kHz = 30 ms,
-which would have killed HZ=250 scheduling.
-
-Trade-off: `sched_clock` granularity drops from 40 ns to 40 µs.
-Acceptable for kernel timekeeping (HZ=250 = 4 ms tick), visible only
-in perf/ftrace precision. Not a goal for this gateway workload.
-
-## Deferred
-
-### WDT-001 — WDIND empirically reads 0 after a watchdog reset
-
-Datasheet description: "Watchdog Event Indicator. 0: A Watchdog
-RESET did not occur (POWER-ON or PIN RESET). 1: A Watchdog RESET
-occurred. Write '1' to clear."
-
-Driver `1.0` decodes the bit and emits `dev_info("last reset:
-watchdog timeout / power-on / pin reset", ...)` in dmesg, then
-W1C-clears it. However on this rev. 0xb08 part, after a deliberate
-watchdog-induced reset (OVSEL=1001 plus no kicks), the bit reads as
-`0`. Two possible explanations:
-
-* the bootloader (V2.6) clears WDIND somewhere in its early
-  init — to verify by tracing the bootloader, or by reading
-  WDTCNR over JTAG immediately after a watchdog event before the
-  bootloader runs;
-* the watchdog reset on this part is a full chip-level reset that
-  also clears the WDTCNR register including WDIND — making the bit
-  effectively useless for post-mortem on a reset cycle.
-
-Either way, the cosmetic dmesg line is currently misleading on this
-chip. Closing this finding requires either confirming the
-bootloader-clears hypothesis (and patching the bootloader to leave
-WDIND alone) or accepting that there is no surviving reset-cause
-indicator on this SoC and removing the dmesg line.
-
-## Validation
-
-### v1.0 (v3.4.1) — on real hardware, RTL8196E rev. 0xb08, GW at 192.168.1.88
-
-* Probe banner present at boot:
-  `rtl819x-wdt 1800311c.watchdog: v1.0 registered, default timeout
-  1s, nowayout=0`
-* Bringup register dump (sysc+0x3100..0x3120) reads the timer block
-  cleanly via `sr_r32()` (the DT syscon node only declares 0x1000
-  bytes, so a regmap-based dump is rejected with -EIO).
-* Direct `devmem` writes confirmed:
-  * `0xA5000000` is the "stopped" default (matches WDTE=0xA5);
-  * arming with OVSEL=0011 (SDK pattern) overflows in ~10 ms on
-    this chip;
-  * arming with OVSEL=1001 (`0x00A40000`) overflows around 300–600 ms;
-  * WDTCLR auto-clears after the kick (post-write readback shows
-    `0x00240000`, the OVSEL pattern alone).
-* Userspace feeder kept the chip alive for less than 5 seconds
-  with `watchdog -t 1` (kick interval > overflow window) — this is
-  the live demonstration of WDT-005 and the reason the feeder is
-  shipped non-executable.
-
-### v1.1 (v3.4.2) — on real hardware, RTL8196E rev. 0xb08, GW at 192.168.1.88
-
-* Probe banners present at boot:
-  * `timer-rtl819x v1.0 (J. Nilo) - IRQ:7, CLK:25.000kHz, mult:107374, shift:32`
-    — confirms slowclk DT node is read and CDBR DivFactor=8000.
-  * `rtl819x-wdt 1800311c.watchdog: v1.1 registered, default timeout
-    60s, nowayout=0`.
-* Bringup register dump after a fresh boot reads `+0x3118 = 0x1f400000`
-  (DivFactor = 0x1f40 = 8000, exactly the SDK BSP pattern) and live
-  `WDTCNR = 0x00240000` after `start()` — decoding via the `WDT_OVSEL`
-  macro confirms OVSEL=1001, the max-bucket arm pattern.
-* `sched_clock: 28 bits at 25kHz, resolution 40000ns, wraps every
-  5368709100000ns` (i.e. ~89 min half-wrap, vs. ~5.4 s at 25 MHz) —
-  matches the granularity/overhead trade-off documented in
-  `../clocksource/AUDIT.md` TMR-005.
-* **HW overflow path validated end-to-end** via the `rtl819x_wdt_hangtest`
-  procfs gadget (`CONFIG_RTL819X_WDT_HANGTEST`, debug-only, stripped
-  after the measurement). A write to `/proc/wdt_hangtest` ran
-  `local_irq_disable()` then `while (1) cpu_relax()`. The kernel
-  framework kthread stopped pinging and the SoC reset itself; SSH was
-  reachable again **666 s after the hang**, of which ~17 s is the
-  bootloader+kernel boot, putting the HW reset at **~643 s ≈ 95.8 %
-  of the OVSEL=1001 bucket nominal (671 s)**. The 28 s shortfall vs
-  nominal lines up exactly with how far we were into the framework's
-  30 s ping cycle when IRQs went off. End-to-end the proof points
-  are: slowclk DT @ 25 kHz → driver picks OVSEL=1001 → without anyone
-  pinging, the chip resets the SoC at the documented bucket time.
-* `sysrq-b` (`echo b > /proc/sysrq-trigger`) reboots the box in ~1.3 s,
-  exercising the `.restart` handler path (priority 192,
-  `writel(0, base)` → OVSEL=0 = 2^15 ticks @ 25 kHz = 1.31 s).
-* WDIND read-back quirk on rev 0xb08 persists from v1.0 — both the
-  hangtest overflow and the `.restart`-triggered reset come back with
-  `last reset: power-on / pin reset (WDTCNR=0xa5000000)` (WDIND=0).
-  Tracked separately as WDT-001; not a regression.
-
-#### iperf3 regression — `Gateway v3.4.2-instrumented`, 2026-05-11
-
-Single-stream baselines hold within the ±1 Mbit/s measurement noise
-and TCP retrans is essentially zero:
-
-| Test | Measured | v3.4.1 baseline | Threshold |
-|---|---|---|---|
-| TCP RX (host → gw), 30 s | 93.1 Mbit/s, retrans 1/242886 = 0.0004 % | 93.7 | ≥ 92.9 ✓ |
-| TCP TX (gw → host), 30 s | 70.1 Mbit/s, retrans 0/182899 | 70.0 | ≥ 69    ✓ |
-| TCP stress, 300 s | 93.6 Mbit/s, retrans 19/2441326 = 0.0008 % | —   | stability ✓ |
-
-Multi-stream parallel TCP (4× and 8×) sums to ~94 Mbit/s with
-0.46–0.57 % retrans, which is normal stream-fairness behaviour
-under chip saturation, not a regression. UDP 50/100 M loss
-percentages reflect kernel `RcvbufErrors` (iperf3 not draining the
-socket fast enough on a 200 MHz Lexra), not driver-side errors —
-the `eth0` `errors:` counter is zero in both RX and TX.
-
-Conclusion: slowclk CDBR change has no measurable cost on the TCP
-fast path. `min_delta` rising 31 µs → 320 µs at the new tick rate
-is well below the slowest legitimate hrtimer cadence on this
-platform and does not interact with the NAPI / TX-kick coalescing
-loop.
-
-#### OTBR-RCP soak — delegated to beta-tester deployment
-
-The lab does not normally pair end-devices to the dev gateway; the
-authoritative long-running soak is `v3.4.2-instrumented` running in
-@olivluca's production setup against issue #99. The ESP32 capture
-handoff under `36-Debug-Capture/` is what makes that soak
-post-mortem-able.
-
-## How this maps to the public release
-
-The dev-cycle 1.0 / 1.1 / 1.2 milestones tracked above are all
-rolled into a single public release: **v3.5.0**, shipping as
-`DRV_VERSION "1.0"` to match the convention of the other
-rtl819x drivers (irq, gpio, timer, 8250, ...).
-
-The `v3.4.2-instrumented` tag was a diagnostic build delivered
-to beta tester olivluca for GitHub issue #99 — it carried the
-dev-cycle 1.2 driver alongside the wait_tracer LD shim,
-health-snap, and remote-syslog opt-in. None of that
-instrumentation ships in v3.5.0; the driver work alone graduates
-to the production release.
-
-The intermediate `v3.4.1` and `v3.4.2` versions never carried
-this driver — `v3.4.1` was tagged without it (the watchdog work
-was reshuffled out for the "init scripts unchanged" promise of
-the v3.4.x line), and `v3.4.2` was never released. v3.5.0 is
-where it lands publicly for the first time.
-
-## Applied — driver 1.2
-
-### WDT-008 — soft-lockup blind spot plugged
-
-**Symptom.** GitHub issue #99 (olivluca's beta-tester capture, 2026-05-09):
-otbr-agent (PID 95) enters a busy-syscall loop in `__do_wait`. The
-soft-lockup detector reports the hang at 22 s and keeps incrementing
-the duration counter every 22 s. After 600+ seconds the box is still
-spamming the soft-lockup banner, the hardware watchdog has *not*
-fired, and recovery requires a manual power cycle. The whole point
-of shipping the hardware watchdog in v3.4.2 was to reboot the box
-autonomously on hangs of exactly this shape, so the silent failure
-was a real gap.
-
-**Root cause.** On UP + PREEMPT_NONE the watchdog-framework's
-`WDOG_HW_RUNNING` auto-kicker hrtimer fires from softirq context,
-which drains on every syscall return. A userspace busy-syscall loop
-(fast-failing syscall, immediate retry) therefore lets the softirq
-drain — and the auto-kicker — keep running on every iteration. The
-kernel as a whole is *not* stuck (other tasks still run, IRQs are
-served, the auto-kicker pets the chip every ~30 s), only the
-offending *task* is stuck. The HW watchdog has no way to tell the
-difference and stays armed-but-petted forever.
-
-**Fix.** Two-line change, conceptually:
-
-1. `CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC=y` in `config-6.18-realtek.txt`
-   — once the soft-lockup detector has confirmed the hang (22 s
-   default), `kernel/watchdog.c:850` calls `panic("softlockup: hung
-   tasks")`. The detector itself runs from a separate hrtimer that is
-   not blocked by the busy-syscall loop, so it reliably fires.
-2. Driver registers a `panic_notifier_list` callback at probe that
-   writes `0` to `WDTCNR`. `panic()` calls `local_irq_disable()`
-   before invoking the notifier chain, which halts the auto-kicker
-   hrtimer on the only CPU. With auto-kicker silenced, our `0` write
-   leaves the chip running with OVSEL=0 (smallest bucket ≈ 1.31 s at
-   slowclk=25 kHz), WDTCLR=0 (not kicked). Reset fires within the
-   bucket window.
-
-The write pattern is identical to what `.restart` and the arch-level
-`_machine_restart` already use; the notifier just bolts it onto the
-panic path so a confirmed soft lockup goes the same way as a clean
-`reboot`.
-
-**Recovery latency.** ~22 s (soft-lockup threshold) + ~1.3 s (chip
-overflow) ≈ 23 s end-to-end. Compared to "never" in the pre-fix
-behaviour, this is the recovery-mechanism behaviour the v3.4.2
-release notes implied.
-
-**Defense in depth — why the notifier and not just the Kconfig.**
-`CONFIG_PANIC_TIMEOUT=10` already makes `panic()` call
-`emergency_restart()` after a 10 s busy delay, which on MIPS Realtek
-ultimately writes `0` to WDTCNR via `_machine_restart`. So even
-without the notifier, soft-lockup → panic → 10 s delay → emergency
-restart would land the same write 11 s slower. The notifier wins
-~10 s of recovery latency *and* survives the case where
-`emergency_restart` itself wedges (e.g. wedged on a console flush in
-the panic path). The chip overflow is hardware-driven the moment
-IRQs are disabled.
-
-**Affected files.**
-
-* `drivers/watchdog/rtl819x_wdt.c` — panic notifier, struct field,
-  devm cleanup hook. DRV_VERSION bumped to `1.2`.
-* `config-6.18-realtek.txt` — flipped
-  `CONFIG_BOOTPARAM_SOFTLOCKUP_PANIC` to `=y`.
-
-**Validation.** Cold-boot to verify the panic notifier registers
-without errors; trigger a panic via `echo c > /proc/sysrq-trigger`
-(needs `CONFIG_MAGIC_SYSRQ=y`, present) and confirm the box reboots
-within ~2 s of the panic banner rather than waiting on the 10 s
-panic_timeout. End-to-end soft-lockup test is best done with the
-wait_tracer-instrumented build on `v3.4.2-instrumented`: a real
-otbr-agent hang on issue #99 reproducers exercises the full
-detector → panic → notifier → chip-reset path.
-
-### WDT-009 — panic notifier priority pinned to INT_MAX
-
-**Symptom.** Surfaced by a fresh from-scratch audit of the 1.2 driver,
-not by an observed failure: the panic notifier registered in WDT-008
-never assigns `nb->priority`, which defaults to 0. The kernel panic
-notifier chain dispatches notifiers in *descending* priority order,
-so any notifier registered at a higher priority — or any future
-distro/board patch that adds one — runs **before** the chip-arming
-write. If such a prior-in-chain notifier wedged (console flush, flash
-write, cross-call that never lands), our recovery write would never
-execute, and the box would fall back to the `CONFIG_PANIC_TIMEOUT=10`
-delay that WDT-008 was specifically designed to out-run.
-
-No current chain pollution is observed on this kernel config — the
-finding is forward-looking, defense-in-depth.
-
-**Fix.** Two lines in `rtl819x_wdt_probe`:
-
-```c
-wdt->panic_nb.notifier_call = rtl819x_wdt_panic_notify;
-wdt->panic_nb.priority      = INT_MAX;   /* run first, then continue */
-ret = atomic_notifier_chain_register(&panic_notifier_list, &wdt->panic_nb);
-```
-
-`INT_MAX` is the canonical "head of the chain" sentinel; nothing else
-in-tree registers above it. The notifier still returns `NOTIFY_DONE`,
-so lower-priority notifiers continue to execute within the ~1.31 s
-grace window between our chip-arm write and HW overflow — crashlog
-dumpers, console flushers, etc. all still get their turn.
-
-**Trade-off considered.** Running first means the chip reset is
-*scheduled* before any crash-info dumpers run. We accept this because
-(a) the chip does not reset instantly — OVSEL=0 gives 1.31 s of grace
-time during which lower-priority notifiers in the same chain continue
-to execute, and (b) the alternative — letting an arbitrary dumper
-wedge the chain — was the failure mode WDT-008 itself was designed
-to fix.
-
-**Affected files.**
-
-* `drivers/watchdog/rtl819x_wdt.c` — single-line probe addition, comment
-  block in `rtl819x_wdt_panic_notify()` extended with the rationale.
-
-**Validation.** Same as WDT-008 — cold-boot + `sysrq-c` reboots in
-~2 s. The defense-in-depth aspect is not directly testable without
-injecting a hostile higher-priority notifier; the meaningful check
-is "no regression vs WDT-008 acceptance criterion".
+# RTL8196E watchdog driver (`rtl819x-wdt`) — security & code audit
+
+| | |
+|---|---|
+| **Audit date** | 2026-06-11 (updated 2026-06-12 for driver v1.5, then v1.6 — WDT-011 + S-batch implemented) |
+| **Driver version** | **1.6** (`DRV_VERSION` in `rtl819x_wdt.c`, `MODULE_VERSION`) |
+| **Active release** | **v3.10.0** (kernel `6.18.35-rtl8196e-v3.10.0`); v1.5/v1.6 unreleased |
+| **Audited artifacts** | `rtl819x_wdt.c` (this directory); the four kernel patches that exist solely for this driver: `patches-6.18/kernel-time-timer.c.patch`, `kernel-time-hrtimer.c.patch`, `include-linux-timer.h.patch`, `include-linux-hrtimer.h.patch`; DT nodes `watchdog@311c` (`rtl819x.dtsi`) and the labelled `boothold` reserved-memory node + `memory-region` phandle (`rtl8196e.dts`); Kconfig dependencies in `config-6.18-realtek.txt`; userspace touchpoints `34-Userdata/skeleton/etc/init.d/S25watchdog` and `S26panicrec` (security surface only) |
+
+This audit **supersedes and replaces** the previous `AUDIT.md` (written
+during the v1.2 dev cycle, v3.5.0 release window). It is a fresh audit of
+the code as it stands today; nothing was carried over unverified. Legacy
+finding IDs `WDT-001`, `WDT-005`, `WDT-008`, `WDT-009` are still referenced
+from code comments and the DTS, so the full ID registry is preserved at the
+end of this file with one-line dispositions.
+
+Audit questions, per the project audit charter:
+
+1. **Security** — does the driver introduce exploitable flaws?
+2. **Simplification / optimization** — can the code be simplified or
+   optimized for the Linux 6.18 APIs it targets?
+
+---
+
+## 1. Security audit
+
+### 1.1 Attack surface
+
+| Surface | Exposure | Assessment |
+|---|---|---|
+| `/dev/watchdog` char device | `crw------- root root` (0600) | Root-only. All ioctls go through the watchdog core, which clamps `WDIOC_SETTIMEOUT` to `[min_timeout, max_timeout]` = [1, 671] before calling the driver. No driver-private ioctls. |
+| sysfs (`/sys/class/watchdog/watchdog0/*`) | World-readable, no writable attributes from this driver | Read-only telemetry (identity, timeout, status). No information of value to an attacker. |
+| Module parameter `nowayout` | 0444, boot cmdline only (built-in `=y`) | Read-only after boot. |
+| Panic record page (the board's `boothold` reservation — DRAM `0x01FFE000` on Lidl, resolved from the `memory-region` phandle since v1.5) | Writable by the kernel and by root via `/dev/mem`/`devmem` | The only *parsed input* in the driver — analysed in §1.2. |
+| MMIO `WDTCNR` register | Root via `devmem` can always arm/stop the chip directly | Inherent to the SoC, not a driver property. Root can already `reboot(2)`; no new capability. |
+
+No unprivileged surface exists. Every reachable path requires root, and
+root already holds strictly stronger primitives (`reboot`, `/dev/mem`).
+**No trust boundary is crossed anywhere in this driver.**
+
+### 1.2 Untrusted-input analysis — the panic record decode path
+
+`rtl819x_wdt_report_panic_record()` runs once at probe and parses a DRAM
+page that survived the reset. The page could contain a legitimate record, a
+torn record, random garbage (cold boot), or a record forged by root on the
+previous boot. Findings:
+
+- **Magic gate** — decode only proceeds if `+0x00 == "PANC"`. The notifier
+  writes the magic *last*, behind a `wmb()`, so a torn record never passes
+  the gate. Verified correct.
+- **Version gate** — only `v3` (current) and `v2` (one-boot leftover after
+  a firmware upgrade) layouts are decoded; anything else prints a single
+  "unknown record" line and clears the magic. The `v2` path never reads the
+  `v3`-only fields (`overdue`/`pending` guarded by `ver >= 3`). Verified
+  correct.
+- **Candidate-count clamp** — `rtl819x_wdt_fns_decode()` clamps the
+  on-record count to `WDT_REC_NR_FNS` (6) before iterating, so a corrupted
+  count cannot overread the mapped window. Verified correct.
+- **Reason string** — written with `memset_io` + bounded `memcpy_toio`
+  (`strnlen(reason, WDT_REC_REASON_MAX - 1)` = max 0xDF bytes starting at
+  +0x10, ending at 0xEF — provably clear of `epc` at +0xF0); read back with
+  a forced NUL at `[WDT_REC_REASON_MAX - 1]`. No overflow in either
+  direction. Verified correct.
+- **`%pS` on attacker-chosen u32** — `sprint_symbol()` performs a kallsyms
+  *lookup*; it never dereferences the value. A forged address yields a raw
+  hex print, not a fault or an info leak beyond kallsyms names (dmesg is
+  root-readable here anyway). Safe.
+- **`scnprintf` accumulation** — both decoders use the
+  `pos += scnprintf(buf + pos, len - pos, ...)` idiom; `scnprintf` with
+  size 0 writes nothing and returns 0, so saturation is safe. Verified
+  correct.
+
+Residual (accepted-risk) items below: WDT-013.
+
+### 1.3 Panic-path robustness (the notifier runs in the worst context the kernel has)
+
+- **Arm-before-walk ordering (v1.4 design)** — the chip is armed
+  (`~1.31 s` window) *before* the timer/hrtimer wheel walks. A walk that
+  wedges on a corrupted list can therefore delay the candidate lists, never
+  the reset or the already-committed core record. This is the right
+  ordering and is field-proven (the v1.3 regression that motivated it is
+  WDT-010 below).
+- **Two-step arm** — `WDT_DISABLE_PATTERN | WDTCLR` then `0`: clears the
+  up-counter while the chip is halted, then enables. Closes the v1.3
+  instant-reset race (stale counter > OVSEL=0 threshold at enable time).
+  Straight-line code with IRQs off; no window in which the box is left
+  unprotected (the second write is unconditional). Verified correct,
+  bench- and field-confirmed.
+- **Bounded collectors** — `timer_collect_pending_fns()` /
+  `hrtimer_collect_pending_fns()` increment `n` on every visit and bail at
+  `max`, so even a *circular* corrupted hlist terminates. Verified correct.
+- **Unbounded stats walk** — `timer_wheel_stats()` counts all queued
+  timers with no upper bound; a circular list loops forever. Acceptable
+  *only because* it runs post-arm and last, and the record carries the
+  `0xFFFFFFFF` "walk did not complete" sentinel for exactly this case.
+  Documented invariant: **never move this walk before the arm writes.**
+- **No sleeping, no allocation, no kallsyms** in the notifier — all writes
+  are MMIO/`memcpy_toio` into an uncached mapping; symbolisation is
+  deferred to next boot. Verified correct.
+- **WDT-011 (fixed in v1.6)** — the uptime read in the notifier used
+  `ktime_get_boottime_seconds()`, which is *not* panic-safe; now the
+  NMI-safe fast accessor. See §2.
+
+### 1.4 Lifecycle / concurrency
+
+- **Ops serialization** — all `watchdog_ops` calls are serialized by the
+  watchdog core mutex; the only concurrent writers to `WDTCNR` are the
+  `.restart` handler and the panic notifier, both of which run with the
+  system effectively single-threaded (UP, IRQs off). No race.
+- **devm teardown order** — release runs in reverse: panic-notifier
+  unregister → watchdog unregister → `rec`/`base` unmap → free. The
+  notifier can never fire against a stale mapping. The
+  `devm_add_action_or_reset()` failure path unregisters the notifier
+  inline. Verified correct.
+- **Sysfs unbind footgun (info, accepted)** — root can unbind the driver
+  while the chip is `HW_RUNNING`; the chip stays armed with nobody kicking
+  and the box resets ≤ 671 s later. Root-only, self-inflicted, and
+  arguably the safe failure direction for a watchdog. No action.
+
+### 1.5 Userspace touchpoints
+
+- `S25watchdog` — `killall watchdog` + magic-close `V` on stop; runs as
+  root from init. No injection surface (no user-controlled input).
+- `S26panicrec` — captures the one-shot dmesg line into
+  `/userdata/panic/history`. `$line` is double-quoted throughout and is
+  written to a file, never evaluated. First-occurrence guard caps JFFS2
+  writes. No injection surface.
+
+### 1.6 Security verdict
+
+**No exploitable vulnerability found.** The driver adds no unprivileged
+attack surface; the single parsed input (the panic record) is bounds-checked
+at every field; the panic path is ordered so that diagnostic code cannot
+defeat recovery. Two low-severity hardening items (WDT-011, WDT-013) and
+one robustness item (WDT-012) are listed below — none is exploitable across
+a privilege boundary.
+
+---
+
+## 2. New findings (this audit)
+
+| ID | Type | Severity | One-liner |
+|----|------|----------|-----------|
+| WDT-011 | ROBUSTNESS (panic path) | **low** (likelihood) / medium (impact) | `ktime_get_boottime_seconds()` can spin on the timekeeping seqlock if the panic interrupted a timekeeping writer — and it runs *before* the chip-arm writes |
+| WDT-012 | ROBUSTNESS / PORTABILITY | low | *(closed in v1.5)* panic-record page address was hard-coded (`0x01FFE000`) instead of resolved from the DT `reserved-memory` node — silent corruption hazard on boards whose DTS drops or moves `boothold@1ffe000` |
+| WDT-013 | HARDENING | info | forged/corrupted record `reason[]` is printed unsanitized (control-char log injection into dmesg); fully-populated report line can approach the ~1 KB printk limit |
+| WDT-014 | OBSERVABILITY | info | `WDIOF_CARDRESET` never reported via `bootstatus` — `WDIOC_GETBOOTSTATUS` always reads 0 (moot while WDT-001 stands) |
+
+### WDT-011 — non-panic-safe clock read in the notifier
+
+`rtl819x_wdt_panic_notify()` calls `ktime_get_boottime_seconds()`, which
+resolves to a coarse timekeeping read under the `tk_core.seq` seqcount
+retry loop. If the panic was raised while that seqcount was odd — on this
+UP machine that means an oops *inside* the timekeeping write section, which
+`CONFIG_PANIC_ON_OOPS=y` (set in `config-6.18-realtek.txt`) promotes to a
+panic — the read loop spins forever.
+
+Impact is amplified by ordering: the call sits in the core-record block,
+**before** the chip-arm writes. A spin there means (a) the record is never
+committed and (b) recovery degrades to the userspace-armed OVSEL=9 overflow
+(≤ 671 s) — or to **no recovery at all** if the chip happened to be
+magic-closed. `CONFIG_PANIC_TIMEOUT=10` does not save us either: the
+notifier chain runs before the panic timeout loop, and this notifier is
+priority `INT_MAX`, first in the chain.
+
+**Recommendation.** Use the NMI-safe fast accessor:
+`div_u64(ktime_get_boot_fast_ns(), NSEC_PER_SEC)` (lock-free, designed for
+exactly this context; `div_u64` is cold-path so the Lexra soft-divide cost
+is irrelevant). Likelihood is low — timekeeping writers run IRQs-off and
+are a tiny code window — but the fix is one line and removes the only
+unbounded wait ahead of the arm writes.
+
+**Resolution (v1.6).** Implemented as recommended. Bench-verified
+end-to-end on the Lidl board: sysrq crash at `/proc/uptime` 159 s
+produced a record with `uptime=160s` (trigger deferred by a 1 s sleep) —
+the fast-accessor conversion matches the boottime clock to the second,
+and the full v3 record (reason, candidate lists, overdue/pending)
+decoded normally on the following boot.
+
+### WDT-012 — record page address not bound to the DT reservation
+
+`WDT_REC_PHYS 0x01FFE000` duplicates, by hand, the address of the
+`boothold@1ffe000` `reserved-memory` node in `rtl8196e.dts`. The driver
+never verifies the reservation exists. Two failure shapes:
+
+- A board DTS that **drops** the node (the v3.10.0 DT generalization now
+  builds multiple boards from the same driver set — see the `BOARD=` build
+  flow): the page is then ordinary kernel RAM. The probe-time
+  `devm_ioremap()` creates an uncached alias of a page the kernel also
+  maps cached (a classic MIPS aliasing hazard), and the panic-time write
+  scribbles over whatever lives there. Pre-reset that is mostly harmless,
+  but the next-boot *read* path would also parse a live kernel page.
+- A board DTS that **moves** the reservation (different DRAM size — e.g.
+  the 64 MiB Sengled G4 port in discussion #119): the driver keeps using
+  the old address, silently landing in unreserved RAM as above.
+
+**Recommendation.** Add a `memory-region = <&boothold>;` phandle to the
+`watchdog@311c` node and resolve it at probe via
+`of_reserved_mem_lookup()`; when the property or the reservation is absent,
+keep `wdt->rec = NULL` (the existing graceful degradation: post-mortem off,
+watchdog unaffected). This turns a silent corruption into an explicit,
+per-board opt-in — consistent with the "board facts live in DT" direction
+shipped in v3.10.0.
+
+**Resolution (v1.5, v3.11.0-pre).** Implemented exactly as recommended:
+the board DTS labels the reservation (`boothold:`) and sets
+`memory-region = <&boothold>;` on the watchdog node; probe resolves it
+via `of_parse_phandle()` + `of_reserved_mem_lookup()` and requires
+`rmem->size >= WDT_REC_SIZE`; `WDT_REC_PHYS` is gone. The companion
+userspace writer (`boothold` v1.2) now discovers the same page from
+`/sys/firmware/devicetree` at runtime, and the bootloader's read-side
+constant is derived per board from `BOARD_DRAM_TOP_KSEG1`
+(`31-Bootloader/boards/<board>/board.h`). Bench-verified end-to-end on
+the Lidl board (probe with no degradation warning; sysrq crash record
+written and decoded at the DT-resolved address), and dtc-verified on the
+Sengled G4 DTS (`/delete-node/` + relabel rebinds the phandle to
+`boothold@3ffe000`).
+
+### WDT-013 — record decode hardening (accepted risk, documented)
+
+Two cosmetic weaknesses in `rtl819x_wdt_report_panic_record()`:
+
+1. `reason[]` is printed with `%s` into dmesg. A record forged by root (or
+   random garbage that happens to pass the magic gate — probability
+   ~2^-32) can embed terminal escape sequences that fire when an operator
+   `cat`s the console log. Sanitizing to printable ASCII would cost ~5
+   lines. Root-only provenance keeps this at *info*.
+2. The single `dev_info()` line carries up to ~850 bytes of decoded fields;
+   with twelve `%pS` expansions it can flirt with the ~1 KB printk record
+   limit and truncate the tail (`reason` is last). Splitting into two lines
+   would remove the risk; against that, the one-line format is what
+   `S26panicrec`'s `grep -F 'previous boot ended in panic'` captures
+   atomically. If a field capture ever arrives truncated, split the line
+   and adapt the grep.
+
+No action required now; revisit if either bites in the field.
+
+### WDT-014 — bootstatus not wired
+
+The WDIND decode lands only in dmesg; `wdd.bootstatus` is never set, so
+`WDIOC_GETBOOTSTATUS` always returns 0. Wiring
+`wdt->wdd.bootstatus = WDIOF_CARDRESET` when WDIND reads 1 is two lines —
+but WDT-001 (WDIND empirically reads 0 after a watchdog reset on rev
+0xb08) makes the value unreliable anyway, and the panic record supersedes
+it as the actual reset-cause channel on this platform. Defer until/unless
+WDT-001 is ever resolved.
+
+---
+
+## 3. Simplification & optimization for kernel 6.18
+
+The driver is already shaped for 6.18: watchdog core registration, full
+devm lifecycle (no `.remove`), `module_platform_driver()`, DT-only probe,
+`watchdog_init_timeout()`. The hot path is a single 30-second-cadence MMIO
+RMW — there is nothing to optimize for performance. Remaining items are
+small and behavior-preserving unless noted:
+
+| ID | Item | Gain |
+|----|------|------|
+| WDT-S01 | `wdt->base = devm_platform_ioremap_resource(pdev, 0);` replaces the `platform_get_resource()` + `devm_ioremap_resource()` pair | −3 lines, the canonical 6.x idiom |
+| WDT-S02 | Drop `platform_set_drvdata(pdev, wdt)` — nothing ever reads it back (no `.remove`, no sibling accessor) | dead line |
+| WDT-S03 | Drop `.get_timeleft` — it returns the constant `wdd->timeout`, which is not a time-left and dilutes the ioctl's meaning; absent the op, the core returns `EOPNOTSUPP` (honest). BusyBox `watchdog` never calls it | −10 lines; *minor userspace-visible change* |
+| WDT-S04 | Fold the duplicated WDTCNR layout documentation — the file header (lines ~5–35) and the register-block comment (~63–90) are near-identical twins; keep the register-block copy, point the header at it | −25 lines of drift-prone duplication |
+| WDT-S05 | `.ping` as a constant write: `writel(WDT_ENABLE_PATTERN \| WDTCLR, base)` instead of the read-modify-write | saves one uncached MMIO read per kick and stops the RMW from silently W1C-clearing WDIND when set (today's RMW reads WDIND=1 and writes it back, erasing the one reset-cause bit WDT-001 is still hoping to observe). Caveat: an adopted chip armed with a non-max OVSEL gets normalized to the max bucket on first kick — which is what `.start` would do anyway |
+| WDT-S06 | Consider `max_hw_heartbeat_ms = 671000` instead of `max_timeout = 671` | semantically exact (the hardware window *is* fixed); the core then derives the keepalive cadence itself and would honor hypothetical longer soft timeouts. Optional — current contract is documented and works |
+| WDT-S07 | `#include <linux/of.h>` appears unused (no `of_*` call; `of_device_id` comes from `mod_devicetable.h`) | verify with a build, then drop |
+
+WDT-011 (§2) is the only *recommended-now* code change; WDT-S01/S02/S04/S07
+are safe to batch with it. WDT-S03/S05/S06 change visible behavior slightly
+and should ride a normal release with a CHANGELOG note.
+
+**Implementation status (v1.6, 2026-06-12).** S01–S06 implemented in one
+batch with WDT-011. Verified core semantics before switching S06: in
+6.18, a non-zero `max_hw_heartbeat_ms` makes `watchdog_timeout_invalid()`
+skip the `max_timeout` clamp entirely, so the conversion *replaces*
+`max_timeout` (now reads 0 in sysfs) rather than complementing it —
+soft timeouts above the 671 s window are accepted and bridged by
+core worker pings (`watchdog_next_keepalive()` uses
+`min_not_zero(timeout, max_hw_heartbeat_ms)/2`, so the stock 60 s
+cadence is unchanged). Bench-verified on the Lidl board: `timeleft`
+sysfs attribute gone (S03), `watchdog -T 700` accepted with the chip
+armed at the max bucket (S06; pre-v1.6 the core rejected >671), feeder
+stop/start and kick path nominal (S05 exercised every 30 s).
+**WDT-S07 was already obsolete when implementation started**: the audit
+predates v1.5, whose `memory-region` resolution added
+`of_parse_phandle()` to the probe — `<linux/of.h>` is now genuinely
+required and stays. CHANGELOG note for S03/S05/S06 to be added at the
+next release cut.
+
+The four kernel patches were also reviewed for 6.18 fit: they touch only
+cold paths, export with `EXPORT_SYMBOL_GPL`, use `raw_cpu_ptr()` correctly
+for the documented UP/panic context, and `timer_collect_pending_fns()`'s
+`delayed_work` un-wrapping uses `container_of` on the embedded timer —
+correct against 6.18.35's `struct delayed_work`. No simplification
+warranted; they are deliberately minimal to keep the vanilla diff small.
+
+---
+
+## 4. Finding ID registry (complete)
+
+IDs are stable because code comments and the DTS reference them. Details of
+WDT-001…WDT-009 live in this repo's git history (pre-v3.10.0 AUDIT.md).
+
+| ID | Status | One-liner |
+|----|--------|-----------|
+| WDT-001 | **open (deferred)** | WDIND reads 0 after a watchdog reset on rev 0xb08 — "last reset:" dmesg line is unreliable; the panic record (v1.2+) now fills that role in practice |
+| WDT-002 | closed (v1.0) | `.restart` at priority 192 supersedes `_machine_restart` |
+| WDT-003 | closed (v1.0) | `of_match_table` restricted to `realtek,rtl8196e-wdt` |
+| WDT-004 | closed (v1.0) | `WDOG_HW_RUNNING` adoption of a pre-armed chip |
+| WDT-005 | closed (v1.1) | CDBR slowclk rework: 25 kHz tick, OVSEL=1001 ceiling ~671 s |
+| WDT-006 | closed (v1.0) | OVSEL is a 4-bit field (datasheet), not the SDK's 2-bit |
+| WDT-007 | closed (v1.1) | `S25watchdog` feeder enabled, DT `timeout-sec=60` |
+| WDT-008 | closed (v1.2) | soft-lockup blind spot: panic notifier + `BOOTPARAM_SOFTLOCKUP_PANIC=y` → ~23 s autonomous recovery |
+| WDT-009 | closed (v1.2) | panic notifier priority pinned `INT_MAX` |
+| WDT-010 | closed (v1.4) | **v1.3 arm-race regression**: single-write arm let a stale up-counter (userspace-armed OVSEL=9) instantly overflow the OVSEL=0 threshold — chip reset before one instruction after the write, losing every candidate list (field-confirmed by a `timers=[none]` capture). Fixed by the two-step arm (clear while halted, then enable) |
+| WDT-011 | **closed (v1.6)** | non-panic-safe `ktime_get_boottime_seconds()` ahead of the arm writes — replaced by the NMI-safe fast accessor, bench-verified end-to-end (§2) |
+| WDT-012 | **closed (v1.5)** | record page now bound to the DT reservation via `memory-region` phandle (§2); was hard-coded |
+| WDT-013 | open — accepted risk | record decode hardening: log injection / printk line length (§2) |
+| WDT-014 | open — deferred | `bootstatus`/`WDIOF_CARDRESET` not wired; moot under WDT-001 (§2) |
+| WDT-S01…S06 | **closed (v1.6)** | 6.18 simplifications implemented (§3); S06 replaces `max_timeout` with `max_hw_heartbeat_ms` |
+| WDT-S07 | closed — obsolete | `<linux/of.h>` became a real dependency in v1.5 (`of_parse_phandle`); nothing to drop (§3) |
+
+---
+
+## 5. Conclusion
+
+The v1.6 driver is in good shape: no security flaws, a panic path whose
+ordering has been hardened by real field failure (WDT-010), and an API
+surface that matches 6.18 idioms. **WDT-012 closed in v1.5** (record page
+bound to the DT reservation), **WDT-011 and the whole S-batch closed in
+v1.6** (panic-safe uptime read; canonical probe idiom; honest
+`max_hw_heartbeat_ms` contract; constant-write kick that preserves
+WDIND). Remaining open items are deliberate deferrals: WDT-001 (hardware),
+WDT-013 (accepted risk), WDT-014 (moot under WDT-001).

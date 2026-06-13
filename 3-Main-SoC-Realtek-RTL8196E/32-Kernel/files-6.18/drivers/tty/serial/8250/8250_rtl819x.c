@@ -32,7 +32,7 @@
 #include "8250.h"
 
 #define DRV_NAME    "rtl8196e-uart"
-#define DRV_VERSION "1.2"
+#define DRV_VERSION "1.4"
 
 /*
  * RTL8196E UART Flow Control Register
@@ -74,19 +74,6 @@
  */
 #define RTL8196E_PIN_MUX_UART1_BITS		(BIT(1) | BIT(3) | BIT(6))
 
-/*
- * RX FIFO trigger level.  Set to R_TRIG_01 (trigger at 4 of 16 bytes) to
- * give the host extra headroom at 460800 baud, where the FIFO fills in
- * ~280 us and AFE only engages near 14/16.  At trigger=4 the kernel sees
- * the IRQ ~70 us into the burst (vs ~140 us at trigger=8), leaving room
- * for IRQ latency spikes on this single-core 200 MHz Lexra without
- * overruns.  Trade-off: ~2x the IRQ rate at sustained traffic, negligible
- * on this CPU compared to the cost of dropped bytes -> HDLC corruption ->
- * Spinel timeout (#89).
- * Candidates for benchmarking: UART_FCR_R_TRIG_01 (4), _10 (8), _11 (14).
- */
-#define RTL8196E_UART_FCR	(UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_01)
-
 /**
  * struct rtl8196e_uart_data - Private data for RTL8196E UART
  * @line: UART line number assigned by serial core
@@ -95,7 +82,8 @@
  * @supports_afe: True if auto-flow-control is enabled in DT
  * @flow_active: True while CRTSCTS/AFE flow control is currently engaged.
  *   Gates the set_mctrl RTS-pin guard (issue #109): only force RTS on when
- *   hardware flow control actually owns the line.
+ *   hardware flow control actually owns the line. Synced to the absolute
+ *   CRTSCTS state on every set_termios call (audit 8250RTL-008).
  */
 struct rtl8196e_uart_data {
 	int line;
@@ -252,15 +240,21 @@ static void rtl8196e_uart_set_divisor(struct uart_port *port, unsigned int baud,
  * @old: Old termios settings
  *
  * This function is called whenever termios settings change (via tcsetattr/stty).
- * It monitors the CRTSCTS flag and synchronizes the RTL8196E hardware flow
- * control register (bit 29) accordingly.
+ * It synchronizes the RTL8196E hardware flow control register (bit 29) with
+ * the CRTSCTS flag.
+ *
+ * The sync is on the *absolute* CRTSCTS state, not on transitions:
+ * edge-detection left @flow_active stale-true (RTS guard armed, AFE off)
+ * from the probe-time pre-enable until the first CRTSCTS toggle, because
+ * the first open arrives with default termios and no edge (audit
+ * 8250RTL-008). Re-enforcing the full MCR pattern on every CRTSCTS termios
+ * call is also one more layer against shadow-MCR clobbers (v3.5.1).
  */
 static void rtl8196e_uart_set_termios(struct uart_port *port,
 				      struct ktermios *termios,
 				      const struct ktermios *old)
 {
 	struct rtl8196e_uart_data *data = port->private_data;
-	bool crtscts_new, crtscts_old;
 
 	/*
 	 * Let the 8250 core program baud/LCR/AFE; we only mirror the SoC
@@ -272,21 +266,10 @@ static void rtl8196e_uart_set_termios(struct uart_port *port,
 	if (!data || !data->supports_afe)
 		return;
 
-	/* Check if CRTSCTS flag changed */
-	crtscts_new = termios->c_cflag & CRTSCTS;
-	crtscts_old = old ? (old->c_cflag & CRTSCTS) : false;
-
-	if (crtscts_new == crtscts_old)
-		return; /* No change, nothing to do */
-
-	/* Synchronize SoC flow-control gate with CRTSCTS */
-	if (crtscts_new) {
-		dev_dbg(data->dev, "CRTSCTS enabled, activating HW flow control\n");
+	if (termios->c_cflag & CRTSCTS)
 		rtl8196e_uart_enable_flow_control(port, data);
-	} else {
-		dev_dbg(data->dev, "CRTSCTS disabled, deactivating HW flow control\n");
+	else
 		rtl8196e_uart_disable_flow_control(port, data);
-	}
 }
 
 /**
@@ -341,16 +324,25 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	data->dev = &pdev->dev;
 
-	/* Request + ioremap UART register window. Also populates @regs so we
-	 * can set uart.port.mapbase below. The request_mem_region side of
-	 * this helper gives us a proper /proc/iomem entry and conflict
-	 * detection, which devm_ioremap alone would not.
+	/* Map the UART register window WITHOUT claiming the mem region:
+	 * the 8250 core claims it itself in serial8250_config_port()
+	 * (serial8250_request_std_resource). A devm request here made that
+	 * claim fail with -EBUSY and config_port bail out early, which left
+	 * up->fcr at 0 (FIFO genuinely disabled on the wire — confirmed via
+	 * IIR bits 7:6 = 00) and the rx_trig_bytes sysfs knob unregistered.
+	 * Audit 8250RTL-007; plain devm_ioremap is the standard 8250-glue
+	 * idiom (cf. 8250_dw).
 	 */
-	uart.port.membase = devm_platform_get_and_ioremap_resource(pdev, 0, &regs);
-	if (IS_ERR(uart.port.membase)) {
-		ret = PTR_ERR(uart.port.membase);
-		dev_err(&pdev->dev, "Failed to map UART registers: %d\n", ret);
-		return ret;
+	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!regs) {
+		dev_err(&pdev->dev, "no UART register resource\n");
+		return -EINVAL;
+	}
+	uart.port.membase = devm_ioremap(&pdev->dev, regs->start,
+					 resource_size(regs));
+	if (!uart.port.membase) {
+		dev_err(&pdev->dev, "Failed to map UART registers\n");
+		return -ENOMEM;
 	}
 
 	/* flow_ctrl_base is an alias on MCR; assigned after struct init below */
@@ -437,9 +429,7 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 		}
 	}
 
-	/* flow_ctrl_base aliases MCR (see header comment). membase was set
-	 * earlier by devm_platform_get_and_ioremap_resource.
-	 */
+	/* flow_ctrl_base aliases MCR (see header comment). */
 	data->flow_ctrl_base = uart.port.membase + RTL8196E_UART_FLOW_CTRL_OFFSET;
 
 	/* Set UART capabilities */
@@ -457,10 +447,13 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 		data->supports_afe = false;
 	}
 
-	/* Configure FIFO */
+	/* Configure FIFO. No .fcr on purpose: the template field is never
+	 * copied by serial8250_register_8250_port() (audit 8250RTL-006).
+	 * The effective FCR is pinned post-registration instead — see the
+	 * trigger-1 erratum block after the ttyS1 line check below.
+	 */
 	uart.port.fifosize = 16;
 	uart.tx_loadsz = 16;
-	uart.fcr = RTL8196E_UART_FCR;
 
 	/* Set port flags */
 	uart.port.flags = UPF_FIXED_PORT | UPF_FIXED_TYPE;
@@ -486,6 +479,27 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 		serial8250_unregister_port(data->line);
 		ret = -EBUSY;
 		goto err_clk_disable;
+	}
+
+	/* Pin the RX FIFO trigger to 1 (R_TRIG_00), overriding the
+	 * PORT_16550A table default (trigger 8) that config_port just set.
+	 * Hardware erratum (audit 8250RTL-009): on this UART clone, RX
+	 * trigger levels above 1 produce erratic overruns under sustained
+	 * line-rate load, non-monotonic in the trigger value (loopback
+	 * bench 2026-06-12, 20 s flood, flow control off:
+	 *   892857: trig1 oe=0, trig4 oe=548, trig8 oe=53, trig14 oe=2
+	 *   460800: trig1 oe=0, trig8 oe=3,  trig14 oe=2088).
+	 * Trigger 1 with the FIFO enabled keeps the full 16-byte cushion
+	 * against IRQ latency and is wire-identical to the long-proven
+	 * v3.x behaviour (FCR=0 on this clone kept the FIFO alive with an
+	 * effective trigger of 1 — see 8250RTL-007). The cost, ~1 IRQ per
+	 * 1-2 RX bytes at line rate, is the historical baseline. The
+	 * rx_trig_bytes sysfs knob stays writable for experiments.
+	 */
+	{
+		struct uart_8250_port *up = serial8250_get_port(data->line);
+
+		up->fcr = UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_00;
 	}
 
 	/* Re-assert flow control after register_8250_port to cover any MCR

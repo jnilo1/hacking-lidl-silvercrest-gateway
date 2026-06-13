@@ -32,6 +32,8 @@
 #include <linux/timer.h>
 #include <linux/slab.h>
 
+#define DRV_VERSION		"1.1"
+
 #define PWM_PERIOD_JIFFIES	4	/* 4 jiffies = 16ms @ HZ=250 → 62.5 Hz */
 #define MAX_BRIGHTNESS		255
 
@@ -40,6 +42,7 @@ struct gpio_pwm_led {
 	struct gpio_desc	*gpiod;
 	struct timer_list	timer;
 	unsigned int		brightness;	/* current target 0-255    */
+	unsigned int		threshold;	/* quantized ON jiffies/period */
 	unsigned int		counter;	/* position in PWM cycle   */
 	bool			pwm_active;	/* timer currently runs    */
 	spinlock_t		lock;
@@ -50,23 +53,19 @@ struct gpio_pwm_led {
 static void gpio_pwm_timer_fn(struct timer_list *t)
 {
 	struct gpio_pwm_led *led = timer_container_of(led, t, timer);
-	unsigned int bright, threshold;
+	unsigned int threshold;
 	unsigned long flags;
 
 	spin_lock_irqsave(&led->lock, flags);
-	bright = led->brightness;
+	threshold = led->threshold;
 	spin_unlock_irqrestore(&led->lock, flags);
 
-	/* Should not happen, but guard anyway */
-	if (bright == 0 || bright >= MAX_BRIGHTNESS) {
+	/* Should not happen (brightness_set handles the 0/4 and 4/4 duty
+	 * bands without a timer — audit LED-002), but guard anyway. */
+	if (threshold == 0 || threshold >= PWM_PERIOD_JIFFIES) {
 		led->pwm_active = false;
 		return;
 	}
-
-	/* threshold = number of jiffies ON per period */
-	threshold = (bright * PWM_PERIOD_JIFFIES + MAX_BRIGHTNESS / 2) / MAX_BRIGHTNESS;
-	if (threshold == 0)
-		threshold = 1;
 
 	gpiod_set_value(led->gpiod, led->counter < threshold ? 1 : 0);
 
@@ -92,36 +91,50 @@ static void gpio_pwm_brightness_set(struct led_classdev *cdev,
 				     enum led_brightness value)
 {
 	struct gpio_pwm_led *led = container_of(cdev, struct gpio_pwm_led, cdev);
+	unsigned int threshold;
 	unsigned long flags;
+
+	/* Quantize once here (audit LED-002): the 4-jiffy window maps
+	 * 0-255 to 0..4 ON-jiffies per period. The 0/4 and 4/4 bands are
+	 * steady GPIO levels — no reason to keep a 250 Hz timer alive to
+	 * re-write a constant.
+	 */
+	threshold = (value * PWM_PERIOD_JIFFIES + MAX_BRIGHTNESS / 2) /
+		    MAX_BRIGHTNESS;
 
 	spin_lock_irqsave(&led->lock, flags);
 	led->brightness = value;
+	led->threshold = threshold;
 	spin_unlock_irqrestore(&led->lock, flags);
 
-	if (value == 0) {
-		/* Full OFF -- stop PWM, force GPIO low */
+	if (threshold == 0) {
+		/* Rounds to always-off -- stop PWM, force GPIO low */
 		if (led->pwm_active) {
 			timer_delete_sync(&led->timer);
 			led->pwm_active = false;
 		}
 		gpiod_set_value(led->gpiod, 0);
-	} else if (value >= MAX_BRIGHTNESS) {
-		/* Full ON -- stop PWM, force GPIO high */
+	} else if (threshold >= PWM_PERIOD_JIFFIES) {
+		/* Rounds to always-on -- stop PWM, force GPIO high */
 		if (led->pwm_active) {
 			timer_delete_sync(&led->timer);
 			led->pwm_active = false;
 		}
 		gpiod_set_value(led->gpiod, 1);
 	} else {
-		/* Intermediate -- start PWM if not already running */
+		/* Intermediate -- start PWM if not already running.
+		 * Arm at "jiffies", never "jiffies + 1": the timer wheel
+		 * rounds expiries up a bucket, so +1 lands at +2 and halves
+		 * the PWM frequency (the #120 rule, audit LED-003).
+		 */
 		if (!led->pwm_active) {
 			led->counter = 0;
 			led->pwm_active = true;
-			mod_timer(&led->timer, jiffies + 1);
+			mod_timer(&led->timer, jiffies);
 		}
 		/*
 		 * If already running the new duty cycle is picked up on the
-		 * next timer callback via led->brightness -- no restart needed.
+		 * next timer callback via led->threshold -- no restart needed.
 		 */
 	}
 }
@@ -133,12 +146,24 @@ static int gpio_pwm_led_probe_child(struct device *dev,
 				     struct gpio_pwm_led *led)
 {
 	struct led_init_data init_data = {};
-	const char *state;
+	enum gpiod_flags gflags = GPIOD_OUT_LOW;
+	const char *state = NULL;
 	const char *trigger;
+	bool keep = false;
 	int ret;
 
+	/* Parse default-state before requesting the line: "keep" must
+	 * request GPIOD_ASIS or the OUT_LOW request itself destroys the
+	 * state we are supposed to keep (audit LED-001).
+	 */
+	if (!of_property_read_string(np, "default-state", &state) &&
+	    !strcmp(state, "keep")) {
+		keep = true;
+		gflags = GPIOD_ASIS;
+	}
+
 	led->gpiod = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np),
-					    NULL, GPIOD_OUT_LOW, NULL);
+					    NULL, gflags, NULL);
 	if (IS_ERR(led->gpiod))
 		return PTR_ERR(led->gpiod);
 
@@ -152,14 +177,17 @@ static int gpio_pwm_led_probe_child(struct device *dev,
 	init_data.fwnode = of_fwnode_handle(np);
 
 	/* Default state */
-	if (!of_property_read_string(np, "default-state", &state)) {
-		if (!strcmp(state, "on"))
-			led->cdev.brightness = led->cdev.max_brightness;
-		else if (!strcmp(state, "keep"))
-			led->cdev.brightness = gpiod_get_value(led->gpiod)
-					       ? MAX_BRIGHTNESS : 0;
-		/* else "off" -> 0 (default) */
+	if (keep) {
+		int val = gpiod_get_value(led->gpiod);
+
+		led->cdev.brightness = val ? MAX_BRIGHTNESS : 0;
+		/* The ASIS request left the line untouched (possibly an
+		 * input); make it an output at the level we just read. */
+		gpiod_direction_output(led->gpiod, val);
+	} else if (state && !strcmp(state, "on")) {
+		led->cdev.brightness = led->cdev.max_brightness;
 	}
+	/* else "off" -> 0 (default) */
 
 	/* Default trigger */
 	if (!of_property_read_string(np, "linux,default-trigger", &trigger))
@@ -208,7 +236,7 @@ static int gpio_pwm_leds_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, leds);
 
-	dev_info(dev, "%d LED(s) registered\n", count);
+	dev_info(dev, "v" DRV_VERSION " - %d LED(s) registered\n", count);
 
 	return 0;
 }
@@ -231,4 +259,5 @@ module_platform_driver(gpio_pwm_leds_driver);
 
 MODULE_AUTHOR("Jacques Nilo");
 MODULE_DESCRIPTION("GPIO LED driver with software PWM brightness control");
+MODULE_VERSION(DRV_VERSION);
 MODULE_LICENSE("GPL");
