@@ -81,10 +81,23 @@ start)
         # retrying so the gateway recovers once the DHCP server is back (see #82)
         udhcpc -i eth0 -x hostname:"$HOSTNAME" -s /bin/udhcpc.script -S \
             -p /var/run/udhcpc0.pid -T 3 -b 2>&1 | grep -v "no lease, failing"
+        # Watch the carrier and re-trigger DHCP when the link returns on a
+        # possibly different subnet (cable moved). busybox udhcpc never
+        # re-DISCOVERs on its own once bound (#132). DHCP mode only: this is
+        # the DHCP branch, so the static-IP path above never starts it.
+        if [ -x /usr/sbin/linkwatch ]; then
+            linkwatch -i eth0 -p /var/run/udhcpc0.pid &
+            echo $! > /var/run/linkwatch.pid
+        fi
     fi
     ;;
 stop)
     echo "Stopping network"
+
+    if [ -f /var/run/linkwatch.pid ]; then
+        kill "$(cat /var/run/linkwatch.pid)" 2>/dev/null
+        rm -f /var/run/linkwatch.pid
+    fi
 
     if [ -f /var/run/udhcpc0.pid ]; then
         kill "$(cat /var/run/udhcpc0.pid)" 2>/dev/null
