@@ -8,12 +8,36 @@ rootfs (33-), and userdata (34-).
 
 ## [Unreleased]
 
-_The driver-audit release. A per-driver hardening pass across the whole
-Linux 6.18 kernel tree (nine drivers) lands alongside two userdata fixes
-surfaced during the G4 (Sengled) port beta (issues #131, #132). Every
-change is board-agnostic and reproduced on the Lidl bench, and the kernel
-image was bench-validated on the reference hardware. Currently on the
-`v4.0.0-pre` branch for beta testing._
+_Folds the `v3.11.0-pre` beta into v4.0.0. Two headlines: the **Sengled
+Smart Hub G4 (E39-G8C)** board port — the firmware's first port to a
+second board, contributed and hardware-validated by @hlyi — and a
+per-driver hardening pass across the whole Linux 6.18 kernel tree. Two
+userdata fixes (#131, #132) ride along. Everything is board-agnostic and
+was validated on the Lidl bench; currently on the `v4.0.0-pre` branch for
+beta testing._
+
+### Sengled Smart Hub G4 (E39-G8C) — a second supported board
+
+The platform is no longer Lidl-only. Porting to an RTL8196E twin now means
+contributing per-board data files instead of patching the tree:
+
+* **Bootloader `BOARD=`** (#126): a board contributes a single
+  `31-Bootloader/boards/<board>/board.h` packaging its DRAM bring-up, RAM
+  banner and boothold-page constants; `BOARD=<board> ./build_bootloader.sh`
+  selects it (default `lidl`, which still rebuilds bit-for-bit identical).
+* **The Sengled E39-G8C board** (64 MB DDR2): its `board.h` was contributed
+  and validated on real hardware by **@hlyi** (#127, #128), who also
+  reduced the front-panel bootloader-mode pin hold from 5 s to 1 s.
+* **Hardware teardown page** for the G4 (`0-Hardware/sengled-e39-g8c/`) —
+  also **@hlyi** (#133).
+* **Board-portable LAN LED** (#126): the Ethernet driver learned a
+  `realtek,led-pads` devicetree property (eth v2.8), so the LAN LED maps to
+  the correct switch pad on either board (the Lidl and the G4 wire it
+  differently).
+
+This pairs with the kernel `BOARD=` devicetree selection (shipped in 3.10.0)
+and the EFR32 radio-firmware `BOARD=` support (see the radio changelog,
+#130) so all three build stages are board-aware.
 
 An out-of-band audit produced an `AUDIT.md` / `DESIGN.md` pair for every
 RTL8196E kernel driver; the findings were implemented and each driver
