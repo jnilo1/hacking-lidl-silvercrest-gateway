@@ -35,8 +35,22 @@ PATCHES_DIR="${SCRIPT_DIR}/patches"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
 PROJECT_NAME="ot-rcp"
 
 # Default baud — historical OT-RCP default and tested ceiling.
@@ -81,6 +95,7 @@ esac
 
 echo "========================================="
 echo "  OpenThread RCP Firmware Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  Protocol: Thread 1.3 / Matter"
 echo "  Baud:   ${BAUD}"
@@ -185,12 +200,16 @@ slc generate ${PROJECT_NAME}.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DEVICE} -
 echo ""
 echo "[3/4] Applying configuration..."
 
-# Copy UARTDRV config for Lidl Gateway pins (PA0/PA1/PA4/PA5)
+# Copy UARTDRV config; the reference pins (PA0/PA1/PA4/PA5) come from the
+# patches header, then the selected board's routing is applied over them
+# (a no-op for the lidl reference, the override path for ported boards).
 if [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
     cp "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" config/
     # Substitute the requested baud into the UARTDRV config header
     sed -i "s|^#define SL_UARTDRV_USART_VCOM_BAUDRATE.*|#define SL_UARTDRV_USART_VCOM_BAUDRATE        ${BAUD}|" config/sl_uartdrv_usart_vcom_config.h
-    echo "  - Copied UARTDRV config (baud=${BAUD}, HW flow control, PA0/PA1/PA4/PA5)"
+    apply_uart_config config/sl_uartdrv_usart_vcom_config.h \
+        SL_UARTDRV_USART_VCOM uartdrvFlowControlHw uartdrvFlowControlNone
+    echo "  - Copied UARTDRV config (baud=${BAUD}, board=${BOARD}, ${BOARD_UART_PERIPHERAL}, flow=${BOARD_UART_FLOW})"
 fi
 
 # Copy PTI config: PTI is disabled on this gateway (no debug probe connected).

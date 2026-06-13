@@ -32,8 +32,22 @@ PATCHES_DIR="${SCRIPT_DIR}/patches"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
 
 # Default baud — historical NCP default. Override via positional arg.
 DEFAULT_BAUD=115200
@@ -78,6 +92,7 @@ esac
 
 echo "========================================="
 echo "  NCP-UART-HW Firmware Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  Baud:   ${BAUD}"
 echo "========================================="
@@ -193,7 +208,11 @@ cp "${PATCHES_DIR}/sl_iostream_usart_vcom_config.h" config/
 cp "${PATCHES_DIR}/sl_rail_util_pti_config.h" config/
 # Substitute the requested baud into the UART config header
 sed -i "s|^#define SL_IOSTREAM_USART_VCOM_BAUDRATE.*|#define SL_IOSTREAM_USART_VCOM_BAUDRATE              ${BAUD}|" config/sl_iostream_usart_vcom_config.h
-echo "  - Copied UART and PTI config from patches (baud=${BAUD})"
+# Apply the selected board's UART routing — a no-op (byte-identical header)
+# for the lidl reference, the override path for ported boards.
+apply_uart_config config/sl_iostream_usart_vcom_config.h \
+    SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone
+echo "  - Copied UART and PTI config from patches (baud=${BAUD}, board=${BOARD}, flow=${BOARD_UART_FLOW})"
 
 echo "  Patching Makefile..."
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))

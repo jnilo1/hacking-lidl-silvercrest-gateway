@@ -4,6 +4,31 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [Unreleased]
+
+### `BOARD=` support for the firmware builds (radio half of the multi-board work)
+
+The NCP and OT-RCP builds are now parameterised by board, mirroring the
+`BOARD=` mechanism on the RTL8196E bootloader side. A board contributes a
+single `boards/<board>/board.env` file packaging the MCU OPN and the UART
+routing to the host; the build scripts read it (default `BOARD=lidl`) and a
+shared helper (`boards/lib_uart_config.sh`) applies the routing into the
+generated VCOM config header, substituting only the value token on each
+`#define` so the reference build stays byte-identical.
+
+- `boards/lidl/board.env` reproduces the historical hard-coded values, so
+  `BOARD=lidl` (the default) is unchanged — verified: the rebuilt NCP `.gbl`
+  is byte-for-byte identical to the committed firmware, and the generated VCOM
+  headers (iostream for NCP, uartdrv for OT-RCP) are byte-identical to their
+  `patches/` references.
+- `boards/sengled-e39-g8c/board.env` is a **placeholder** for the Sengled G4:
+  only the MG13P OPN (`EFR32MG13P732F512IM32`, from the hardware page in #133)
+  is verified; the UART routing is copied from the Lidl reference and awaits
+  on-hardware validation (#130). RCP, Router and the bootloader remain
+  lidl-only and are skipped for non-lidl boards.
+
+---
+
 ## [3.8.1] - 2026-06-09
 
 Docker-image-only fix for the `cpcd-zigbeed` container. No EFR32 firmware,

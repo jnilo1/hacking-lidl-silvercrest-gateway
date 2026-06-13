@@ -70,12 +70,35 @@ else
     done
 fi
 
+# Board selection — propagated to the per-firmware builders via the
+# environment. board.env packages the chip OPN + UART routing (boards/README.md).
+BOARD="${BOARD:-lidl}"
+if [ ! -f "${SCRIPT_DIR}/boards/${BOARD}/board.env" ]; then
+    echo "Error: unknown BOARD='${BOARD}'"
+    echo "Available boards: $(cd "${SCRIPT_DIR}/boards" && ls -d */ 2>/dev/null | tr -d /)"
+    exit 1
+fi
+export BOARD
+
+# Only NCP and OT-RCP are board-parameterised today; the rest stay lidl-only
+# until their builds learn BOARD= (RCP/Router/bootloader).
+if [ "${BOARD}" != "lidl" ] && \
+   { [ $BUILD_BOOTLOADER -eq 1 ] || [ $BUILD_RCP -eq 1 ] || [ $BUILD_ROUTER -eq 1 ]; }; then
+    echo "NOTE: BOARD=${BOARD} currently supports only 'ncp' and 'ot-rcp';"
+    echo "      skipping bootloader/rcp/router (still lidl-only)."
+    echo ""
+    BUILD_BOOTLOADER=0
+    BUILD_RCP=0
+    BUILD_ROUTER=0
+fi
+
 echo "========================================="
 echo "  BUILDING EFR32 FIRMWARE"
 echo "========================================="
 echo ""
 
 # Show what will be built
+echo "Board: ${BOARD}"
 echo "Targets:"
 [ $BUILD_BOOTLOADER -eq 1 ] && echo "  • bootloader"
 [ $BUILD_NCP -eq 1 ]        && echo "  • ncp"
