@@ -4,7 +4,7 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
-## [Unreleased]
+## [4.0.0-pre] - 2026-06-13
 
 ### `BOARD=` support for the firmware builds (radio half of the multi-board work)
 

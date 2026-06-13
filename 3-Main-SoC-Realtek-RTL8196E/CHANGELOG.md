@@ -6,7 +6,7 @@ rootfs (33-), and userdata (34-).
 
 ---
 
-## [Unreleased]
+## [4.0.0-pre] - 2026-06-13
 
 _Folds the `v3.11.0-pre` beta into v4.0.0. Two headlines: the **Sengled
 Smart Hub G4 (E39-G8C)** board port — the firmware's first port to a
