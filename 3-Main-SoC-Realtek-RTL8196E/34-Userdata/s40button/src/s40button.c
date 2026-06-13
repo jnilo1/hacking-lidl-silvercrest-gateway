@@ -25,7 +25,9 @@
  *   - Debounce: require 3 consecutive LOW samples (300 ms) before
  *     treating it as a real press.
  *   - Subtle LED blink (every 500 ms, brightness alternates 30/255)
- *     during the hold for visual feedback.
+ *     during the hold for visual feedback; on release the LED is
+ *     restored to the state it had immediately before the press
+ *     (captured at press time, not at boot — issue #131).
  *   - 5 s sustained press fires recover_efr32; the LED briefly blinks
  *     off→on to confirm the trigger; we wait for release before re-arming.
  *   - Short presses (< 5 s) are ignored.
@@ -33,7 +35,7 @@
  *
  * Build: build_s40button.sh in this tree (Lexra MIPS / musl, static).
  *
- * J. Nilo, April 2026 (v2: June 2026)
+ * J. Nilo, April 2026 (v2: June 2026; v2.1: pre-press LED restore, #131)
  */
 
 #include <errno.h>
@@ -239,7 +241,6 @@ int main(int argc, char **argv)
            "started: line %d claimed, %dms poll, %ds long-press → %s -q",
            line, POLL_INTERVAL_MS, LONG_PRESS_MS / 1000, RECOVER_BIN);
 
-    int saved_led = led_get();
     int armed = 0;
 
     for (;;) {
@@ -277,6 +278,13 @@ int main(int argc, char **argv)
         syslog(LOG_NOTICE,
                "press detected, watching for %ds long-press",
                LONG_PRESS_MS / 1000);
+        /*
+         * Capture the LED state at press time, not at boot: the status
+         * LED can be changed at runtime by other code, and a press must
+         * leave it exactly as it was found (issue #131). Re-read here,
+         * before the first blink below.
+         */
+        int pre_press_led = led_get();
         int held_ms = DEBOUNCE_SAMPLES * POLL_INTERVAL_MS;
         int blink_state = 0;
         int fired = 0;
@@ -310,8 +318,8 @@ int main(int argc, char **argv)
                    held_ms);
         }
 
-        if (saved_led >= 0)
-            led_set(saved_led);
+        if (pre_press_led >= 0)
+            led_set(pre_press_led);
     }
     /* unreachable */
 }
