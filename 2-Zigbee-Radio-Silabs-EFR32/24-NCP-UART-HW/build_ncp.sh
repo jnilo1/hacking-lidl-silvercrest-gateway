@@ -49,6 +49,10 @@ fi
 # Target chip — from the selected board.
 TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
 
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
+
 # Default baud — historical NCP default. Override via positional arg.
 DEFAULT_BAUD=115200
 TESTED_BAUDS="115200 230400 460800 691200 892857"
@@ -211,7 +215,7 @@ sed -i "s|^#define SL_IOSTREAM_USART_VCOM_BAUDRATE.*|#define SL_IOSTREAM_USART_V
 # Apply the selected board's UART routing — a no-op (byte-identical header)
 # for the lidl reference, the override path for ported boards.
 apply_uart_config config/sl_iostream_usart_vcom_config.h \
-    SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone
+    SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware
 echo "  - Copied UART and PTI config from patches (baud=${BAUD}, board=${BOARD}, flow=${BOARD_UART_FLOW})"
 
 echo "  Patching Makefile..."
@@ -253,7 +257,7 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/ncp-uart-hw"
-OUT_BASE="ncp-uart-hw-${EMBERZNET_VERSION}-${BAUD}"
+OUT_BASE="ncp-uart-hw-${EMBERZNET_VERSION}-${BAUD}${BOARD_SUFFIX}"
 
 # Only remove the specific files we're about to rewrite — preserve other baud
 # variants in firmware/ (the matrix lives here side-by-side).

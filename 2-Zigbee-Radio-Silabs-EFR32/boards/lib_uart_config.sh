@@ -10,13 +10,14 @@
 # resulting firmware is unaffected — the mechanism is exercised on every build
 # but is a no-op for the board it was modelled on.
 #
-# Usage: apply_uart_config <header> <define-prefix> <flow-hw-token> <flow-none-token>
+# Usage: apply_uart_config <header> <define-prefix> <flow-hw-token> <flow-none-token> <flow-sw-token>
 #   <define-prefix>   e.g. SL_IOSTREAM_USART_VCOM  (NCP) or SL_UARTDRV_USART_VCOM (OT-RCP)
 #   <flow-hw-token>   SDK enum for RTS/CTS handshake (driver-specific)
-#   <flow-none-token> SDK enum for no hardware flow control (driver-specific)
+#   <flow-none-token> SDK enum for no flow control (driver-specific)
+#   <flow-sw-token>   SDK enum for software XON/XOFF flow control (driver-specific)
 
 apply_uart_config() {
-    local hdr="$1" p="$2" flow_hw="$3" flow_none="$4"
+    local hdr="$1" p="$2" flow_hw="$3" flow_none="$4" flow_sw="$5"
 
     # Each BOARD_UART_{TX,RX,CTS,RTS} is "<port-letter> <pin> <loc>".
     local tx_port tx_pin tx_loc rx_port rx_pin rx_loc
@@ -29,7 +30,8 @@ apply_uart_config() {
     case "$BOARD_UART_FLOW" in
         hw)   flow_tok="$flow_hw" ;;
         none) flow_tok="$flow_none" ;;
-        *) echo "ERROR: board.env BOARD_UART_FLOW='${BOARD_UART_FLOW}' (expected hw|none)" >&2
+        sw)   flow_tok="$flow_sw" ;;
+        *) echo "ERROR: board.env BOARD_UART_FLOW='${BOARD_UART_FLOW}' (expected hw|none|sw)" >&2
            return 1 ;;
     esac
 

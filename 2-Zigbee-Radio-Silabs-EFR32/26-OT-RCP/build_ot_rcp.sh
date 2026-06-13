@@ -53,6 +53,10 @@ fi
 TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
 PROJECT_NAME="ot-rcp"
 
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
+
 # Default baud — historical OT-RCP default and tested ceiling.
 DEFAULT_BAUD=460800
 TESTED_BAUDS="460800"
@@ -208,7 +212,7 @@ if [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
     # Substitute the requested baud into the UARTDRV config header
     sed -i "s|^#define SL_UARTDRV_USART_VCOM_BAUDRATE.*|#define SL_UARTDRV_USART_VCOM_BAUDRATE        ${BAUD}|" config/sl_uartdrv_usart_vcom_config.h
     apply_uart_config config/sl_uartdrv_usart_vcom_config.h \
-        SL_UARTDRV_USART_VCOM uartdrvFlowControlHw uartdrvFlowControlNone
+        SL_UARTDRV_USART_VCOM uartdrvFlowControlHw uartdrvFlowControlNone uartdrvFlowControlSw
     echo "  - Copied UARTDRV config (baud=${BAUD}, board=${BOARD}, ${BOARD_UART_PERIPHERAL}, flow=${BOARD_UART_FLOW})"
 fi
 
@@ -268,7 +272,7 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/${PROJECT_NAME}"
-OUT_BASE="${PROJECT_NAME}-${BAUD}"
+OUT_BASE="${PROJECT_NAME}-${BAUD}${BOARD_SUFFIX}"
 
 if [ -f "${SRC_BASE}.s37" ]; then
     # Only remove the specific files we're about to rewrite — preserve other

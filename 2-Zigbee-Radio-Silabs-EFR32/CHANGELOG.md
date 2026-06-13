@@ -21,11 +21,17 @@ generated VCOM config header, substituting only the value token on each
   is byte-for-byte identical to the committed firmware, and the generated VCOM
   headers (iostream for NCP, uartdrv for OT-RCP) are byte-identical to their
   `patches/` references.
+- Flow control is `hw` / `sw` / `none`. Software XON/XOFF is a first-class SDK
+  option (`uartFlowControlSoftware` for NCP, `uartdrvFlowControlSw` for OT-RCP)
+  selected through the same `_FLOW_CONTROL_TYPE` token — no patch required.
 - `boards/sengled-e39-g8c/board.env` is a **placeholder** for the Sengled G4:
-  only the MG13P OPN (`EFR32MG13P732F512IM32`, from the hardware page in #133)
-  is verified; the UART routing is copied from the Lidl reference and awaits
-  on-hardware validation (#130). RCP, Router and the bootloader remain
-  lidl-only and are skipped for non-lidl boards.
+  the MG13P OPN (`EFR32MG13P732F512IM32`, from the hardware page in #133) and
+  `BOARD_UART_FLOW=sw` (the G4 has no RTS/CTS, #123) are set; the USART/pin
+  routing is copied from the Lidl reference and awaits on-hardware validation
+  (#130). A clean G4 build additionally needs MG13-specific SDK component config
+  (first blocker: `SL_DEVICE_INIT_EMU_EM4_VSCALE` in `device_init_emu`) — part
+  of the hardware port, not carried by `board.env`. RCP, Router and the
+  bootloader remain lidl-only and are skipped for non-lidl boards.
 
 ---
 

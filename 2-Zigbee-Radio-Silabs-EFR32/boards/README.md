@@ -33,7 +33,7 @@ builds learn `BOARD=`.
 | `BOARD_TARGET_DEVICE` | Exact MCU OPN passed to `slc generate --with` |
 | `BOARD_UART_PERIPHERAL` / `_NO` | USART instance feeding the RTL8196E (e.g. `USART0` / `0`) |
 | `BOARD_UART_TX` / `_RX` | `"<port-letter> <pin> <location>"` for each data line |
-| `BOARD_UART_FLOW` | `hw` (RTS/CTS handshake) or `none` (no hardware flow) |
+| `BOARD_UART_FLOW` | `hw` (RTS/CTS handshake), `sw` (software XON/XOFF), or `none` |
 | `BOARD_UART_CTS` / `_RTS` | `"<port-letter> <pin> <location>"`; ignored when flow ≠ `hw` |
 
 The build copies the firmware's reference VCOM header from its `patches/` tree,
@@ -42,7 +42,16 @@ only the value token on each `#define` and preserving the file's formatting.
 For the `lidl` board the values equal the reference, so the header — and the
 resulting firmware — is byte-for-byte unchanged. The same helper drives both
 the iostream header (NCP) and the uartdrv header (OT-RCP); the SDK enum names
-for flow control differ between them and are supplied by each build script.
+for flow control differ between them and are supplied by each build script
+(`hw`→`usartHwFlowControlCtsAndRts`/`uartdrvFlowControlHw`,
+`sw`→`uartFlowControlSoftware`/`uartdrvFlowControlSw`,
+`none`→the respective `…None`). Software flow is a first-class SDK option, not
+a patch — the generated init code keys off the same `_FLOW_CONTROL_TYPE` token.
+
+> **G4 status:** a clean `BOARD=sengled-e39-g8c` build also needs MG13-specific
+> SDK component config (the first wall is `SL_DEVICE_INIT_EMU_EM4_VSCALE` in
+> `device_init_emu`, an MG13-vs-MG1B delta). That is part of the hardware port,
+> tracked in #130, and not carried by `board.env` alone.
 
 ## Porting contract
 
