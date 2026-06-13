@@ -166,6 +166,32 @@ now present. It runs in **DHCP mode only** — static `/userdata/etc/eth0.conf`
 configurations are untouched. Written in C like `keepalive`/`s40button` so the
 long-lived poll loop never runs busybox ash (issue #109 fault class).
 
+### Kernel build — malformed `drivers-gpio-Kconfig.patch` fixed (issues #136/#137)
+
+A from-clean kernel build aborted at the patch step with `malformed patch at
+line 15`. The hunk header in `patches-6.18/drivers-gpio-Kconfig.patch` declared
+`@@ -598,6 +598,11 @@` but its body adds six lines (the `GPIO_RTL819X` block
+plus a spacer), so the real new-count is twelve — `patch(1)` ran past the
+declared count and bailed. The off-by-one was introduced when `select
+GPIO_GENERIC` was added to the patch during the gpio v1.2 audit without bumping
+the header count; it stayed invisible because incremental builds reuse the
+already-patched kernel tree and never re-run `patch(1)`, so only a build from
+clean re-exercises the file. Reported and fixed by **@hlyi** (#137): header
+corrected to `-599,6 +599,12` and a stray trailing-whitespace spacer dropped.
+**No change to `kernel-6.18.img`** — the shipped image was built from the
+already-correct tree, and the fix only affects the patch text (the resulting
+`drivers/gpio/Kconfig` is identical bar one ignored blank-line whitespace).
+
+### Kernel build — from-clean patch lint guard
+
+To keep that class of bug from reaching anyone again, `32-Kernel/lint_patches.sh`
+replays the build's patch step against a freshly downloaded pristine kernel with
+`--dry-run` (same flags and order as `build_kernel.sh`, kernel version read from
+it as the single source of truth), and a `kernel-patches.yml` GitHub Actions
+workflow runs it on every push/PR touching the patch set — including PRs against
+the `v*-pre` branches, where contributors build from clean. It catches malformed
+hunks, rejects, and context drift before they merge.
+
 ---
 
 ## [3.10.0] - 2026-06-11
