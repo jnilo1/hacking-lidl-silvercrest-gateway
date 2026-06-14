@@ -44,7 +44,13 @@ export CC="${CROSS_COMPILE}gcc"
 export AR="${CROSS_COMPILE}ar"
 export RANLIB="${CROSS_COMPILE}ranlib"
 export STRIP="${CROSS_COMPILE}strip"
-export CFLAGS="-Os -fno-stack-protector"
+# -Wno-error=incompatible-pointer-types: iperf-3.18's public callback setters
+# (iperf_set_on_*_callback in src/iperf_api.c) are declared K&R-style as
+# "void (*callback)()" and assigned to typed members. GCC 14+ promotes
+# -Wincompatible-pointer-types from a warning to a hard error by default, so
+# the build aborts with the current Lexra toolchain (GCC 15.x). Downgrading it
+# back to a warning keeps the build working; harmless on older compilers.
+export CFLAGS="-Os -fno-stack-protector -Wno-error=incompatible-pointer-types"
 # LDFLAGS at configure time: hardening flags only. iperf3 is libtool-built;
 # libtool intercepts a bare "-static" and silently drops it. The fully-static
 # link is forced at make time via LDFLAGS="-all-static" below — that's the
