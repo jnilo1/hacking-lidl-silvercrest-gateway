@@ -71,7 +71,7 @@ Five bench-gated steps on top of the v2.8 LAN-LED work:
   the audit left open), landed without the throughput cost the driver's
   earlier pointer-routing experiments warned about.
 
-### `rtl819x_wdt` v1.6 — panic-safe, with honest userspace semantics
+### `rtl819x_wdt` v1.7 — panic-safe semantics + panic record v4 (issue #99)
 
 The panic notifier reads the record uptime with the NMI-safe
 `ktime_get_boot_fast_ns()` instead of a seqcount-retrying accessor that
@@ -84,6 +84,19 @@ hardware window is declared as `max_hw_heartbeat_ms`, so the core bridges
 longer software timeouts with worker pings (the 60 s feeder cadence is
 unchanged). The kick is now a constant write, dropping one MMIO read per
 kick.
+
+Panic record **v4** (issue #99) extends the post-mortem with the NET_RX side of
+the soft-lockup storm, which the timer candidate lists structurally cannot name.
+The v3 field captures showed the timer wheel is only a victim (`overdue` saturates
+at the detection window while `pending` stays at the normal idle count = frozen,
+not flooded), with the co-pending vector being NET_RX. Record v4 adds, read
+straight from kernel counters at panic: per-softirq run counts
+(`kstat_softirqs_cpu`), the total hardirq count (`kstat_cpu_irqs_sum`), and the
+NAPI poll-list (`softnet_data.poll_list`) — the last naming the driver (the
+rtl8196e Ethernet `poll`) whose NAPI is scheduled at the hang. All cold-path and
+entirely within the watchdog driver (`softnet_data` is a per-CPU export, so no
+kernel patch); v2/v3 records still decode across an upgrade, and the probe banner
+prints `record v4`.
 
 ### `8250_rtl819x` v1.4 — FIFO on, RX trigger pinned to 1
 
