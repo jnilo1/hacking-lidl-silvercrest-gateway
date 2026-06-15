@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.13"
+#define RTL8196E_DRV_VERSION "2.14"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -34,6 +34,14 @@
 
 #define RTL8196E_TX_STOP_THRESH 4
 #define RTL8196E_TX_WAKE_THRESH 16
+/*
+ * Software TX-reclaim timer period. The TX_ALL_DONE IRQ is left masked (TX
+ * reclaim runs in start_xmit and NAPI poll for throughput), so a TX queue that
+ * stops (ring-full XOFF or BQL byte-limit XOFF) while no RX is arriving has no
+ * path to reclaim its in-flight descriptors before the 10 s netdev watchdog.
+ * This short timer polls reclaim in exactly that window.
+ */
+#define RTL8196E_TX_RECLAIM_MS 4
 
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
@@ -50,6 +58,7 @@ struct rtl8196e_priv {
 	struct rtl8196e_ring *ring;
 	struct rtl8196e_dt_iface iface;
 	struct timer_list link_timer;
+	struct timer_list tx_reclaim_timer;
 	u16 vlan_id;
 	u16 portmask;
 	int phy_port;
@@ -90,6 +99,31 @@ static void rtl8196e_link_timer_fn(struct timer_list *t)
 
 	if (priv->link_poll_ms)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
+}
+
+/*
+ * Software TX-reclaim path for the no-RX stall. With the TX_ALL_DONE IRQ
+ * masked, a stopped TX queue with no RX traffic has nothing to drive reclaim:
+ * start_xmit is no longer called (queue stopped) and NAPI is RX-woken, so the
+ * queue sits stopped until the 10 s netdev watchdog fires tx_timeout. Arm this
+ * timer whenever the queue stops; the callback kicks a NAPI poll (which
+ * reclaims, runs netdev_completed_queue and wakes / un-freezes the queue), and
+ * the poll re-arms it while the queue stays stopped. Once the queue moves again
+ * the timer simply lapses — bounded, never runs on a draining queue. This keeps
+ * a purely-TX or low-RX workload from stalling until the netdev watchdog.
+ */
+static void rtl8196e_arm_tx_reclaim(struct rtl8196e_priv *priv)
+{
+	mod_timer(&priv->tx_reclaim_timer,
+		  jiffies + msecs_to_jiffies(RTL8196E_TX_RECLAIM_MS));
+}
+
+static void rtl8196e_tx_reclaim_timer_fn(struct timer_list *t)
+{
+	struct rtl8196e_priv *priv = timer_container_of(priv, t, tx_reclaim_timer);
+
+	if (netif_running(priv->ndev))
+		napi_schedule(&priv->napi);
 }
 
 /*
@@ -207,6 +241,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 	netdev_reset_queue(ndev);
 
 	timer_delete_sync(&priv->link_timer);
+	timer_delete_sync(&priv->tx_reclaim_timer);
 	netif_carrier_off(ndev);
 
 	return 0;
@@ -286,6 +321,7 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 					     &was_empty);
 		if (ret < 0) {
 			netif_stop_queue(ndev);
+			rtl8196e_arm_tx_reclaim(priv);
 			return NETDEV_TX_BUSY;
 		}
 	}
@@ -303,6 +339,14 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 	free_count = rtl8196e_ring_tx_free_count(priv->ring);
 	if (unlikely(free_count < RTL8196E_TX_STOP_THRESH))
 		netif_stop_queue(ndev);
+
+	/*
+	 * If this xmit left the queue stopped — driver ring-full XOFF above or
+	 * BQL byte-limit XOFF from netdev_sent_queue() — arm the software
+	 * reclaim timer so a no-RX stall cannot wait for the 10 s watchdog.
+	 */
+	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(ndev, 0))))
+		rtl8196e_arm_tx_reclaim(priv);
 
 	return NETDEV_TX_OK;
 }
@@ -325,9 +369,25 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 
 	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
 	rtl8196e_ring_tx_reset(priv->ring);
-	/* Ring rebuilt from scratch — restart BQL accounting with it. */
+	/*
+	 * hw_stop()/hw_start() below cycles the switch RX engine (TRXRDY)
+	 * back to descriptor 0, so the RX ring must be resynced too —
+	 * reset the cursor to 0, re-arm every descriptor SWCORE_OWNED and
+	 * reprogram the RX ring bases, symmetric with open()/stop(). If we
+	 * rebuild only TX (as before), rx_idx desyncs from the switch's RX
+	 * pointer: the switch then sees no usable descriptors and asserts
+	 * PKTHDR_DESC_RUNOUT continuously. napi_complete clears it; the
+	 * switch re-asserts it the next cycle — a spurious interrupt storm
+	 * with zero forward progress that pins the CPU in __napi_poll until
+	 * the hardware watchdog resets the SoC.
+	 */
+	rtl8196e_ring_rx_reset(priv->ring);
+	/* Rings rebuilt from scratch — restart BQL accounting with them. */
 	netdev_reset_queue(ndev);
 	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
+	rtl8196e_hw_set_rx_rings(&priv->hw,
+				 rtl8196e_ring_rx_pkthdr_base(priv->ring),
+				 rtl8196e_ring_rx_mbuf_base(priv->ring));
 
 	rtl8196e_hw_start(&priv->hw);
 	napi_enable(&priv->napi);
@@ -358,6 +418,15 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 		if (free_count >= RTL8196E_TX_WAKE_THRESH)
 			netif_wake_queue(priv->ndev);
 	}
+
+	/*
+	 * If the queue is still stopped after this reclaim (DRV ring-full XOFF
+	 * or BQL byte-limit XOFF), nothing reclaims the rest without RX — keep
+	 * the software timer going. Once the queue is woken / un-frozen,
+	 * netif_xmit_stopped() is false and the timer lapses.
+	 */
+	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(priv->ndev, 0))))
+		rtl8196e_arm_tx_reclaim(priv);
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {
@@ -738,6 +807,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	}
 
 	timer_setup(&priv->link_timer, rtl8196e_link_timer_fn, 0);
+	timer_setup(&priv->tx_reclaim_timer, rtl8196e_tx_reclaim_timer_fn, 0);
 
 	/* NAPI deferral tuning: on this slow CPU (Lexra RLX4181 @ 380 MHz),
 	 * the driver drains the RX ring faster than packets arrive (~3 pkt/poll).

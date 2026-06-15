@@ -6,6 +6,50 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.0.0-rc0] - 2026-06-15
+
+_Release candidate over `v4.0.0-pre`: one focused change — the **candidate fix
+for issue #99**, the long-running soft-lockup hang reported on units running an
+OpenThread Border Router. The hang was reproduced on the bench and traced to the
+Ethernet driver's TX-timeout recovery; both the storm and the condition that
+triggers it are addressed. `v4.0.0-pre` is left unchanged. Field confirmation
+that the hangs stop is still pending — hence a release candidate, not GA._
+
+### `rtl8196e-eth` v2.14 — issue #99 candidate fix (TX-timeout RX resync + software TX reclaim)
+
+Two changes to the Ethernet driver, validated on the bench; field confirmation
+pending.
+
+* **RX resync in `ndo_tx_timeout`.** The watchdog recovery rebuilt only the TX
+  ring; its `hw_stop()`/`hw_start()` cycles the switch's RX engine back to
+  descriptor 0 while the driver's `rx_idx` stays put — a desync that leaves the
+  switch with no usable RX descriptors. The switch then asserts
+  `PKTHDR_DESC_RUNOUT` continuously; `napi_complete` clears it and the switch
+  re-asserts it the next cycle — a ~100 k/s spurious interrupt storm with zero
+  forward progress that pins the CPU in `__napi_poll` until the hardware
+  watchdog resets the SoC. That is the issue #99 soft-lockup. The recovery now
+  also resets and reprograms the RX ring (`ring_rx_reset` + `hw_set_rx_rings`),
+  symmetric with `open()` and `stop()`. The bug is old (present unchanged since
+  at least v2.6); the BQL work in v4.0.0-pre lowers the queue-stop threshold,
+  which makes the triggering TX timeout fire readily and turned the bench into a
+  reliable reproducer.
+* **Software TX-reclaim timer (the trigger).** TX reclaim runs only in
+  `start_xmit` and the RX-driven NAPI poll, so a TX queue that stops (ring-full
+  or BQL byte-limit) while no RX arrives has no path to reclaim and waits for the
+  10 s netdev watchdog — e.g. a Thread border router idling with no paired
+  device, the configuration the soak reporters run. A short timer, armed when the
+  queue stops and lapsing once it drains, kicks a NAPI reclaim so the queue
+  recovers without RX. This removes the spurious timeouts — and with them the
+  path into the storm.
+
+Bench result: a border router idling alone (zero RX) previously fired a TX
+timeout every 10 s, then desynced and stormed into the #99 soft-lockup; with
+both changes it fires none — no timeout, no storm — and SSH stays responsive.
+The storm signature matches the field #99 captures, so this is the strongest
+candidate yet; confirmation that it stops the field hangs is pending.
+
+---
+
 ## [4.0.0-pre] - 2026-06-13
 
 _Folds the `v3.11.0-pre` beta into v4.0.0. Two headlines: the **Sengled
