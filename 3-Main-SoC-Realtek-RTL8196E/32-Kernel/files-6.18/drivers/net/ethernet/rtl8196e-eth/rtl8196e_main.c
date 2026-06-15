@@ -114,8 +114,19 @@ static void rtl8196e_link_timer_fn(struct timer_list *t)
  */
 static void rtl8196e_arm_tx_reclaim(struct rtl8196e_priv *priv)
 {
-	mod_timer(&priv->tx_reclaim_timer,
-		  jiffies + msecs_to_jiffies(RTL8196E_TX_RECLAIM_MS));
+	/*
+	 * Arm only if not already pending. This is called from the TX hot path
+	 * (start_xmit and the NAPI-poll re-arm) every time the queue is found
+	 * stopped, which under load is most packets; an unconditional mod_timer()
+	 * there re-inserts the timer per packet and measurably costs TX
+	 * throughput on this CPU. With the guard the timer still fires within one
+	 * RTL8196E_TX_RECLAIM_MS window — enough to break a no-RX stall — but is
+	 * free once armed. timer_pending() + mod_timer() is not atomic, but this
+	 * is a UP platform and a rare double-arm is harmless.
+	 */
+	if (!timer_pending(&priv->tx_reclaim_timer))
+		mod_timer(&priv->tx_reclaim_timer,
+			  jiffies + msecs_to_jiffies(RTL8196E_TX_RECLAIM_MS));
 }
 
 static void rtl8196e_tx_reclaim_timer_fn(struct timer_list *t)

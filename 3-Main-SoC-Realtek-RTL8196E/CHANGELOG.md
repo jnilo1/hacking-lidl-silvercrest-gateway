@@ -6,6 +6,24 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.0.0-rc1] - 2026-06-15
+
+_Supersedes `v4.0.0-rc0`: the same issue #99 candidate fix, plus a fix for a TX
+throughput regression rc0 introduced. If you're testing #99, this is the build
+to use._
+
+### `rtl8196e-eth` — restore TX throughput (TX-reclaim timer arm guard)
+
+The software TX-reclaim timer added for #99 was armed unconditionally from the TX
+hot path (`start_xmit` and the NAPI poll re-arm), re-inserting the timer per packet
+under load — about 5% off TCP TX on the RLX4181 (≈67.6 vs ≈71 Mbit/s; RX
+unaffected). It now arms only when not already pending: it still fires within one
+timer window to break a no-RX stall, but is free once armed. TCP TX is back to
+≈70.8 Mbit/s and an idle border router still shows zero TX timeouts. Driver version
+unchanged (v2.14, same release cycle).
+
+---
+
 ## [4.0.0-rc0] - 2026-06-15
 
 _Release candidate over `v4.0.0-pre`: one focused change — the **candidate fix
