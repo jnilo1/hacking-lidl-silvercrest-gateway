@@ -237,6 +237,21 @@ workflow runs it on every push/PR touching the patch set — including PRs again
 the `v*-pre` branches, where contributors build from clean. It catches malformed
 hunks, rejects, and context drift before they merge.
 
+### Flash tooling — safe TFTP upload retry (discussion #135)
+
+A 16 MiB `fullflash` TFTP upload — and the per-partition kernel/rootfs/userdata/
+bootloader uploads — could give up on a single stalled block mid-transfer
+(tftp-hpa's own per-block timeout) even when the bootloader's TFTP server was
+healthy, dropping the user at the bootloader prompt (reported by @MaxRower). The
+upload now retries automatically, but safely: after a timeout it re-probes the
+bootloader's TFTP server and re-sends only if it is still idle (nothing landed).
+If the server has gone quiet — busy writing flash, i.e. a lost final ACK that
+merely looked like a timeout — it does **not** re-send, so a retry can never
+collide with an in-progress auto-flash; it falls through to the existing write
+confirmation instead. The logic lives once in `lib/flash_tftp.sh`
+(`probe_tftp_wrq` + `tftp_put_safe`), shared by `flash_install_rtl8196e.sh` and
+the four per-partition `flash_*.sh` scripts.
+
 ---
 
 ## [3.10.0] - 2026-06-11

@@ -20,6 +20,8 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
+. "$SCRIPT_DIR/../../lib/flash_tftp.sh"
 
 # ── Argument parsing ──────────────────────────────────────────────────────
 
@@ -130,13 +132,10 @@ notify_file=$(mktemp)
 nc_pid=$!
 sleep 0.2
 
-echo "Uploading..."
 cd "$SCRIPT_DIR"
-out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put "$IMAGE_BASENAME" 2>&1) || true
-if echo "$out" | grep -qiE \
-    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+if ! tftp_put_safe "$TARGET_IP" "$IMAGE_BASENAME" 3 30 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
-    echo "Error: transfer failed: $out" >&2
+    echo "Error: transfer failed after retries." >&2
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."

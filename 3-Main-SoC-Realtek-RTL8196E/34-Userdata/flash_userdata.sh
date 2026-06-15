@@ -23,6 +23,8 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
+. "$SCRIPT_DIR/../../lib/flash_tftp.sh"
 TARGET_IP="${1:-192.168.1.6}"
 
 # Check prerequisites
@@ -217,13 +219,10 @@ nc_pid=$!
 sleep 0.2
 
 echo "Note: userdata is 12 MB — transfer and flash may take 1-2 minutes."
-echo "Uploading..."
 cd "$SCRIPT_DIR"
-out=$(timeout 120 tftp -m binary "$TARGET_IP" -c put userdata.bin 2>&1) || true
-if echo "$out" | grep -qiE \
-    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+if ! tftp_put_safe "$TARGET_IP" userdata.bin 3 120 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
-    echo "Error: transfer failed: $out" >&2
+    echo "Error: transfer failed after retries." >&2
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."

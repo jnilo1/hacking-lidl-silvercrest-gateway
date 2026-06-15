@@ -82,6 +82,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Hardened SSH helpers — see lib/ssh.sh.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/ssh.sh"
+# Safe-retry TFTP upload helpers — see lib/flash_tftp.sh.
+. "${SCRIPT_DIR}/lib/flash_tftp.sh"
 LINUX_IP=""
 FW_VERSION=""
 # Default entry mode. Overridden to "auto" only when a running Linux exposes
@@ -212,21 +214,9 @@ require_boot_l2() {
     fi
 }
 
-# Probe the bootloader's TFTP server with a 1-byte WRQ (PUT). The bootloader
-# ACKs a WRQ immediately; anything else — a Linux still shutting down, a
-# proxy-ARP router answering for an address that is not up, no device at all —
-# gives no UDP response and tftp-hpa hangs until timeout kills it (rc 124).
-# Use PUT, not GET: the bootloader silently drops RRQ (error on serial only).
-# The 1-byte payload is harmless: the bootloader receives it, fails the image
-# signature check, and discards it (one_tftp_lock is released on completion).
-probe_tftp_wrq() {
-    local probe_file rc=0
-    probe_file=$(mktemp)
-    echo -n X > "$probe_file"
-    timeout 3 tftp -m binary "$BOOT_IP" -c put "$probe_file" >/dev/null 2>&1 || rc=$?
-    rm -f "$probe_file"
-    [ "$rc" -ne 124 ]
-}
+# probe_tftp_wrq <ip> and tftp_put_safe come from lib/flash_tftp.sh (sourced
+# above) — a 1-byte WRQ probe that ACKs only when the bootloader's TFTP server is
+# idle, and the safe re-probe-gated upload retry built on it.
 
 # Build fullflash.bin, sanity-check it, and ask the final confirmation.
 # On the upgrade (auto) path this runs while Linux is still up — BEFORE boothold —
@@ -511,7 +501,7 @@ EOF
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}' \
-           && probe_tftp_wrq; then
+           && probe_tftp_wrq "$BOOT_IP"; then
             BOOTLOADER_UP=1
             break
         fi
@@ -553,7 +543,7 @@ else
     fi
 
     # ARP resolved — but is it really bootloader? Probe TFTP to confirm.
-    if ! probe_tftp_wrq; then
+    if ! probe_tftp_wrq "$BOOT_IP"; then
         echo "Device at ${BOOT_IP} is not in bootloader mode (no TFTP server)."
         echo "If the gateway is running Linux, run:  $0 <LINUX_IP>"
         exit 1
@@ -604,11 +594,6 @@ fi
 #     16 MiB (single-threaded, can't answer ICMP) → wait for the UDP:9999 OK.
 #   - pre-upload ICMP up, stays up post-upload → custom bootloader without
 #     auto-flash (e.g. old v1.x) → guided FLW. Decided in seconds, no dead wait.
-
-check_tftp_error() {
-    echo "$1" | grep -qiE \
-        "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"
-}
 
 # Manual FLW guidance — the uploaded image is already in RAM at 0x80500000; the
 # user finishes on the serial console. Interactive by design: show the FLW step,
@@ -786,18 +771,28 @@ if [ "$ENTRY" != "auto" ]; then
 fi
 
 echo ""
-echo "Uploading fullflash.bin via TFTP (16 MiB)..."
 cd "$SCRIPT_DIR"
-out=$(timeout 300 tftp -m binary "$BOOT_IP" -c put fullflash.bin 2>&1) || true
-if check_tftp_error "$out"; then
-    echo "Error: TFTP transfer failed: $out" >&2
-    echo "" >&2
-    echo "Nothing was written. The gateway is still at the bootloader prompt at" >&2
-    echo "${BOOT_IP} — re-run this script to retry the upload, or power-cycle the" >&2
-    echo "gateway to boot its existing firmware." >&2
-    exit 1
-fi
-echo "Upload OK."
+
+# Upload the 16 MiB image via the shared safe-retry helper (lib/flash_tftp.sh):
+# on a mid-transfer stall (discussion #135) it re-probes and retries only while
+# the bootloader is still idle, never re-sending onto an in-progress auto-flash.
+# The bootloader here is custom-by-construction (its WRQ probe gated the wait
+# loop), so AUTOFLASH — probe gone quiet — means the image most likely landed and
+# it is writing flash: fall through to confirm_and_report.
+status=$(tftp_put_safe "$BOOT_IP" fullflash.bin 3 300) || true
+case "$status" in
+    OK)
+        echo "Upload OK." ;;
+    AUTOFLASH)
+        : ;;   # likely already auto-flashing; fall through to confirmation
+    *)
+        echo "Error: TFTP transfer failed after retries." >&2
+        echo "" >&2
+        echo "Nothing was written (the bootloader kept answering its TFTP probe between" >&2
+        echo "attempts, so no image landed). The gateway is still at the bootloader prompt" >&2
+        echo "at ${BOOT_IP} — re-run this script, or power-cycle to boot existing firmware." >&2
+        exit 1 ;;
+esac
 
 if [ "$ENTRY" = "auto" ]; then
     # Boothold path: the bootloader ACKed the WRQ probe and auto-flashes by
