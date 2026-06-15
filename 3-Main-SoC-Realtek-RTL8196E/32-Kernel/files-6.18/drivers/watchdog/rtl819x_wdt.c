@@ -22,14 +22,17 @@
 #include <linux/hrtimer.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/kernel_stat.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
+#include <linux/netdevice.h>
 #include <linux/notifier.h>
 #include <linux/of.h>
 #include <linux/of_reserved_mem.h>
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
+#include <linux/smp.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
 #include <linux/watchdog.h>
@@ -39,7 +42,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.6"
+#define DRV_VERSION		"1.7"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -201,6 +204,30 @@
  *                            discriminator #99 captures were missing.
  *                            0xFFFFFFFF = sentinel "walk did not complete".
  *   +0x140 u32   npend       total timers queued in the wheel at panic.
+ *   +0x144 u32[] sirqcnt     per-softirq cumulative run counts on this (sole)
+ *                            CPU at panic (kstat_softirqs_cpu), indexed by the
+ *                            softirq enum (HI..RCU, WDT_REC_NR_SIRQ entries).
+ *                            Read against uptime they give the *average* TIMER
+ *                            vs NET_RX softirq rate. The #99 storm has
+ *                            TIMER|NET_RX co-pending but the timer wheel is only
+ *                            a victim (overdue saturated, pending normal =
+ *                            frozen, not flooded), so the timer lists cannot say
+ *                            which vector is actually being run/raised — this
+ *                            does.
+ *   +0x16C u32   hardirq     total hardirq count on this CPU at panic
+ *                            (kstat_cpu_irqs_sum). /uptime = average IRQ rate;
+ *                            an external (eth/NET_RX) IRQ storm inflates even a
+ *                            multi-day average, an internal softirq re-raise
+ *                            leaves it near the idle baseline. The eth RX line
+ *                            is "Switch"/IP3 on this SoC (see irq-rtl819x).
+ *   +0x170 u32   n_napi      number of NAPI poll fns that follow.
+ *   +0x174 u32[] napifns     .poll of the napi instances on this CPU's
+ *                            softnet_data.poll_list at panic — the NET_RX analog
+ *                            of tfns: names the driver (the rtl8196e eth poll)
+ *                            whose NAPI is perpetually scheduled when NET_RX is
+ *                            the storm. softnet_data is a normal per-CPU export,
+ *                            so unlike the timer collectors this needs no kernel
+ *                            patch. Resolved via %pS at next boot.
  *
  * The candidate lists are cold-path only (read in the panic notifier), so
  * normal operation pays nothing — unlike the storm-2/3 hot-path rings that
@@ -213,10 +240,14 @@
  *   v3 (firmware v3.8.3)  + delayed_work entries in tfns resolved to their
  *                           work->func (kernel-time-timer.c.patch), wheel
  *                           overdue@+0x13C, pending count@+0x140
+ *   v4 (firmware v3.8.4)  + per-softirq run counts@+0x144, total hardirq
+ *                           count@+0x16C, NAPI poll-list fns@+0x170/+0x174 —
+ *                           names the NET_RX side the timer lists cannot
  */
 #define WDT_REC_SIZE		0x200U
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
-#define WDT_REC_VERSION		3U
+#define WDT_REC_VERSION		4U
+#define WDT_REC_VERSION_V3	3U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V2	2U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_OFF_MAGIC	0x00
 #define WDT_REC_OFF_VERSION	0x04
@@ -233,8 +264,16 @@
 #define WDT_REC_OFF_NHFN	0x120		/* u32 hrtimer candidate count */
 #define WDT_REC_OFF_HFNS	0x124		/* WDT_REC_NR_FNS u32 (..0x13B) */
 #define WDT_REC_OFF_LAG		0x13C		/* u32 wheel overdue (jiffies) */
-#define WDT_REC_OFF_NPEND	0x140		/* u32 total queued wheel timers (..0x143, clear of boothold@0xFF4) */
+#define WDT_REC_OFF_NPEND	0x140		/* u32 total queued wheel timers (..0x143) */
+#define WDT_REC_NR_SIRQ		10U		/* per-softirq counts kept (>= NR_SOFTIRQS) */
+#define WDT_REC_OFF_SIRQCNT	0x144		/* WDT_REC_NR_SIRQ u32 (..0x16B) */
+#define WDT_REC_OFF_HARDIRQ	0x16C		/* u32 total hardirq count */
+#define WDT_REC_OFF_NNAPI	0x170		/* u32 NAPI poll-fn count */
+#define WDT_REC_OFF_NAPIFNS	0x174		/* WDT_REC_NR_FNS u32 (..0x18B, clear of boothold@0xFF4) */
 #define WDT_REC_STAT_UNSET	0xFFFFFFFFU	/* sentinel: stats walk did not complete */
+
+static_assert(NR_SOFTIRQS <= WDT_REC_NR_SIRQ,
+	      "panic-record per-softirq array too small for NR_SOFTIRQS");
 
 static bool nowayout = WATCHDOG_NOWAYOUT;
 module_param(nowayout, bool, 0444);
@@ -335,6 +374,29 @@ static int rtl819x_wdt_restart(struct watchdog_device *wdd,
 	writel(0, wdt->base);
 	mdelay(50);
 	return 0;
+}
+
+/*
+ * Collect the .poll function of each NAPI instance scheduled on this CPU's
+ * softnet_data.poll_list — the NET_RX analog of timer_collect_pending_fns().
+ * When the #99 storm has NET_RX pending, the perpetually-scheduled napi names
+ * the driver feeding it (the rtl8196e eth poll). Local to the driver: unlike
+ * the timer wheel (static timer_bases in kernel/time/timer.c, reached via a
+ * patch), softnet_data is a normal per-CPU export, so no kernel patch is
+ * needed. List walk → best-effort, called only after the reset is armed.
+ */
+static int rtl819x_wdt_collect_napi_fns(void **out, int max)
+{
+	struct softnet_data *sd = this_cpu_ptr(&softnet_data);
+	struct napi_struct *n;
+	int cnt = 0;
+
+	list_for_each_entry(n, &sd->poll_list, poll_list) {
+		if (cnt >= max)
+			break;
+		out[cnt++] = n->poll;
+	}
+	return cnt;
 }
 
 /*
@@ -447,6 +509,26 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		writel(0, wdt->rec + WDT_REC_OFF_NHFN);
 		writel(WDT_REC_STAT_UNSET, wdt->rec + WDT_REC_OFF_LAG);
 		writel(0, wdt->rec + WDT_REC_OFF_NPEND);
+		/*
+		 * v4: per-softirq run counts + total hardirq count on this
+		 * (sole, UP) CPU. Plain per-CPU counter reads — no list walk —
+		 * so they belong in the committed core record (before magic),
+		 * not the best-effort section. Cumulative since boot; the next
+		 * boot divides by uptime to get the average TIMER vs NET_RX
+		 * softirq rate and the hardirq rate, the discriminator the
+		 * timer-only record could not give for the frozen-wheel storm.
+		 */
+		{
+			int cpu = smp_processor_id();
+			unsigned int s;
+
+			for (s = 0; s < NR_SOFTIRQS; s++)
+				writel((u32)kstat_softirqs_cpu(s, cpu),
+				       wdt->rec + WDT_REC_OFF_SIRQCNT + s * 4);
+			writel((u32)kstat_cpu_irqs_sum(cpu),
+			       wdt->rec + WDT_REC_OFF_HARDIRQ);
+		}
+		writel(0, wdt->rec + WDT_REC_OFF_NNAPI);	/* until the walk below */
 		memset_io(wdt->rec + WDT_REC_OFF_REASON, 0, WDT_REC_REASON_MAX);
 		memcpy_toio(wdt->rec + WDT_REC_OFF_REASON, reason, n);
 		wmb();
@@ -476,7 +558,7 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		void *fns[WDT_REC_NR_FNS];
 		unsigned long overdue;
 		unsigned int npend;
-		int i, nt, nh;
+		int i, nt, nh, nn;
 
 		nt = timer_collect_pending_fns(fns, WDT_REC_NR_FNS);
 		for (i = 0; i < nt; i++)
@@ -497,6 +579,18 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		writel((u32)npend, wdt->rec + WDT_REC_OFF_NPEND);
 		wmb();
 		writel((u32)overdue, wdt->rec + WDT_REC_OFF_LAG); /* clears the sentinel */
+
+		/*
+		 * v4: NAPI poll-list — names the NET_RX engine the timer lists
+		 * structurally cannot. List walk, so best-effort like the timer
+		 * walks above; count written last so a torn read sees 0.
+		 */
+		nn = rtl819x_wdt_collect_napi_fns(fns, WDT_REC_NR_FNS);
+		for (i = 0; i < nn; i++)
+			writel((u32)(uintptr_t)fns[i],
+			       wdt->rec + WDT_REC_OFF_NAPIFNS + i * 4);
+		wmb();
+		writel((u32)nn, wdt->rec + WDT_REC_OFF_NNAPI);
 	}
 
 	return NOTIFY_DONE;
@@ -583,14 +677,16 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 	memcpy_fromio(reason, wdt->rec + WDT_REC_OFF_REASON, WDT_REC_REASON_MAX);
 	reason[WDT_REC_REASON_MAX - 1] = '\0';
 
-	if (ver == WDT_REC_VERSION || ver == WDT_REC_VERSION_V2) {
+	if (ver >= WDT_REC_VERSION_V2 && ver <= WDT_REC_VERSION) {
+		char v4stat[420];
+
 		rtl819x_wdt_softirq_decode(sirqmask, sirq, sizeof(sirq));
 		rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NTFN, WDT_REC_OFF_TFNS,
 				       tfns, sizeof(tfns));
 		rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NHFN, WDT_REC_OFF_HFNS,
 				       hfns, sizeof(hfns));
 		wstat[0] = '\0';
-		if (ver >= WDT_REC_VERSION) {
+		if (ver >= WDT_REC_VERSION_V3) {
 			u32 lag = readl(wdt->rec + WDT_REC_OFF_LAG);
 			u32 npend = readl(wdt->rec + WDT_REC_OFF_NPEND);
 
@@ -598,11 +694,36 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 				scnprintf(wstat, sizeof(wstat),
 					  " overdue=%uj pending=%u", lag, npend);
 		}
+		v4stat[0] = '\0';
+		if (ver >= WDT_REC_VERSION) {	/* v4: NET_RX-side counters */
+			char sc[160], napi[200];
+			size_t p = 0;
+			u32 s;
+
+			sc[0] = '\0';
+			for (s = 0; s < ARRAY_SIZE(rtl819x_wdt_softirq_names); s++) {
+				u32 c = readl(wdt->rec + WDT_REC_OFF_SIRQCNT + s * 4);
+
+				if (!c)
+					continue;
+				p += scnprintf(sc + p, sizeof(sc) - p, "%s%s:%u",
+					       p ? "|" : "",
+					       rtl819x_wdt_softirq_names[s], c);
+			}
+			if (!p)
+				scnprintf(sc, sizeof(sc), "none");
+			rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NNAPI,
+					       WDT_REC_OFF_NAPIFNS, napi,
+					       sizeof(napi));
+			scnprintf(v4stat, sizeof(v4stat),
+				  " softirqs=[%s] hardirqs=%u napi=[%s]", sc,
+				  readl(wdt->rec + WDT_REC_OFF_HARDIRQ), napi);
+		}
 		dev_info(dev,
-			 "previous boot ended in panic: uptime=%us pc=%pS ra=%pS running=%pS softirq=0x%x[%s] timers=[%s] hrtimers=[%s]%s reason=\"%s\"\n",
+			 "previous boot ended in panic: uptime=%us pc=%pS ra=%pS running=%pS softirq=0x%x[%s] timers=[%s] hrtimers=[%s]%s%s reason=\"%s\"\n",
 			 up, (void *)(uintptr_t)epc, (void *)(uintptr_t)ra,
 			 (void *)(uintptr_t)fna, sirqmask, sirq, tfns, hfns,
-			 wstat, reason);
+			 wstat, v4stat, reason);
 	} else {
 		dev_info(dev, "previous boot ended in panic (unknown record v%u)\n",
 			 ver);
@@ -785,8 +906,8 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	dev_info(dev, "v" DRV_VERSION " (J. Nilo) - timeout:%us, nowayout:%d\n",
-		 wdt->wdd.timeout, nowayout);
+	dev_info(dev, "v" DRV_VERSION " (J. Nilo) - record v%u, timeout:%us, nowayout:%d\n",
+		 WDT_REC_VERSION, wdt->wdd.timeout, nowayout);
 
 	return 0;
 }
