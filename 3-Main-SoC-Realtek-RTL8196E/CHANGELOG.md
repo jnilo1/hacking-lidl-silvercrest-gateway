@@ -6,6 +6,106 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.0.0-rc2] - 2026-06-19
+
+_Supersedes `v4.0.0-rc1`. Carries the **issue #99 engine fix** (ETHDRV-015,
+eth v2.15) after the rc1-line fix (ETHDRV-013) proved insufficient in the field,
+the **bootloader auto-boot PHY-quiesce** that closes the remaining post-flash boot
+loop, and the harmonized init-script output. Field confirmation of #99 is still
+pending — release candidate, not GA._
+
+### `rtl8196e-eth` v2.15 — issue #99 engine fix (poll-side RUNOUT-storm recovery)
+
+The v2.14 candidate fix (ETHDRV-013, RX resync inside `tx_timeout`) proved
+**insufficient in the field**: a unit running `v3.8.5` (driver v2.7, which already
+carries that fix) recurred with the exact #99 signature after ~3.7 days. A full
+review (see the driver's `issue99.md`, cross-checked against the original Realtek
+SDK) found the real engine: the `PKTHDR_DESC_RUNOUT` storm is **self-sustaining
+regardless of how the switch-RX/`rx_idx` desync is entered**, and the NAPI poll has
+no escape — a zero-work poll under RUNOUT just re-enables the interrupt against an
+unchanged starved ring and the switch re-asserts the next cycle. ETHDRV-013 only
+closes one entry (`tx_timeout`); any other entry lands in the same trap. The
+original Realtek driver never hits this because it ships a runtime stuck-detector
+(`rtl_check_swCore_tx_hang` → `rtl865x_reinitSwitchCore`) that our from-scratch
+rewrite dropped.
+
+v2.15 restores that safety net, NAPI-friendly (ETHDRV-015):
+
+* **Poll-side detector (primary).** After 3 consecutive zero-work NAPI polls with
+  `PKTHDR_DESC_RUNOUT` asserted, the poll runs a full ring resync
+  (`rtl8196e_hw_ring_resync` — the `open()`/`tx_timeout` reset+rearm+TRXRDY
+  sequence, now factored out) so the switch RX pointer and `rx_idx` are forced back
+  in sync; the `napi_complete` tail then re-enables IRQs against an armed ring and
+  the storm cannot restart. Breaks the storm in microseconds. CPUIISR is read only
+  on a zero-work poll, so the normal RX path is unaffected.
+* **Periodic watchdog (belt-and-suspenders).** A ~1 s timer kicks a poll if RUNOUT
+  stays asserted across 3 checks — covering a non-CPU-pinning stall. Off the TX/RX
+  datapath (one MMIO read per second), no throughput impact.
+
+Two `ethtool -S` counters expose the recovery firing: `rtl8196e_rx_runout_resync`
+and `rtl8196e_rx_runout_kick` (both 0 unless a storm was caught). ETHDRV-013 and
+ETHDRV-014 are retained as defence in depth. Candidate pending field confirmation.
+
+### Bootloader V2.8 — quiesce the Ethernet PHY before the post-flash watchdog reset
+
+Fixes an intermittent **boot loop after a `flash_remote` kernel flash**: the box
+looped in early boot (resetting around the `/sbin/init` handoff, no panic text)
+until a physical power cycle, whereas a plain `reboot` or a cold boot was always
+fine. The bug is in the bootloader, so it affected both the 6.18 production
+kernel and the experimental 7.1 line — not a kernel issue.
+
+Root cause: after a TFTP kernel flash, `autoreboot()` triggered a watchdog reset
+without disabling the Ethernet PHY. A watchdog reset preserves DRAM (that is how
+the `boothold` flag survives it) and does not fully reset the switch DMA engine,
+so right after a ~1.4 MB TFTP transfer the switch could keep DMAing incoming
+frames into DRAM across the reset and into early kernel boot — before the
+kernel's Ethernet driver resets the MAC — corrupting it. A plain reboot never
+tripped it because the link is idle at that point; only a power-on reset cleared
+the switch. `autoreboot()` now disables the PHY on all five ports before the
+watchdog reset, mirroring the direct-jump-to-kernel path in `monitor.c` that
+already did this "to prevent ethernet [from] disturb[ing] Linux kernel booting".
+
+A small timer-independent busy-loop first lets the post-flash UDP `OK`
+notification drain out, so the new PHY-disable no longer drops it — otherwise the
+flash tools reported a spurious "no notification" on every successful flash. It
+is deliberately **not** `delay_ms()`: the preceding SPI flash write can leave the
+jiffy timer stopped, which would make `delay_ms()` spin forever and the box never
+reboot.
+
+Validated on the bench: 13 consecutive `flash_remote` cycles alternating the 6.18
+and 7.1 kernels all booted cleanly with no loop, and the flash tools' "Flash
+Write Succeeded" confirmation is restored. The bootloader build stays
+reproducible (`B_VERSION` V2.7 → V2.8, pinned `BOOT_CODE_TIME` bumped).
+
+**Follow-up — the same quiesce was missing from the auto-boot handoff.** The loop
+recurred in field use because the PHY-disable had been added only to
+`autoreboot()` and the manual `J` command, not to `goToLocalStartMode()` — the
+path actually taken on every auto-boot. After a `flash_remote` warm reset the
+bootloader re-enables the PHY for its own TFTP, then `goToLocalStartMode()` jumped
+to the kernel with the PHY still live, reopening the same DMA-corruption window
+during early kernel boot. Added the identical five-port `EnablePHYIf` clear before
+the kernel jump in `goToLocalStartMode()`, symmetric with `J` and `autoreboot()`.
+Re-validated: 10 consecutive `flash_remote` kernel cycles plus 3 manual reboots,
+all clean on the serial console (previously reproducible within a couple of
+cycles). Folded into V2.8 (still unreleased); `BOOT_CODE_TIME` refreshed.
+
+### Init-script output — one consistent, sober convention
+
+The per-service init scripts now print a single uniform `<service>: <state>` line
+(no emoji, no redundant per-script self-prefix), with warnings and errors as
+`<service>: WARNING/ERROR …`. The boot runner prints each script's basename; the
+previously silent watchdog now emits concise `armed`/`stopped` lines, while
+`S26panicrec` and `S90checkpasswd` stay quiet on a normal boot. Shutdown is now
+symmetric with boot: `rcK` frames the stop sequence with a
+`===== Stopping userdata services =====` header and a closing
+`Userdata services stopped` line, and a leading blank line keeps both sequences
+off the login prompt. The dead `34-Userdata/…/init.d/rcS` is removed — it was
+never executed (the bootstrap runs the rootfs `rcS` at sysinit and the userdata
+`rcK` at shutdown; the `S??*` glob it iterates never matches `rcS`). Cosmetic
+only; no service behaviour changes.
+
+---
+
 ## [4.0.0-rc1] - 2026-06-15
 
 _Supersedes `v4.0.0-rc0`: the same issue #99 candidate fix, plus a fix for a TX
@@ -21,6 +121,12 @@ unaffected). It now arms only when not already pending: it still fires within on
 timer window to break a no-RX stall, but is free once armed. TCP TX is back to
 ≈70.8 Mbit/s and an idle border router still shows zero TX timeouts. Driver version
 unchanged (v2.14, same release cycle).
+
+Bench confirmation on the rc1 build (OTBR stopped, direct Cat-6 to a Gigabit
+host): TCP RX 93.6 Mbit/s, TCP TX 70.3 Mbit/s (5-rep median, range 69.1–72.3) —
+back inside the historical 69.3–72.8 TX spread, no regression. Stress (300 s
+single-stream RX): 94.0 Mbit/s sustained, 0.00 % retransmits; eth0 rx/tx errors
+and drops all zero. Full per-gate detail in the driver's `PERFORMANCE.md`.
 
 ---
 

@@ -40,12 +40,12 @@ case "$1" in
 
 		mkdir -p /userdata/panic
 		echo "$(date '+%Y-%m-%d %H:%M:%S') ${line}" > "$LOG"
-		echo "first panic record captured to $LOG (delete it to re-arm)"
+		echo "  panicrec: captured to $LOG (delete to re-arm)"
 		;;
 	stop)
 		;;
 	*)
-		echo "S26panicrec start"
+		echo "Usage: $0 {start|stop}"
 		;;
 esac
 exit 0

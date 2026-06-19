@@ -50,6 +50,9 @@ LINUX_IP=""
 # captured into BOOT_IP_FLAG during parsing and applied after the loop.
 BOOT_IP="${BOOT_IP:-192.168.1.6}"
 BOOT_IP_FLAG=""
+# Optional kernel-image override, forwarded to flash_kernel.sh --image
+# (e.g. --image kernel-7.1.img). Honored for the kernel component only.
+IMAGE_OVERRIDE=""
 SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
 
 usage() {
@@ -66,6 +69,8 @@ usage() {
     echo "  -y, --yes        Non-interactive mode (skip all prompts)"
     echo "  --boot-ip <IP|host>  Bootloader-mode / TFTP server IP (overrides BOOT_IP"
     echo "                   env; default: 192.168.1.6). A hostname is resolved host-side."
+    echo "  --image <file>   Kernel image to flash (kernel component only; default"
+    echo "                   kernel-6.18.img). E.g. --image kernel-7.1.img."
     echo ""
     echo "Environment: BOOT_IP (default: 192.168.1.6), SSH_TIMEOUT,"
     echo "  SSH_PASSWORD (sshpass), NET_MODE, RADIO_MODE, CONFIRM"
@@ -82,6 +87,12 @@ while [ $# -gt 0 ]; do
             BOOT_IP_FLAG="$1"
             ;;
         --boot-ip=*) BOOT_IP_FLAG="${1#*=}" ;;
+        --image)
+            shift
+            [ $# -gt 0 ] || { echo "Error: --image requires an argument." >&2; exit 1; }
+            IMAGE_OVERRIDE="$1"
+            ;;
+        --image=*) IMAGE_OVERRIDE="${1#*=}" ;;
         --*) echo "Unknown option: $1. Use --help for usage." >&2; exit 1 ;;
         *)
             if [ -z "$COMPONENT" ]; then
@@ -315,4 +326,14 @@ if [ "$COMPONENT" = "userdata" ]; then
         export RADIO_MODE="${RADIO_MODE:-zigbee}"
     fi
 fi
-./"$FLASH_SCRIPT" "$BOOT_IP"
+# Forward an explicit kernel image to flash_kernel.sh when requested. Only
+# the kernel script understands --image; warn (don't fail) for the others.
+FLASH_ARGS=("$BOOT_IP")
+if [ -n "$IMAGE_OVERRIDE" ]; then
+    if [ "$COMPONENT" = "kernel" ]; then
+        FLASH_ARGS+=(--image "$IMAGE_OVERRIDE")
+    else
+        echo "Warning: --image is only honored for the kernel component; ignoring for ${COMPONENT}." >&2
+    fi
+fi
+./"$FLASH_SCRIPT" "${FLASH_ARGS[@]}"

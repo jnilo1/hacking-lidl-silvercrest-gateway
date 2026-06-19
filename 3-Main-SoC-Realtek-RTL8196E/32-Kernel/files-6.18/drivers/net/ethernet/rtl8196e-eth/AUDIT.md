@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Audit date** | 2026-06-12 (updated same day for drivers 2.7 through 2.13) |
-| **Driver version** | 2.13 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) |
-| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`); v2.8..v2.13 unreleased |
+| **Audit date** | 2026-06-12 (updated 2026-06-19 for driver 2.15 / ETHDRV-015) |
+| **Driver version** | 2.15 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) |
+| **Active release** | v3.10.0 GA (kernel `6.18.35-rtl8196e-v3.10.0`); v2.15 on the `v4.0.0-rc2` candidate, v2.8 on `v3.8.6` (both carry the #99 ETHDRV-015 engine fix) |
 | **Audited artifacts** | `rtl8196e_main.c` (923 l), `rtl8196e_ring.c` (920 l), `rtl8196e_hw.c` (808 l), `rtl8196e_dt.c` (126 l), `rtl8196e_{desc,regs,hw,ring,dt}.h`, `Kconfig`, `Makefile`, `rtl819x.dtsi` / `rtl8196e.dts` ethernet nodes, `config-6.18-realtek.txt` |
 
 This document **supersedes and replaces** the cumulative audit log of
@@ -56,7 +56,8 @@ descriptor pools with explicit `dma_cache_*` discipline, SP/SC TX ring,
 - **ISR discipline** (F7): reads `CPUIISR ∧ CPUIIMR`, returns `IRQ_NONE`
   without acking when nothing is owned, W1Cs only the owned bits.
 - **`tx_timeout` quiesce** (F1): `napi_disable` before ring reset;
-  re-enable order (hw_start → napi_enable → enable_irqs) is safe.
+  re-enable order (hw_start → napi_enable → enable_irqs) is safe. Since
+  v2.14 the recovery resets **both** rings, not just TX (ETHDRV-013).
 - **MAC change refused while UP** (F2): prevents a silent NETIF/L2
   desync; next `open()` reprograms both tables from `dev_addr`.
 - **Descriptor ABI guards**: `BUILD_BUG_ON` on sizes/offsets (ETH-004)
@@ -115,6 +116,9 @@ v2.7) and a latent cache-aliasing hazard at ring creation (ETHDRV-008)
 | ETHDRV-010 | HARDENING | low | probe `request_irq`s before quiescing `CPUIIMR`/`CPUIISR`; bootloader-latched state (the bootloader uses this NIC for TFTP) can fire the ISR on a not-yet-registered netdev |
 | ETHDRV-011 | ROBUSTNESS (debug) | info | `dbg_timer_fn` dereferences ring-entry pointers without the pool-bounds checks the hot paths use (root-only, `rtl8196e_debug` gated) |
 | ETHDRV-012 | API | info | no `ndo_change_mtu`: a live MTU change updates `ndev->mtu` but not the NETIF table until the next `open()` |
+| ETHDRV-013 | ROBUSTNESS (correctness) | **high** | *(mitigated in v2.14 — **insufficient alone**, see ETHDRV-015)* `tx_timeout()` rebuilt only the TX ring; its `hw_stop()/hw_start()` rewinds the switch RX engine to descriptor 0, desyncing `rx_idx` → continuous `PKTHDR_DESC_RUNOUT` IRQ storm pinning the CPU in `__napi_poll` = the issue-#99 soft-lockup. v2.14 made the recovery resync RX too, closing the `tx_timeout` door — but a v2.7 field unit (olivluca) carrying this fix still recurred after ~3.7 days |
+| ETHDRV-014 | ROBUSTNESS | low | *(fixed in v2.14)* with TX_ALL_DONE masked, a TX queue stopped while no RX arrives has no reclaim path and waits out the 10 s netdev watchdog (→ tx_timeout, → ETHDRV-013) — a no-RX/low-RX TX workload stalls; fixed with a software TX-reclaim timer |
+| ETHDRV-015 | ROBUSTNESS (correctness) | **high** | *(fixed in v2.15)* the #99 RUNOUT storm is **self-sustaining regardless of how the desync is entered**, and the NAPI poll has no escape (zero-work-under-RUNOUT → re-enable → re-storm). ETHDRV-013 only closes one entry (`tx_timeout`). Fix: a poll-side detector that, after N consecutive zero-work polls with `PKTHDR_DESC_RUNOUT` asserted, runs a full ring resync (`rtl8196e_hw_ring_resync`), plus a ~1 s periodic watchdog — restoring the vendor SDK's `rtl_check_swCore_tx_hang`→`reinitSwitchCore` safety net our rewrite dropped. Full analysis: `issue99.md` |
 
 ### ETHDRV-007 — eth re-clears GPIO-owned mux fields on every open (medium)
 
@@ -265,6 +269,113 @@ silent inconsistency.
 down (the next `open()` programs the NETIF table from `ndev->mtu` —
 verified that is the value `rtl8196e_hw_netif_setup()` consumes).
 Bench: `ip link set eth0 mtu 1400` refused UP, accepted down.
+
+### ETHDRV-013 — tx_timeout rebuilds only TX, desyncing RX into a RUNOUT storm (high)
+
+`rtl8196e_tx_timeout()` recovered the interface by reclaiming and
+rebuilding the **TX** ring only (`ring_tx_reclaim` → `ring_tx_reset` →
+`hw_set_tx_ring`), then cycling the switch with `hw_stop()`/`hw_start()`.
+But `hw_start()` re-asserts TRXRDY, which rewinds the switch's RX engine to
+descriptor 0, while the driver's `rx_idx` and the RX ring bases were left
+untouched. The two pointers desync: the switch sees no RISC-owned RX
+descriptor where it expects one and latches `PKTHDR_DESC_RUNOUT`
+(`CPUIISR` bit 17). `napi_complete` W1C-clears the bit at the end of each
+poll; the switch re-asserts it the next cycle. The result is a spurious
+interrupt storm (~100 k/s measured) with zero forward progress that pins
+the single CPU in `__napi_poll` until the hardware watchdog resets the SoC.
+
+This is the long-hunted **issue #99** soft-lockup. The field signature
+(record-v4 panic record: `napi=[rtl8196e_poll]`, RUNOUT latched,
+`rx_packets` frozen, eth IRQ ~99 k/s) matches the bench reproduction
+exactly: an early-boot TX timeout left RX desynced at `rx_idx=3` and the
+box stormed. The trigger is any `tx_timeout` — see ETHDRV-014 for the
+no-RX path that made one fire routinely on an idling border router.
+
+`open()` and `stop()` both reset *both* rings; only the `tx_timeout`
+recovery was asymmetric. The defect is a missing pair of calls, not a
+wrong one.
+
+**Resolution (v2.14).** Added `rtl8196e_ring_rx_reset()` +
+`rtl8196e_hw_set_rx_rings()` to the recovery, symmetric with
+`open()`/`stop()`. Reproduced and validated on the bench: a TX timeout
+that previously stormed (eth IRQ ~99 k/s, RUNOUT latched, `rx_packets`
+frozen) now recovers cleanly (eth IRQ <1/s, no storm, no panic). Shipped
+as a **candidate pending field confirmation** from the #99 soakers;
+olivluca's field record-v4 capture (`napi=[rtl8196e_poll]`) confirmed the
+eth-NAPI engine. `DESIGN.md` invariant 9 makes the both-rings symmetry
+load-bearing.
+
+**Field follow-up (2026-06-19) — insufficient alone.** A v2.7 unit carrying
+this fix (olivluca, `v3.8.5`) still hit #99 after ~3.7 days. A full review
+(see `issue99.md`) showed the storm is **self-sustaining regardless of entry**
+and the poll has no escape, so closing the `tx_timeout` door does not close
+#99 if the desync arises by any other means. The engine fix is **ETHDRV-015**;
+ETHDRV-013 is retained as one-fewer-door defence in depth.
+
+### ETHDRV-014 — no-RX TX stall waits out the netdev watchdog (low)
+
+With TX_ALL_DONE deliberately masked (DESIGN invariant 5), TX reclaim runs
+only in `start_xmit` and the RX-woken NAPI poll. A TX queue that stops —
+ring-full XOFF or BQL byte-limit XOFF — while no RX is arriving then has no
+path to reclaim its in-flight descriptors: `start_xmit` is no longer called
+(queue stopped) and NAPI is not scheduled (no RX IRQ). The queue sits
+stopped until the 10 s netdev watchdog fires `tx_timeout`. A purely-TX or
+low-RX workload — a Thread border router idling with no paired peer — hit
+this every 10 s, and each `tx_timeout` then tripped ETHDRV-013. This is the
+trigger that turned the rare ETHDRV-013 race into a chronic bench reproducer
+once v2.13 BQL lowered the queue-stop threshold (the field condition —
+sparse RX from a few paired peers — is the rarer, days-to-reproduce form).
+
+**Resolution (v2.14).** A short per-device software timer
+(`RTL8196E_TX_RECLAIM_MS`, 4 ms), armed whenever `start_xmit` or the poll
+leaves the queue `netif_xmit_stopped`. Its callback `napi_schedule`s
+(reclaim + `netdev_completed_queue` + wake), and the poll re-arms it while
+the queue stays stopped; it lapses once the queue drains — bounded, never
+runs on a moving queue. The arm is guarded by `timer_pending()` so the TX
+hot path pays nothing once armed (an unconditional `mod_timer` per packet
+cost ~5 % TX, fixed in the same v2.14 cycle — see `PERFORMANCE.md`).
+`timer_setup` in probe, `timer_delete_sync` in stop. Bench: an idling
+border router that fired a TX timeout every 10 s and dropped SSH now fires
+none and stays stable; TCP TX back to baseline.
+
+### ETHDRV-015 — RUNOUT storm has no poll-side escape; ETHDRV-013 is insufficient alone (high)
+
+A v2.7 field unit (olivluca, `v3.8.5`) carrying ETHDRV-013 still hit #99 after
+~3.7 days. A full adversarial review (the comprehensive write-up is in
+`issue99.md`, with the original Realtek SDK cross-check) established:
+
+- The storm is **self-sustaining regardless of how the desync is entered**. The
+  NAPI poll has no escape: a poll that finds `rx_pkthdr_ring[rx_idx]`
+  `SWCORE_OWNED` does zero work and does not advance `rx_idx`
+  (`ring.c`: `rx_idx` is written only in the re-arm path and in `rx_reset`),
+  then `napi_complete_done` re-W1Cs RUNOUT and re-enables IRQs against the
+  unchanged starved ring (`main.c rtl8196e_poll`), and the switch re-asserts the
+  next cycle. ETHDRV-013 only closes the `tx_timeout` entry — any other entry
+  (a second `tx_timeout`, a hardware/link-driven TRXRDY rewind) lands in the
+  same trap.
+- The original Realtek SDK has the **same** RX architecture and **the same
+  storm-prone poll**, but never exhibits #99 because (a) it has no `ndo_tx_timeout`
+  partial reset and (b) it ships a runtime stuck-detector,
+  `rtl_check_swCore_tx_hang()` → `rtl865x_reinitSwitchCore()` (full
+  cursor+engine re-init). Our from-scratch rewrite dropped that safety net.
+
+**Resolution (v2.15).** Restore the safety net, NAPI-friendly. Two detectors,
+both feeding the shared full resync `rtl8196e_hw_ring_resync()` (the
+`open()`/`tx_timeout` reset+rearm+TRXRDY sequence, factored out):
+
+1. **Poll-side (primary):** after `RTL8196E_RUNOUT_RESYNC_THRESH` (3) consecutive
+   zero-work polls with `PKTHDR_DESC_RUNOUT` asserted, resync from poll context
+   (no `napi_disable` — we are the poll); the `napi_complete_done` tail then
+   re-enables IRQs against an armed, in-sync ring. Breaks the storm in ~µs.
+   CPUIISR is read only on a zero-work poll (`&&` short-circuit) → no hot-path cost.
+2. **Periodic (belt-and-suspenders):** a ~1 s watchdog timer
+   (`RTL8196E_SWCORE_CHECK_MS`); if RUNOUT stays asserted across
+   `RTL8196E_SWCORE_HANG_THRESH` (3) checks it `napi_schedule`s a poll — covering
+   a non-CPU-pinning stall where NAPI is not otherwise driven. Off the datapath.
+
+Two ethtool counters expose firing: `rtl8196e_rx_runout_resync` (resyncs done)
+and `rtl8196e_rx_runout_kick` (periodic kicks); both stay 0 unless a storm hit.
+ETHDRV-013 and ETHDRV-014 are retained as one-fewer-door defence in depth.
 
 ---
 
@@ -429,6 +540,15 @@ pattern). The v2.9 batch is probe/teardown-only (zero hot-path edits);
 v2.10 implements ETH-S02/S04/S06/S07. Both passed the full iperf gate,
 figures in `PERFORMANCE.md`.
 
+Post-audit #99 fix (driver 2.14, 2026-06-15, no formal audit pass):
+**ETHDRV-013** (`tx_timeout` RX desync → `PKTHDR_DESC_RUNOUT` storm = the
+issue-#99 soft-lockup — fixed) and **ETHDRV-014** (no-RX TX stall →
+netdev watchdog — fixed by the software TX-reclaim timer). Both are
+recovery/hot-path-adjacent fixes; the timer arm is `timer_pending()`-guarded
+so steady-state TX is unchanged (the same-cycle perf follow-up restored TCP
+TX to baseline). Validated on the bench, shipped as a candidate pending #99
+field confirmation.
+
 Cross-references: **GPIO-007** (`drivers/gpio/AUDIT.md`) is the same
 defect as ETHDRV-007 seen from the GPIO side; the GPIO audit explicitly
 defers the fix to this driver — both close together in v2.7. `rtl8196e_regs.h` CSCR layout notes and
@@ -449,7 +569,9 @@ fixed and verified in-code, and the one accepted security trade-off
 iperf gate): ETHDRV-007 (v2.7/v2.8), ETHDRV-008/009/010/012 (v2.9),
 ETH-S02/S04/S06/S07 + ETHDRV-011 (v2.10), ETH-S03 (v2.11, `open()`
 >1 s → ~30 ms), ETH-S01 resource-claim variant (v2.12), ETH-S05 BQL
-(v2.13, kept). Remaining open items are deliberate, evidence-backed
-deferrals: ETHDRV-003 (accepted case D, §1.3) and the
-considered-and-rejected list above — every rejection carries its bench
-figures.
+(v2.13, kept). The post-audit v2.14 then closed the root cause of issue
+#99 — the `tx_timeout` RX-resync asymmetry (ETHDRV-013) and the no-RX TX
+stall that fired it (ETHDRV-014); see §2. Remaining open items are
+deliberate, evidence-backed deferrals: ETHDRV-003 (accepted case D, §1.3)
+and the considered-and-rejected list above — every rejection carries its
+bench figures.

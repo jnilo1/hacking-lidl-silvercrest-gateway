@@ -234,9 +234,31 @@ panic ──record──▶ DRAM page ──reset──▶ next boot probe ─�
 ```
 
 The decode is one-shot (magic cleared after reporting) and
-version-gated: v3 (current) and v2 (the one-boot leftover that follows a
+version-gated: v4 (current) plus v3/v2 (one-boot leftovers that follow a
 firmware upgrade) decode; v1/unknown print a stub. All field reads are
 clamped/NUL-terminated (see AUDIT.md §1.2).
+
+**Single-line emission — truncation risk (deferred, AUDIT WDT-013).** The
+report is one `dev_info()` concatenating every field, so it is bound by the
+kernel's per-record printk limit (`LOG_LINE_MAX`, ~1 KB including the
+`rtl819x-wdt …:` prefix). A fully-populated v4 record (long timer/hrtimer
+lists + the NET_RX counters + a long `reason`) can approach that limit and
+truncate the **tail**: `reason` is last and the v4
+`softirqs=/hardirqs=/napi=` block sits just before it, so those are the
+first fields lost. `S26panicrec` copies the dmesg line **verbatim** into
+`/userdata/panic/history` (`grep -F 'previous boot ended in panic' |
+tail -1`), so the file inherits any truncation — it adds none and recovers
+none. Every real capture to date (~600–700 B) sits well under the limit and
+persists intact.
+
+Decision (2026-06-16): **left deferred** per WDT-013 ("no action required
+now"). The #99 root-cause fix (`rtl8196e-eth` v2.14 tx_timeout RX-resync)
+should stop new records, and rc1 is mid-soak where changing the record
+format would disturb in-flight field captures. When revisited (post-GA /
+record v4.1) it is a *coupled* change: split the report into ≥2 `dev_info()`
+lines **and** adapt the `S26panicrec` grep to capture both (a naïve split
+would drop the 2nd line from the file), plus sanitize `reason[]` to
+printable ASCII (the log-injection half of WDT-013).
 
 ### 3.5 Kernel-side helpers (out-of-driver API)
 

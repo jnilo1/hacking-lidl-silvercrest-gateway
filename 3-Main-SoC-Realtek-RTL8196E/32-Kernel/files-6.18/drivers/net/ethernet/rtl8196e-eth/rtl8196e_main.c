@@ -25,7 +25,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.14"
+#define RTL8196E_DRV_VERSION "2.15"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -43,6 +43,27 @@
  */
 #define RTL8196E_TX_RECLAIM_MS 4
 
+/*
+ * ETHDRV-015 (issue #99): the switch RX engine and the driver rx_idx cursor can
+ * desync (e.g. a TRXRDY cycle that rewinds the switch RX pointer without
+ * resyncing rx_idx). The switch then asserts PKTHDR_DESC_RUNOUT continuously and
+ * the ISR -> NAPI-poll -> re-enable handshake spins doing zero work — a
+ * self-sustaining interrupt storm that pins the CPU until the watchdog reboots.
+ * The vendor SDK recovers via a periodic stuck-detector that re-inits the switch
+ * core (rtl_check_swCore_tx_hang -> rtl865x_reinitSwitchCore); our from-scratch
+ * driver dropped that safety net. Two complementary detectors restore it:
+ *   - poll-side: RTL8196E_RUNOUT_RESYNC_THRESH consecutive zero-work polls taken
+ *     while PKTHDR_DESC_RUNOUT is asserted trigger a full ring resync from poll
+ *     context (breaks the storm in a few microseconds — the primary fix);
+ *   - periodic: every RTL8196E_SWCORE_CHECK_MS a watchdog timer checks for
+ *     PKTHDR_DESC_RUNOUT staying asserted across RTL8196E_SWCORE_HANG_THRESH
+ *     checks and kicks a poll, covering a non-CPU-pinning stall where NAPI is
+ *     not otherwise being driven (belt-and-suspenders).
+ */
+#define RTL8196E_RUNOUT_RESYNC_THRESH 3
+#define RTL8196E_SWCORE_CHECK_MS      1000
+#define RTL8196E_SWCORE_HANG_THRESH   3
+
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
 MODULE_PARM_DESC(link_poll_ms, "Link poll interval in ms (0=disabled)");
@@ -59,6 +80,11 @@ struct rtl8196e_priv {
 	struct rtl8196e_dt_iface iface;
 	struct timer_list link_timer;
 	struct timer_list tx_reclaim_timer;
+	struct timer_list swcore_check_timer;
+	u32 rx_runout_zero;	/* consecutive zero-work polls under RUNOUT */
+	u32 swcore_runout_seen;	/* consecutive periodic checks with RUNOUT asserted */
+	u32 rx_runout_resync;	/* #99 storm resyncs performed (ethtool) */
+	u32 rx_runout_kick;	/* periodic-watchdog NAPI kicks (ethtool) */
 	u16 vlan_id;
 	u16 portmask;
 	int phy_port;
@@ -138,6 +164,37 @@ static void rtl8196e_tx_reclaim_timer_fn(struct timer_list *t)
 }
 
 /*
+ * Periodic switch-core watchdog (ETHDRV-015, belt-and-suspenders for #99).
+ * If PKTHDR_DESC_RUNOUT stays asserted across RTL8196E_SWCORE_HANG_THRESH
+ * consecutive checks, the NAPI path is not clearing it — kick a poll so the
+ * poll-side detector runs the resync. During the CPU-pinned storm the poll
+ * itself recovers within microseconds and this timer never runs; it exists for
+ * a non-pinning stall where NAPI is not being driven. Reading CPUIISR is a
+ * single MMIO load once per second. Mirrors the vendor SDK's
+ * rtl_check_swCore_tx_hang() -> rtl865x_reinitSwitchCore().
+ */
+static void rtl8196e_swcore_check_timer_fn(struct timer_list *t)
+{
+	struct rtl8196e_priv *priv = timer_container_of(priv, t, swcore_check_timer);
+
+	if (!netif_running(priv->ndev))
+		return;
+
+	if (rtl8196e_readl(CPUIISR) & PKTHDR_DESC_RUNOUT_IP_ALL) {
+		if (++priv->swcore_runout_seen >= RTL8196E_SWCORE_HANG_THRESH) {
+			priv->swcore_runout_seen = 0;
+			priv->rx_runout_kick++;
+			napi_schedule(&priv->napi);
+		}
+	} else {
+		priv->swcore_runout_seen = 0;
+	}
+
+	mod_timer(&priv->swcore_check_timer,
+		  jiffies + msecs_to_jiffies(RTL8196E_SWCORE_CHECK_MS));
+}
+
+/*
  * Bring the interface up: program rings, setup VLAN/NETIF/L2, enable IRQs.
  *
  * The one-time SoC bring-up (pinmux, switch-clock toggle, MEMCR,
@@ -213,6 +270,11 @@ static int rtl8196e_open(struct net_device *ndev)
 	if (priv->link_poll_ms)
 		mod_timer(&priv->link_timer, jiffies + msecs_to_jiffies(priv->link_poll_ms));
 
+	priv->rx_runout_zero = 0;
+	priv->swcore_runout_seen = 0;
+	mod_timer(&priv->swcore_check_timer,
+		  jiffies + msecs_to_jiffies(RTL8196E_SWCORE_CHECK_MS));
+
 	return 0;
 }
 
@@ -253,6 +315,7 @@ static int rtl8196e_stop(struct net_device *ndev)
 
 	timer_delete_sync(&priv->link_timer);
 	timer_delete_sync(&priv->tx_reclaim_timer);
+	timer_delete_sync(&priv->swcore_check_timer);
 	netif_carrier_off(ndev);
 
 	return 0;
@@ -362,11 +425,40 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 	return NETDEV_TX_OK;
 }
 
-/* TX watchdog handler: reclaim in-flight SKBs, reset the TX ring, and restart. */
+/*
+ * Full HW + ring resync: stop the switch engines, reclaim and reset the TX ring,
+ * reset the RX ring (re-arm every descriptor SWCORE_OWNED, rx_idx = 0), reprogram
+ * both ring bases and restart. hw_stop()/hw_start() cycles the switch RX engine
+ * (TRXRDY) back to descriptor 0, so the RX ring MUST be resynced in lockstep:
+ * rebuilding only TX leaves rx_idx desynced from the switch's RX pointer, the
+ * switch then sees no usable descriptors and asserts PKTHDR_DESC_RUNOUT
+ * continuously — the self-sustaining #99 storm. Shared recovery body used by the
+ * TX watchdog (rtl8196e_tx_timeout) and the poll-side RUNOUT-storm detector
+ * (ETHDRV-015). The caller owns NAPI quiescing and the IRQ mask/enable framing;
+ * this routine touches only the rings and the switch engine and leaves the eth
+ * IRQ in the (masked) state the caller set.
+ */
+static void rtl8196e_hw_ring_resync(struct rtl8196e_priv *priv)
+{
+	unsigned int pkts = 0, bytes = 0;
+
+	rtl8196e_hw_stop(&priv->hw);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
+	rtl8196e_ring_tx_reset(priv->ring);
+	rtl8196e_ring_rx_reset(priv->ring);
+	/* Rings rebuilt from scratch — restart BQL accounting with them. */
+	netdev_reset_queue(priv->ndev);
+	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
+	rtl8196e_hw_set_rx_rings(&priv->hw,
+				 rtl8196e_ring_rx_pkthdr_base(priv->ring),
+				 rtl8196e_ring_rx_mbuf_base(priv->ring));
+	rtl8196e_hw_start(&priv->hw);
+}
+
+/* TX watchdog handler: reclaim in-flight SKBs, resync both rings, and restart. */
 static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 {
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
-	unsigned int pkts = 0, bytes = 0;
 
 	netdev_warn(ndev, "TX timeout\n");
 
@@ -376,34 +468,9 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 	netif_stop_queue(ndev);
 	napi_disable(&priv->napi);
 	rtl8196e_hw_disable_irqs(&priv->hw);
-	rtl8196e_hw_stop(&priv->hw);
-
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
-	rtl8196e_ring_tx_reset(priv->ring);
-	/*
-	 * hw_stop()/hw_start() below cycles the switch RX engine (TRXRDY)
-	 * back to descriptor 0, so the RX ring must be resynced too —
-	 * reset the cursor to 0, re-arm every descriptor SWCORE_OWNED and
-	 * reprogram the RX ring bases, symmetric with open()/stop(). If we
-	 * rebuild only TX (as before), rx_idx desyncs from the switch's RX
-	 * pointer: the switch then sees no usable descriptors and asserts
-	 * PKTHDR_DESC_RUNOUT continuously. napi_complete clears it; the
-	 * switch re-asserts it the next cycle — a spurious interrupt storm
-	 * with zero forward progress that pins the CPU in __napi_poll until
-	 * the hardware watchdog resets the SoC.
-	 */
-	rtl8196e_ring_rx_reset(priv->ring);
-	/* Rings rebuilt from scratch — restart BQL accounting with them. */
-	netdev_reset_queue(ndev);
-	rtl8196e_hw_set_tx_ring(&priv->hw, rtl8196e_ring_tx_desc_base(priv->ring));
-	rtl8196e_hw_set_rx_rings(&priv->hw,
-				 rtl8196e_ring_rx_pkthdr_base(priv->ring),
-				 rtl8196e_ring_rx_mbuf_base(priv->ring));
-
-	rtl8196e_hw_start(&priv->hw);
+	rtl8196e_hw_ring_resync(priv);
 	napi_enable(&priv->napi);
 	rtl8196e_hw_enable_irqs(&priv->hw);
-
 	netif_wake_queue(ndev);
 }
 
@@ -438,6 +505,30 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	 */
 	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(priv->ndev, 0))))
 		rtl8196e_arm_tx_reclaim(priv);
+
+	/*
+	 * ETHDRV-015 (issue #99): a poll that did zero RX work while
+	 * PKTHDR_DESC_RUNOUT is (re)asserted means the switch RX pointer and
+	 * rx_idx have desynced — the ISR/poll/re-enable handshake would spin
+	 * forever (a CPU-pinning interrupt storm). The poll is the one context
+	 * that runs on every storm iteration, so after a few consecutive such
+	 * polls resync the ring from here; the napi_complete_done() tail below
+	 * then re-enables IRQs against an armed, in-sync ring and the storm
+	 * cannot restart. CPUIISR is read only on a zero-work poll (the &&
+	 * short-circuits), so the normal RX path pays nothing.
+	 */
+	if (unlikely(work_done == 0 &&
+		     (rtl8196e_readl(CPUIISR) & PKTHDR_DESC_RUNOUT_IP_ALL))) {
+		if (++priv->rx_runout_zero >= RTL8196E_RUNOUT_RESYNC_THRESH) {
+			netif_stop_queue(priv->ndev);
+			rtl8196e_hw_ring_resync(priv);
+			netif_wake_queue(priv->ndev);
+			priv->rx_runout_resync++;
+			priv->rx_runout_zero = 0;
+		}
+	} else {
+		priv->rx_runout_zero = 0;
+	}
 
 	if (work_done < budget) {
 		if (napi_complete_done(napi, work_done)) {
@@ -578,7 +669,7 @@ static int rtl8196e_get_link_ksettings(struct net_device *ndev,
 	return 0;
 }
 
-#define RTL8196E_ETHTOOL_STATS_COUNT 20
+#define RTL8196E_ETHTOOL_STATS_COUNT 22
 
 /* ethtool: return the number of driver-specific statistics. */
 static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
@@ -614,6 +705,9 @@ static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 		"rtl8196e_tx_bad_pkthdr",
 		"rtl8196e_tx_bad_mbuf",
 		"rtl8196e_rx_mbuf_no_shadow",
+		/* ETHDRV-015 (#99) recovery counters — stay 0 unless a storm hit. */
+		"rtl8196e_rx_runout_resync",
+		"rtl8196e_rx_runout_kick",
 	};
 
 	(void)ndev;
@@ -656,6 +750,8 @@ static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 	data[17] = diag.tx_bad_pkthdr;
 	data[18] = diag.tx_bad_mbuf;
 	data[19] = diag.rx_mbuf_no_shadow;
+	data[20] = priv->rx_runout_resync;
+	data[21] = priv->rx_runout_kick;
 }
 
 static const struct ethtool_ops rtl8196e_ethtool_ops = {
@@ -819,6 +915,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 
 	timer_setup(&priv->link_timer, rtl8196e_link_timer_fn, 0);
 	timer_setup(&priv->tx_reclaim_timer, rtl8196e_tx_reclaim_timer_fn, 0);
+	timer_setup(&priv->swcore_check_timer, rtl8196e_swcore_check_timer_fn, 0);
 
 	/* NAPI deferral tuning: on this slow CPU (Lexra RLX4181 @ 380 MHz),
 	 * the driver drains the RX ring faster than packets arrive (~3 pkt/poll).

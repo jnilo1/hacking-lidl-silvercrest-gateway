@@ -389,9 +389,41 @@ int autoBurn = 1;
 
 void autoreboot()
 {
+	volatile unsigned int d;
+
+	/*
+	 * Let the just-queued post-flash "OK" notification (sent by the caller
+	 * via tftpd_send_notify) physically drain out before we tear the PHY
+	 * down below — otherwise the PHY-disable drops the in-flight packet and
+	 * the flash tool reports a spurious "no notification" on every success.
+	 * Use a bounded busy-loop, NOT delay_ms(): the SPI flash write that just
+	 * ran can leave the jiffy timer stopped, so delay_ms() spins forever
+	 * (observed: the box never reboots after a kernel flash). This loop is
+	 * timer/IRQ-independent and cannot hang; ~tens of ms at 400 MHz is far
+	 * more than a tiny UDP frame needs to leave the switch.
+	 */
+	for (d = 0; d < 4000000; d++)
+		;
+
 	jumpF = (void *)(0xbfc00000);
 	outl(0, GIMR0); // mask all interrupt
 	cli();
+	/*
+	 * Quiesce the Ethernet switch before the watchdog reset. The watchdog
+	 * reset preserves DRAM (that is how the boothold flag survives across
+	 * it) and does not fully reset the switch DMA engine — so a flash that
+	 * has just finished a large TFTP transfer can leave the switch DMAing
+	 * incoming frames into DRAM across the reset and into early kernel boot,
+	 * corrupting it (intermittent post-flash boot loop). Disabling the PHY
+	 * interface on every port stops that, mirroring the direct-jump-to-kernel
+	 * path in monitor.c which already does this "to prevent ethernet [from
+	 * disturbing] Linux kernel booting".
+	 */
+	WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP3, (READ_MEM32(PCRP3) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP4, (READ_MEM32(PCRP4) & (~EnablePHYIf)));
 	flush_cache();
 	prom_printf("\nreboot.......\n");
 	/* enable watchdog reset */

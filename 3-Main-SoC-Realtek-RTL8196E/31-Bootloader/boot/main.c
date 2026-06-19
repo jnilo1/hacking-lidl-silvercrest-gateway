@@ -423,6 +423,20 @@ void goToLocalStartMode(unsigned long addr, IMG_HEADER_Tp pheader)
 		jump = (void *)(pheader->startAddr);
 
 		cli();
+		/*
+		 * Quiesce the switch PHY before handing off to the kernel. The
+		 * kernel re-inits the MAC, but until it does a live PHY lets the
+		 * switch DMA inbound frames into DRAM during early boot and corrupt
+		 * it — the intermittent post-flash boot loop. This is the auto-boot
+		 * counterpart of the same quiesce already done in the `J` command
+		 * (monitor.c) and in autoreboot() (tftpd.c); the path actually taken
+		 * on every boot was handing off with the PHY still live.
+		 */
+		WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP3, (READ_MEM32(PCRP3) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP4, (READ_MEM32(PCRP4) & (~EnablePHYIf)));
 		flush_cache();
 		jump(); // jump to start
 		return;

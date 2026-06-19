@@ -1,5 +1,8 @@
 #!/bin/sh
 # rcK - Shutdown script: stop all services in reverse order
+echo ""
+echo "===== Stopping userdata services ====="
 for i in $(ls -r /userdata/etc/init.d/S??*); do
     [ -x "$i" ] && "$i" stop
 done
+echo "Userdata services stopped"

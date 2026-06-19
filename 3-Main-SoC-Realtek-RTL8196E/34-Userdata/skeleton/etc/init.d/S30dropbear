@@ -23,22 +23,22 @@ PIDFILE="/var/run/dropbear.pid"
 
 # Generate server keys only once at the first login
 generate_keys() {
-    echo "🔐 Checking Dropbear host keys..."
+    echo "  dropbear: checking host keys"
 
     mkdir -p "$KEYDIR"
     chmod 700 "$KEYDIR"
     [ -f "$KEYDIR/dropbear_rsa_host_key" ] || {
-        echo "🔑 Generating RSA host key..."
+        echo "  dropbear: generating RSA host key"
         dropbearkey -t rsa -f "$KEYDIR/dropbear_rsa_host_key"
     }
 
     [ -f "$KEYDIR/dropbear_ecdsa_host_key" ] || {
-        echo "🔑 Generating ECDSA host key..."
+        echo "  dropbear: generating ECDSA host key"
         dropbearkey -t ecdsa -f "$KEYDIR/dropbear_ecdsa_host_key"
     }
 
     [ -f "$KEYDIR/dropbear_ed25519_host_key" ] || {
-        echo "🔑 Generating ED25519 host key..."
+        echo "  dropbear: generating ED25519 host key"
         dropbearkey -t ed25519 -f "$KEYDIR/dropbear_ed25519_host_key"
     }
 }
@@ -53,11 +53,11 @@ case "$1" in
 start)
     fix_permissions
     generate_keys
-    echo "🚀 Starting Dropbear with options: $DROPBEAR_OPTS"
+    echo "  dropbear: sshd started ($DROPBEAR_OPTS)"
     dropbear $DROPBEAR_OPTS
     ;;
 stop)
-    echo "🔴 Stopping Dropbear..."
+    echo "  dropbear: stopped"
     if [ -f "$PIDFILE" ]; then
         kill "$(cat "$PIDFILE")" && rm -f "$PIDFILE"
     else
@@ -70,7 +70,7 @@ restart)
     "$0" start
     ;;
 *)
-    echo "ℹ️  Usage: $0 {start|stop|restart}"
+    echo "Usage: $0 {start|stop|restart}"
     exit 1
     ;;
 esac

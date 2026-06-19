@@ -18,17 +18,17 @@ LOGTAG=S40button
 
 start() {
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-        echo "S40button: already running (pid $(cat "$PIDFILE"))"
+        echo "  button: already running (pid $(cat "$PIDFILE"))"
         return 0
     fi
     if [ ! -x "$S40_BIN" ]; then
-        echo "S40button: $S40_BIN not found or not executable" >&2
+        echo "  button: WARNING $S40_BIN not found or not executable" >&2
         logger -t "$LOGTAG" "missing binary $S40_BIN, not starting"
         return 1
     fi
-    echo "S40button: starting daemon ($S40_BIN)..."
     "$S40_BIN" &
     echo $! > "$PIDFILE"
+    echo "  button: daemon started (pid $!)"
 }
 
 stop() {
@@ -36,7 +36,7 @@ stop() {
         pid=$(cat "$PIDFILE")
         kill "$pid" 2>/dev/null
         rm -f "$PIDFILE"
-        echo "S40button: stopped (pid $pid)"
+        echo "  button: stopped (pid $pid)"
     fi
 }
 

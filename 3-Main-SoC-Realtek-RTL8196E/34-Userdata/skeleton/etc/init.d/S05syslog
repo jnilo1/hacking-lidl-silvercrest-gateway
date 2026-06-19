@@ -15,18 +15,18 @@
 
 # Check if /etc/nosyslog file exists
 if [ -f /etc/nosyslog ]; then
-    echo "📝 Skipping syslogd & klogd"
+    echo "  syslog: skipped (/etc/nosyslog present)"
     exit 0
 fi
 
 case "$1" in
 start)
-    echo "📝 Starting syslogd and klogd"
+    echo "  syslog: started (syslogd + klogd)"
     syslogd -O /var/log/messages -s 32 -b 2 -m 0
     klogd &
     ;;
 stop)
-    echo "🔴 Stopping syslogd and klogd"
+    echo "  syslog: stopped"
     killall syslogd
     killall klogd
     ;;

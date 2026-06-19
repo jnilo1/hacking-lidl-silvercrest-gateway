@@ -63,14 +63,14 @@ fi
 # Execute user init scripts from /userdata
 if [ -d /userdata/etc/init.d ]; then
     echo ""
-    echo "===== Launching userdata init scripts ====="
+    echo "===== Launching userdata services ====="
     for i in /userdata/etc/init.d/S??*; do
         if [ -x "$i" ]; then
-            echo "Starting $i"
+            echo "Starting ${i##*/}"
             "$i" start
         fi
     done
-    echo "Userdata init completed"
+    echo "Userdata services started"
 else
     echo "WARNING: /userdata/etc/init.d not found"
 fi

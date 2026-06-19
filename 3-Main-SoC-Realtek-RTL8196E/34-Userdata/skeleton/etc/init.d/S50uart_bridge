@@ -39,7 +39,7 @@ start)
 
     # Skip if radio is configured for OTBR
     if [ -f /userdata/etc/radio.conf ] && grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
-        echo "Skipping uart_bridge (radio mode: otbr)"
+        echo "  uart-bridge: skipped (radio mode: otbr)"
         exit 0
     fi
 
@@ -74,7 +74,7 @@ start)
         case "$val" in
             none|sw|hw) FW_FC="$val" ;;
             "")         : ;;
-            *) echo "Warning: ignoring invalid FIRMWARE_FLOW_CTRL in radio.conf: '$val'" >&2 ;;
+            *) echo "  uart-bridge: WARNING ignoring invalid FIRMWARE_FLOW_CTRL '$val'" >&2 ;;
         esac
     fi
 
@@ -104,7 +104,7 @@ start)
     # The kernel driver logs "armed on <tty> @ <baud> baud, listening on ..."
     # on success — no need to echo from here. Only complain on failure.
     if [ "$(cat "$SYSFS/armed")" != "1" ]; then
-        echo "UART bridge failed to arm!" >&2
+        echo "  uart-bridge: ERROR failed to arm" >&2
         exit 1
     fi
     ;;

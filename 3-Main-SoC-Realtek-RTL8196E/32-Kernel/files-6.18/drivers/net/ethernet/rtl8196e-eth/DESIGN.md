@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Document date** | 2026-06-12 (updated same day for drivers 2.7 and 2.8) |
-| **Driver version** | 2.8 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) |
-| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`); v2.8 on the `v3.11.0-pre` branch |
+| **Document date** | 2026-06-12 (updated 2026-06-19 for driver 2.15 / ETHDRV-015) |
+| **Driver version** | 2.15 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) |
+| **Active release** | v3.10.0 GA (kernel `6.18.35-rtl8196e-v3.10.0`); v2.15 on the `v4.0.0-rc2` candidate, v2.8 on `v3.8.6` (both carry the #99 ETHDRV-015 engine fix) |
 
 Architecture reference for the from-scratch Ethernet driver. Findings
 and audit history live in `AUDIT.md`; the goals/non-goals contract is
@@ -84,8 +84,8 @@ as intentional (F17/ETHDRV-006; ETH-S01 tracks the ioremap cleanup).
 1. linearize if needed; `skb_put_padto(ETH_ZLEN)` **before** any flush
    (info-leak guard, ETH-001);
 2. opportunistic `tx_reclaim` (TX_ALL_DONE IRQ is deliberately never
-   armed — software reclaim here and in NAPI replaces one IRQ per
-   completion);
+   armed — software reclaim here, in NAPI, and via the TX-reclaim timer
+   below replaces one IRQ per completion);
 3. flush data, `tx_submit` (pool-bounds-validated descriptor, ≤1518 B),
    retry once after a reclaim, else stop queue / `NETDEV_TX_BUSY`;
 4. `kick_tx`: pulse CPUICR.TXFD immediately on cold start (ring was
@@ -109,6 +109,23 @@ as intentional (F17/ETHDRV-006; ETH-S01 tracks the ioremap cleanup).
    `fq_codel` — which can only schedule packets still in the qdisc, not
    ones already dumped into the ring.
 
+### TX-reclaim timer (the no-RX stall)
+
+Both reclaim drivers above (xmit, NAPI) need *activity* to run: a fresh
+xmit, or an RX-woken poll. A queue that stops (ring-full XOFF or BQL
+byte-limit XOFF) while no RX is arriving — a purely-TX or low-RX workload
+such as a border router idling with no paired peer — therefore has nothing
+to reclaim its in-flight descriptors and would sit stopped until the 10 s
+netdev watchdog fires `tx_timeout`. The **software TX-reclaim timer**
+(`RTL8196E_TX_RECLAIM_MS`, 4 ms) closes that window: `start_xmit` and the
+poll arm it whenever they leave the queue `netif_xmit_stopped`; the callback
+`napi_schedule`s (reclaim + `netdev_completed_queue` + wake/un-freeze) and
+the poll re-arms it while the queue stays stopped. Once the queue drains,
+`netif_xmit_stopped()` is false and the timer lapses — bounded, never runs
+on a moving queue. The arm is guarded by `timer_pending()` so the TX hot
+path pays nothing once armed (an unconditional `mod_timer` per packet cost
+~5 % TX on this CPU; see `PERFORMANCE.md`).
+
 ### RX (`rtl8196e_ring_rx_poll` from NAPI, `__iram`)
 
 For each RISC-owned pkthdr entry, up to budget: validate the pkthdr
@@ -131,8 +148,8 @@ ISR (`__iram`): read `CPUIISR ∧ CPUIIMR`, W1C owned bits only,
 `IRQ_NONE` otherwise; LINK_CHANGE updates carrier inline; RX_DONE /
 RUNOUT masks IRQs and schedules NAPI. Poll: RX up to budget → TX
 reclaim (+ `netdev_completed_queue` for BQL) → kick drain →
-conditional queue wake → on completion W1C runout bits and re-enable
-IRQs. The probe sets
+conditional queue wake → re-arm the TX-reclaim timer if the queue is
+still stopped → on completion W1C runout bits and re-enable IRQs. The probe sets
 `napi_defer_hard_irqs = 1` + `gro_flush_timeout = 2 ms` **before**
 `netif_napi_add` (6.x copies them at add time): batching the GRO flush
 is worth +33 % RX / +36 % TX on this CPU (rationale block in probe).
@@ -159,7 +176,12 @@ bench (nRST RSTACK after a down/up flap).
 `stop()` quiesces in the reverse direction and **resets both rings**
 (in-flight SKBs freed, descriptors rebuilt, shadow SKBs reused) so the
 next `open()` — which only reprograms base registers — starts from a
-canonical state. `tx_timeout` is a TX-only version of the same recipe.
+canonical state. `tx_timeout` runs the same recipe but **must reset both
+rings too, not just TX**: its `hw_stop()`/`hw_start()` cycles the switch RX
+engine (TRXRDY) back to descriptor 0, so the RX cursor and bases have to be
+resynced or the switch sees no usable RX descriptors and storms
+`PKTHDR_DESC_RUNOUT` — the #99 soft-lockup (see AUDIT ETHDRV-013, invariant
+9). A TX-only recovery is the bug, not the optimisation.
 
 ## 6. Concurrency model
 
@@ -176,6 +198,9 @@ canonical state. `tx_timeout` is a TX-only version of the same recipe.
 - Link state: hardirq LINK_CHANGE plus an optional poll timer
   (`link_poll_ms` DT property or module param, 0 = off) for setups
   where the latched IRQ proves unreliable.
+- TX-reclaim timer: a softirq-context timer that only ever
+  `napi_schedule`s — it touches no ring state itself, so it adds no new
+  locking surface (the reclaim runs in the poll it wakes).
 - Slow-path MMIO (MDIO, table engine, TLU) is process-context only,
   serialised by RTNL; the wait loops sleep (`usleep_range`).
 
@@ -206,8 +231,10 @@ canonical state. `tx_timeout` is a TX-only version of the same recipe.
    are load-bearing for the non-coherent cache model.
 4. **`skb_put_padto` stays ahead of the data flush** — reordering
    reintroduces the ETH-001 slab leak on the wire.
-5. **TX_ALL_DONE stays unarmed**; reclaim lives in xmit + NAPI. Arming
-   it reintroduces one IRQ per completion on a 400 MHz core.
+5. **TX_ALL_DONE stays unarmed**; reclaim lives in xmit, NAPI, and the
+   software TX-reclaim timer (the timer is what lets a no-RX stall recover
+   without that IRQ — ETHDRV-014). Arming TX_ALL_DONE reintroduces one IRQ
+   per completion on a 400 MHz core.
    **Corollary — BQL accounting must stay balanced**: every byte passed
    to `netdev_sent_queue` must later reach `netdev_completed_queue`, and
    every ring reset (`open`, `stop`, `tx_timeout`) must pair its
@@ -237,3 +264,8 @@ canonical state. `tx_timeout` is a TX-only version of the same recipe.
    decision. Since v2.11 the write runs once at probe (it must stay
    the *only* runtime writer that ever cleared these fields — what
    closed ETHDRV-007 is precisely that nothing re-clears them).
+9. **`tx_timeout` resets *both* rings, symmetric with `open`/`stop`** — it
+   cycles the switch via `hw_stop`/`hw_start`, which rewinds the RX engine
+   to descriptor 0; a TX-only recovery desyncs RX and triggers the #99
+   `PKTHDR_DESC_RUNOUT` storm (AUDIT ETHDRV-013). Keep `ring_rx_reset` +
+   `hw_set_rx_rings` in the recovery path alongside the TX reset.

@@ -17,6 +17,11 @@ concurrency:
 
 jobs:
   build:
+    # Only the public repo deploys Pages (see the deploy job's guard below).
+    # On the private mirror this job would build and upload an ~18 MB Pages
+    # artifact that is never deployed (deploy is skipped) — pure waste of
+    # billable storage and Actions minutes. Skip the whole job there.
+    if: github.repository == 'jnilo1/hacking-lidl-silvercrest-gateway'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

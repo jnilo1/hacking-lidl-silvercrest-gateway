@@ -85,8 +85,6 @@ start)
         exit 0
     fi
 
-    echo "Starting otbr-agent..."
-
     # Restore settings from flash to tmpfs
     mkdir -p "$FLASH_DIR" "$RAM_DIR"
     cp "$FLASH_DIR"/* "$RAM_DIR"/ 2>/dev/null
@@ -121,10 +119,11 @@ start)
     # its long-lived loop is recovered instead of silently stopping it.
     "$KEEPALIVE" -n otbr-monitor "$OTBR_MONITOR" &
     echo $! > "$MON_SUP_PID"
+    echo "  otbr: border router started (otbr-agent + monitor)"
     ;;
 
 stop)
-    echo "Stopping otbr-agent..."
+    echo "  otbr: stopped"
     # Stop the supervisors first. keepalive forwards SIGTERM to its child and
     # exits WITHOUT restarting; killing a child directly would only trigger a
     # keepalive restart, so the order matters.

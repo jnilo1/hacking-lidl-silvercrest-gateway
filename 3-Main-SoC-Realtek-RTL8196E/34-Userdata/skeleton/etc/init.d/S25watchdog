@@ -26,6 +26,7 @@ start)
         exit 0
     fi
     /sbin/watchdog -t 30 "$WDT"
+    echo "  watchdog: armed (kick 30s)"
     ;;
 
 stop)
@@ -36,6 +37,7 @@ stop)
     # only need a fallback for the SIGKILL / crashed-daemon case.
     killall watchdog 2>/dev/null
     [ -e "$WDT" ] && echo V > "$WDT" 2>/dev/null
+    echo "  watchdog: stopped"
     ;;
 
 restart)

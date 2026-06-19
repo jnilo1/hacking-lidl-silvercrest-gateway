@@ -34,20 +34,20 @@ start)
     # Set timezone if available (always, regardless of connectivity)
     if [ -f "$TZFILE" ]; then
         TZ=$(cat "$TZFILE")
-        echo "🕓 Setting timezone to $TZ"
+        echo "  time: timezone $TZ"
         export TZ="$TZ"
     fi
 
     if [ ! -f "$NTPCONF" ]; then
-        echo "⚠️ No $NTPCONF found, skipping NTP sync."
+        echo "  time: WARNING no $NTPCONF, skipping NTP sync"
         exit 0
     fi
 
-    echo "🚀 Starting ntpd (daemon, syncs whenever internet is reachable)"
+    echo "  time: ntpd started (syncs when internet is reachable)"
     ntpd
     ;;
 stop)
-    echo "🔴 Stopping ntpd"
+    echo "  time: ntpd stopped"
     killall ntpd 2>/dev/null
     ;;
 restart)

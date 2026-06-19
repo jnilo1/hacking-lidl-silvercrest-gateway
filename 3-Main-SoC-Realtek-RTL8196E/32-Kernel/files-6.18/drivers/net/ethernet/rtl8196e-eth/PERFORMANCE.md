@@ -282,6 +282,86 @@ high outlier — well above its own 5-rep median of 70.5. BQL stays: its
 benefit is TX latency/bufferbloat control, and any throughput cost is
 ≤1 % and buried in noise.
 
+## Driver v2.14 gate run (June 2026, #99 tx_timeout fix + TX-reclaim timer)
+
+`scripts/test_rtl8196e_eth_iperf3.sh` against the v4.0.0-rc1 candidate
+(`6.18.35-rtl8196e-v4.0.0-rc1`), OTBR stopped. Driver 2.13 → 2.14 carries
+two robustness changes plus their perf follow-up:
+
+- **ETHDRV-013** — `tx_timeout` now resets *both* rings, not just TX. Its
+  `hw_stop()`/`hw_start()` rewinds the switch RX engine to descriptor 0, so a
+  TX-only recovery desynced `rx_idx` and storms `PKTHDR_DESC_RUNOUT` — the #99
+  soft-lockup. This lives entirely in the recovery path (runs only after a
+  stall), so it has no steady-state throughput cost by construction.
+- **ETHDRV-014** — a software TX-reclaim timer (`RTL8196E_TX_RECLAIM_MS`)
+  breaks the rare no-RX TX stall where reclaim would otherwise wait for an RX
+  IRQ that never comes. The timer is armed from the TX hot path whenever the
+  queue is found stopped, which under load is most packets.
+
+The reclaim timer is the only v2.14 change that touches the hot path. An
+unguarded `mod_timer()` per packet cost **~5 % of TX** (rc0 regressed to
+**67.6** Mbit/s, RX unaffected); guarding the arm with `timer_pending()`
+(commit `b62ec01`) restores it — the timer still fires within one
+`RTL8196E_TX_RECLAIM_MS` window but is free once armed (rc1: **70.8**
+Mbit/s). The net v2.13 → v2.14 hot path is therefore throughput-neutral.
+
+| Workload                    | v2.13 | v2.14 |
+|-----------------------------|------:|------:|
+| TCP RX (host → gateway)     | 94.0  | 93.6  |
+| TCP TX (gateway → host)     | 69.5  | 69.1  |
+
+Parallel TCP RX: 94.0 (4 streams) / 93.8 (8 streams). Stress (300 s
+single-stream RX): 94.0 sustained, 11 retransmits over 2.44 M segments
+(0.00 %), 1 InErr. UDP RX: 10M → 0 % loss, 50M → 44.7 delivered (11 % loss),
+100M → 31.3 delivered (68 % loss); bidir 50M+50M → host→gw 20.2 (60 % loss),
+gw→host 8.40 (0 %) — the usual rcvbuf-bound receiver profile. Interface
+counters across the whole suite: rx_errors 0, rx_dropped 0, tx_errors 0,
+tx_dropped 0; TCP RetransSegs 0.0000 %.
+
+### TX dispersion, v2.14 (5 reps)
+
+The suite's single-run TX (69.1) landed at the low edge of this CPU's
+documented spread, so the figure was characterised with a 5-rep TX-only
+sweep (gateway → host reverse, 30 s, OTBR stopped):
+
+| Driver | runs (Mbit/s)              | median | range      |
+|--------|---------------------------|-------:|-----------:|
+| v2.14  | 69.1 69.9 70.3 71.3 72.3  |  70.3  | 69.1–72.3  |
+
+Median 70.3, range 69.1–72.3 — squarely inside the documented run-to-run
+spread (69.3–72.8 across sessions with no driver change). The suite's 69.1
+single-run was the low edge, not a regression: the #99 recovery fix is
+invisible to steady-state throughput and the reclaim-timer arm is neutralised
+by the `timer_pending()` guard.
+
+### rc0 vs rc1 measured A/B — the guard's real-world effect (2026-06-17)
+
+The guard's effect was characterised directly by benching the two shipped
+release images head-to-head on the same box and session (5-rep TX, OTBR
+stopped, direct Cat-6; the two are distinguished by `uname` — `…-rc0` vs
+`…-rc1`):
+
+| Image                  | runs (Mbit/s)              | median | range      |
+|------------------------|----------------------------|-------:|-----------:|
+| v4.0.0-rc0 (unguarded) | 67.0 67.1 67.6 67.9 68.7   |  67.6  | 67.0–68.7  |
+| v4.0.0-rc1 (guarded)   | 68.0 69.0 69.0 69.2 69.6   |  69.0  | 68.0–69.6  |
+
+rc0 reproduces its documented ≈67.6 to the decimal — the unguarded per-packet
+`mod_timer()` regression is real and present in the shipped rc0 image. The
+guard recovers **+1.4 Mbit/s** (rc0 67.6 → rc1 69.0), confirming it works: the
+medians are cleanly separated, though the tails overlap (68.0–68.7) because the
+benefit is small. The gain was smaller this session than the +3.2 originally
+documented (rc0 67.6 → rc1 70.8): rc1 here sat at the low edge of its 69.1–72.3
+band while rc0 matched its baseline, so the guard's *measured* benefit varies
+run-to-run — it depends on how often the TX queue stops and re-arms under the
+offered load — but it is always ≥ 0 and rc1 ≥ rc0.
+
+This is a 6.18-internal effect. For the *kernel-version* TX gain stacked on top
+of it (6.18 → 7.1, driver held constant at v2.14), see the A/B in the 7.1
+line's `PERFORMANCE.md` (`files-7.1/…`, branch `exp/kernel-7.1`): 7.1 ≈ 72.1, a
+further ~+3 over rc1. Same-box hierarchy: rc0 67.6 → (guard) rc1 69.0 →
+(kernel) 7.1 72.1.
+
 ## TX path per-packet decomposition (driver v2.4 + Track A, probe-on)
 
 Captured during the v3.4.1 perf session with the optional `ktime_get()`

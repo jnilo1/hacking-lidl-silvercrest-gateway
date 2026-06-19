@@ -18,8 +18,8 @@ case "$1" in
         if [ "$CURRENT_HASH" = "$DEFAULT_HASH" ]; then
             # Default password still in use - warn user
             echo ""
-            echo "⚠️  WARNING: Default root password (e.g. root) is still in use!"
-            echo "🔐 Please change it now with: passwd"
+            echo "  checkpasswd: WARNING default root password still in use"
+            echo "  checkpasswd: change it now with: passwd"
             echo ""
         else
             # Password has been changed - remove this script
