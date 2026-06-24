@@ -61,6 +61,7 @@ int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct net_device *dev);
 
 int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring);
+u32 rtl8196e_ring_rx_idx(struct rtl8196e_ring *ring);
 
 void rtl8196e_ring_kick_tx(struct rtl8196e_ring *ring, bool was_empty);
 void rtl8196e_ring_kick_drain(struct rtl8196e_ring *ring);

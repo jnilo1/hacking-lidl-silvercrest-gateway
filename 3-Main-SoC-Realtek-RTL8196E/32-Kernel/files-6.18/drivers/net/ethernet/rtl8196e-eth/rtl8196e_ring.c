@@ -688,6 +688,20 @@ __iram int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 }
 
 /*
+ * Return the RX ring cursor (rx_idx). Read-only accessor for the panic-time
+ * #99 snapshot (rtl8196e_eth_panic_snapshot): rx_idx is private to this
+ * module, and pairing it with the live CPUIISR shows where the poll cursor
+ * sat relative to the switch's RX pointer when the storm was captured.
+ */
+u32 rtl8196e_ring_rx_idx(struct rtl8196e_ring *ring)
+{
+	if (!ring)
+		return 0;
+
+	return ring->rx_idx;
+}
+
+/*
  * TX kick coalescing.  Pulse TXFD on CPUICR at most once per
  * @rtl8196e_kick_threshold submits, except on cold-start (was_empty),
  * which always kicks immediately so the ASIC TX DMA engine wakes up.

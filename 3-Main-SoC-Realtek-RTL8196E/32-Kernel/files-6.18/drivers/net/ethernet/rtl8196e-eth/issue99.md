@@ -1,8 +1,10 @@
 # Issue #99 — RTL8196E soft-lockup: root mechanism and proposed fix
 
-**Status:** root mechanism identified and code-verified; fix proposed (RC1), not yet
-bench-validated.
-**Date:** 2026-06-19.
+**Status:** root mechanism identified and code-verified; RC1 shipped (v4.0.0-rc2) and
+**recurred in the field after ~4.3 days** — see §12. Detector left unchanged; the watchdog
+panic record extended to **v5** to capture the eth recovery state so the next field crash
+disambiguates the two surviving hypotheses (§12) before any further code change.
+**Date:** 2026-06-19, updated 2026-06-24.
 **Audience:** senior kernel/driver reviewer. Everything below cites `file:line` against the
 in-tree driver (working tree = driver **v2.14**) and notes equivalence to the field build
 **v2.7** (shipped as `v3.8.5`). All line numbers are from this driver directory.
@@ -325,3 +327,61 @@ implementation consequences:
    check à la `rtl_check_swCore_tx_hang` is a cheap belt-and-suspenders that also covers a
    stuck-TX variant. Recommend implementing the RX-runout detector (targets #99 head-on) and
    optionally porting the vendor's periodic check as defence in depth.
+
+---
+
+## 12. Field recurrence on v4.0.0-rc2 — RC1 did not hold (2026-06-24)
+
+RC1 (driver v2.15: poll-side RX-runout resync + 1 s `swcore_check` watchdog) shipped in
+v4.0.0-rc2. A soaker (**frtz13**) hit #99 again after **~4.3 days** uptime
+(issue #99 comment `4789134965`). The panic record is unambiguously the rc2 build —
+`rtl8196e_swcore_check_timer_fn` in the pending-timers list (a v2.15-only symbol),
+`napi=[rtl8196e_poll+0x0/0x1c8]` (the enlarged post-fix poll), wdt record v4 — and the
+signature is the original #99 verbatim (`pc=arch_local_irq_enable / ra=handle_softirqs`,
+`softirq=0xa[TIMER|NET_RX]`, `napi=rtl8196e_poll`, ~60 s lockup).
+
+**RC1 did not prevent the lockup. Two mutually exclusive explanations remain, with
+opposite fixes — and the existing record cannot distinguish them:**
+
+- **Hyp. A — the detector never fired.** Both the poll detector (`main.c`, the
+  `work_done==0 && PKTHDR_DESC_RUNOUT` gate, threshold 3 *consecutive*) and the
+  `swcore_check` watchdog gate exclusively on `PKTHDR_DESC_RUNOUT`. A storm that yields
+  ≥1 packet within any window of 3 polls (resetting `rx_runout_zero`), or that presents
+  as an `RX_DONE` storm rather than `PKTHDR_DESC_RUNOUT`, never trips the gate. → fix =
+  widen the gate.
+- **Hyp. B — the resync fired and the storm continued.** `rtl8196e_hw_ring_resync()` is
+  structurally complete (full `hw_stop`/`hw_start` TRXRDY cycle + `rx_idx=0` in lockstep),
+  but if the TRXRDY rewind does not actually break the switch's fixed point in the field,
+  the loop just becomes storm→resync→storm. → fix = strengthen the resync toward a full
+  `reinitSwitchCore` (§11).
+
+The decisive datum — `rx_runout_resync` / `rx_runout_kick` at panic — lives in RAM and is
+lost on reboot; the v4 panic record never captured it. Guessing here risks a *second*
+false fix on a public issue.
+
+### Instrument first (do not touch the detector)
+
+To answer A vs B from the field instead of by guesswork, the watchdog panic record was
+extended to **v5** to carry an eth #99 snapshot, pulled at panic via the `__weak`
+`rtl8196e_eth_panic_snapshot()` (`drivers/net/ethernet/rtl8196e-eth/rtl8196e_main.c`,
+contract in `include/linux/rtl8196e_eth_panic.h`):
+
+```
+eth=[up=1 resync=N kick=N zero=N seen=N iisr=0x.. iimr=0x.. rxidx=N]
+```
+
+Read on the boot after a #99 lockup (and persisted by `S26panicrec`):
+
+- `resync > 0`  ⇒ the poll resync fired and the box stormed anyway → **Hyp. B**
+  (resync insufficient); strengthen the resync.
+- `resync == 0` ⇒ the detector never fired → **Hyp. A**; `iisr` then names which
+  interrupt bit was actually storming (RUNOUT vs RX_DONE), telling us exactly how to
+  widen the gate. `zero`/`seen` = 1 or 2 (below the threshold of 3) directly shows the
+  consecutive-counter being reset mid-storm.
+
+This is diagnosis plumbing only — **no datapath/detector behavior change** (driver bumped
+to v2.16, wdt to v1.8 / record v5). Validated on the bench via a synthetic
+`sysrq`-triggered panic: the eth fields are captured and self-consistent (an idle-box
+capture read `iisr=0x3206` with no RUNOUT bits, `iimr=0x807e01f8` decoding to exactly
+`RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL` — the live driver mask). The
+real fix waits for one decisive field crash.

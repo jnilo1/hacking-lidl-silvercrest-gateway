@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Audit date** | 2026-06-12 (updated 2026-06-19 for driver 2.15 / ETHDRV-015) |
-| **Driver version** | 2.15 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) |
-| **Active release** | v3.10.0 GA (kernel `6.18.35-rtl8196e-v3.10.0`); v2.15 on the `v4.0.0-rc2` candidate, v2.8 on `v3.8.6` (both carry the #99 ETHDRV-015 engine fix) |
+| **Audit date** | 2026-06-12 (updated 2026-06-24: ETHDRV-015 recurred on rc2 → v5 panic-record instrumentation, driver 2.16) |
+| **Driver version** | 2.16 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) — v2.16 = v2.15 + diagnostic-only `rtl8196e_eth_panic_snapshot()`, no datapath change |
+| **Active release** | v3.10.0 GA (kernel `6.18.35-rtl8196e-v3.10.0`); v4.0.0-rc2 candidate carries the v2.15 ETHDRV-015 engine fix — which **recurred in the field** (§ETHDRV-015), now instrumented (v2.16) to diagnose |
 | **Audited artifacts** | `rtl8196e_main.c` (923 l), `rtl8196e_ring.c` (920 l), `rtl8196e_hw.c` (808 l), `rtl8196e_dt.c` (126 l), `rtl8196e_{desc,regs,hw,ring,dt}.h`, `Kconfig`, `Makefile`, `rtl819x.dtsi` / `rtl8196e.dts` ethernet nodes, `config-6.18-realtek.txt` |
 
 This document **supersedes and replaces** the cumulative audit log of
@@ -376,6 +376,21 @@ both feeding the shared full resync `rtl8196e_hw_ring_resync()` (the
 Two ethtool counters expose firing: `rtl8196e_rx_runout_resync` (resyncs done)
 and `rtl8196e_rx_runout_kick` (periodic kicks); both stay 0 unless a storm hit.
 ETHDRV-013 and ETHDRV-014 are retained as one-fewer-door defence in depth.
+
+**Field recurrence (2026-06-24) — RC1 did not hold.** A soaker (frtz13) on
+`v4.0.0-rc2` (driver v2.15) hit #99 again after ~4.3 days; the panic record is
+the rc2 build (`rtl8196e_swcore_check_timer_fn` present, `rtl8196e_poll+0x0/0x1c8`)
+with the original signature. Two surviving hypotheses with opposite fixes —
+(A) the detector never fired (storm yields ≥1 packet within 3 polls, or is an
+`RX_DONE` storm not a `PKTHDR_DESC_RUNOUT` one → widen the gate), or (B) the
+resync fired and the storm continued (TRXRDY rewind insufficient → full
+`reinitSwitchCore`). The v2.15 counters that would decide this reset on reboot.
+**Resolution deferred; instrument first:** the watchdog panic record was
+extended to **v5** to capture an eth #99 snapshot at panic
+(`rtl8196e_eth_panic_snapshot()` in `rtl8196e_main.c`, contract in
+`include/linux/rtl8196e_eth_panic.h`; driver bumped to v2.16, diagnostic-only,
+no datapath change) — so the next field crash reports `resync`/`kick`/`zero`/
+`seen` + live `CPUIISR`/`CPUIIMR` and answers A vs B. Detail in `issue99.md` §12.
 
 ---
 

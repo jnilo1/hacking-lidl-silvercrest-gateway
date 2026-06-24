@@ -17,6 +17,7 @@
 #include <linux/errno.h>
 #include <linux/ethtool.h>
 #include <linux/mfd/syscon.h>
+#include <linux/rtl8196e_eth_panic.h>
 #include <asm/cacheflush.h>
 #include <asm/mach-realtek/imem.h>
 #include "rtl8196e_dt.h"
@@ -25,7 +26,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.15"
+#define RTL8196E_DRV_VERSION "2.16"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -94,6 +95,43 @@ struct rtl8196e_priv {
 	u32 l2_check_fail;
 	int l2_check_last;
 };
+
+/*
+ * Single-instance back-pointer for the panic-time #99 snapshot. There is one
+ * eth port on this SoC; set after register_netdev() succeeds in probe and
+ * cleared in remove. Read unlocked from the watchdog panic notifier
+ * (rtl8196e_eth_panic_snapshot) — safe on this UP platform: a plain pointer
+ * load of a value that only the single probe/remove path ever writes.
+ */
+static struct rtl8196e_priv *rtl8196e_panic_priv;
+
+/*
+ * Panic-time snapshot of the #99 RUNOUT-storm recovery state (ETHDRV-015).
+ * Called from the rtl819x watchdog panic notifier to populate record v5, so
+ * the boot after a soft-lockup shows whether the poll-side resync fired
+ * (resync > 0) or never did (resync == 0), with the live CPUIISR naming the
+ * interrupt source that was actually storming. Panic context: no locks, only
+ * plain reads and the same MMIO loads rtl8196e_poll() already performs.
+ * Declared __weak in the shared header so the watchdog links without us.
+ */
+bool rtl8196e_eth_panic_snapshot(struct rtl8196e_eth_panic *out)
+{
+	struct rtl8196e_priv *priv = rtl8196e_panic_priv;
+
+	if (!priv || !priv->ndev || !netif_running(priv->ndev) || !priv->ring)
+		return false;
+
+	out->up     = 1;
+	out->resync = priv->rx_runout_resync;
+	out->kick   = priv->rx_runout_kick;
+	out->zero   = priv->rx_runout_zero;
+	out->seen   = priv->swcore_runout_seen;
+	out->iisr   = rtl8196e_readl(CPUIISR);
+	out->iimr   = rtl8196e_readl(CPUIIMR);
+	out->rx_idx = rtl8196e_ring_rx_idx(priv->ring);
+
+	return true;
+}
 
 /* Return the port number (0-5) for the lowest set bit in mask, or -EINVAL. */
 static int rtl8196e_port_from_mask(u16 mask)
@@ -1024,6 +1062,9 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_irq;
 
+	/* Publish for the watchdog panic-record #99 snapshot (record v5). */
+	rtl8196e_panic_priv = priv;
+
 	dev_info(&pdev->dev,
 		 "v" RTL8196E_DRV_VERSION " (J. Nilo) - port:%d, vid:%u, mtu:%u\n",
 		 priv->phy_port, priv->vlan_id, ndev->mtu);
@@ -1049,6 +1090,9 @@ static void rtl8196e_remove(struct platform_device *pdev)
 		return;
 
 	priv = netdev_priv(ndev);
+
+	/* Stop the panic notifier from dereferencing a freed instance. */
+	rtl8196e_panic_priv = NULL;
 
 	unregister_netdev(ndev);
 

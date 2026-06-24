@@ -32,6 +32,7 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
+#include <linux/rtl8196e_eth_panic.h>
 #include <linux/smp.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
@@ -42,7 +43,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.7"
+#define DRV_VERSION		"1.8"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -137,8 +138,8 @@
  * growing DOWN from page_top: HOLD magic (page_top-4), TFTP-IP magic
  * (page_top-8) and packed IPv4 (page_top-12) — the v3.7.0
  * download-mode-IP handoff. This record uses the BASE of the page,
- * growing UP (ends at base+0x144), leaving a ~3.8 KB gap so the two never
- * collide even if boothold gains more fields. The page is no-map, so the
+ * growing UP (ends at base+0x1AF as of v5), leaving a ~3.6 KB gap so the two
+ * never collide even if boothold gains more fields. The page is no-map, so the
  * kernel never treats it as general RAM — the record is not clobbered
  * between the panic write and the next-boot read. A panic reboot does not
  * set HOLD, so the bootloader boots straight through without touching the
@@ -228,6 +229,29 @@
  *                            the storm. softnet_data is a normal per-CPU export,
  *                            so unlike the timer collectors this needs no kernel
  *                            patch. Resolved via %pS at next boot.
+ *   +0x190 u32   eth_flags   1 if the eth #99 snapshot below is valid (the
+ *                            interface was up at panic), else 0. v5.
+ *   +0x194 u32   eth_resync  rtl8196e rx_runout_resync at panic — poll-side
+ *                            full resyncs performed. The decisive #99 datum:
+ *                            >0 means the rc2 poll detector fired and the storm
+ *                            continued anyway (resync insufficient); ==0 means
+ *                            it never fired (the detection gate is wrong).
+ *   +0x198 u32   eth_kick    rx_runout_kick — periodic swcore-watchdog NAPI
+ *                            kicks (the 1 s belt-and-suspenders path).
+ *   +0x19C u32   eth_zero    rx_runout_zero — in-progress consecutive zero-work
+ *                            polls under RUNOUT at panic. 1 or 2 (never the
+ *                            resync threshold of 3) directly shows the
+ *                            consecutive-zero gate being reset mid-storm.
+ *   +0x1A0 u32   eth_seen    swcore_runout_seen — in-progress consecutive
+ *                            periodic checks with RUNOUT asserted at panic.
+ *   +0x1A4 u32   eth_iisr    live CPUIISR at panic — *which* eth interrupt
+ *                            source is asserted (PKTHDR_DESC_RUNOUT vs RX_DONE
+ *                            vs MBUF runout). Names the storming bit when
+ *                            eth_resync==0. Raw hex; interpreted off-box.
+ *   +0x1A8 u32   eth_iimr    live CPUIIMR at panic — which sources are unmasked
+ *                            (iisr & iimr = what is actually firing).
+ *   +0x1AC u32   eth_rxidx   rtl8196e RX ring cursor at panic — where the poll
+ *                            sat relative to the switch RX pointer.
  *
  * The candidate lists are cold-path only (read in the panic notifier), so
  * normal operation pays nothing — unlike the storm-2/3 hot-path rings that
@@ -243,10 +267,17 @@
  *   v4 (firmware v3.8.4)  + per-softirq run counts@+0x144, total hardirq
  *                           count@+0x16C, NAPI poll-list fns@+0x170/+0x174 —
  *                           names the NET_RX side the timer lists cannot
+ *   v5 (firmware v4.0.0)  + rtl8196e eth #99 snapshot@+0x190..+0x1AC
+ *                           (resync/kick/zero/seen counters + live CPUIISR/
+ *                           CPUIIMR + rx_idx), pulled via the __weak
+ *                           rtl8196e_eth_panic_snapshot() — disambiguates
+ *                           "rc2 resync fired but failed" from "never fired"
+ *                           after the field recurrence of #99 on v4.0.0-rc2.
  */
 #define WDT_REC_SIZE		0x200U
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
-#define WDT_REC_VERSION		4U
+#define WDT_REC_VERSION		5U
+#define WDT_REC_VERSION_V4	4U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V3	3U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V2	2U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_OFF_MAGIC	0x00
@@ -269,7 +300,16 @@
 #define WDT_REC_OFF_SIRQCNT	0x144		/* WDT_REC_NR_SIRQ u32 (..0x16B) */
 #define WDT_REC_OFF_HARDIRQ	0x16C		/* u32 total hardirq count */
 #define WDT_REC_OFF_NNAPI	0x170		/* u32 NAPI poll-fn count */
-#define WDT_REC_OFF_NAPIFNS	0x174		/* WDT_REC_NR_FNS u32 (..0x18B, clear of boothold@0xFF4) */
+#define WDT_REC_OFF_NAPIFNS	0x174		/* WDT_REC_NR_FNS u32 (..0x18B) */
+/* v5: rtl8196e eth #99 snapshot (..0x1AF, clear of boothold@0xFF4) */
+#define WDT_REC_OFF_ETH_FLAGS	0x190		/* u32 1 if snapshot valid (eth up) */
+#define WDT_REC_OFF_ETH_RESYNC	0x194		/* u32 rx_runout_resync */
+#define WDT_REC_OFF_ETH_KICK	0x198		/* u32 rx_runout_kick */
+#define WDT_REC_OFF_ETH_ZERO	0x19C		/* u32 rx_runout_zero (in-progress) */
+#define WDT_REC_OFF_ETH_SEEN	0x1A0		/* u32 swcore_runout_seen (in-progress) */
+#define WDT_REC_OFF_ETH_IISR	0x1A4		/* u32 live CPUIISR */
+#define WDT_REC_OFF_ETH_IIMR	0x1A8		/* u32 live CPUIIMR */
+#define WDT_REC_OFF_ETH_RXIDX	0x1AC		/* u32 RX ring cursor */
 #define WDT_REC_STAT_UNSET	0xFFFFFFFFU	/* sentinel: stats walk did not complete */
 
 static_assert(NR_SOFTIRQS <= WDT_REC_NR_SIRQ,
@@ -440,6 +480,16 @@ static int rtl819x_wdt_collect_napi_fns(void **out, int max)
  * culprit function pointer is stored raw and only resolved to a symbol on
  * the next boot, so no kallsyms lookup happens in this atomic path.
  */
+/*
+ * Weak default for the eth #99 snapshot (record v5). The rtl8196e-eth driver
+ * provides the strong override; this returns false when that driver is not
+ * built in, so the notifier records eth_flags=0 instead of failing to link.
+ */
+__weak bool rtl8196e_eth_panic_snapshot(struct rtl8196e_eth_panic *out)
+{
+	return false;
+}
+
 static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 				    unsigned long action, void *data)
 {
@@ -529,6 +579,31 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 			       wdt->rec + WDT_REC_OFF_HARDIRQ);
 		}
 		writel(0, wdt->rec + WDT_REC_OFF_NNAPI);	/* until the walk below */
+		/*
+		 * v5: rtl8196e eth #99 snapshot. Plain counter reads + two MMIO
+		 * loads (the same the NAPI poll does) — no list walk, no locks —
+		 * so it belongs in the committed core record before magic. The
+		 * producer is __weak: a kernel without the eth driver leaves the
+		 * symbol NULL and we just record eth_flags=0. resync>0 here means
+		 * the rc2 poll resync fired and the box stormed anyway; resync==0
+		 * means it never fired, and eth_iisr names the storming source.
+		 */
+		{
+			struct rtl8196e_eth_panic eth;
+
+			if (rtl8196e_eth_panic_snapshot(&eth)) {
+				writel(eth.up,     wdt->rec + WDT_REC_OFF_ETH_FLAGS);
+				writel(eth.resync, wdt->rec + WDT_REC_OFF_ETH_RESYNC);
+				writel(eth.kick,   wdt->rec + WDT_REC_OFF_ETH_KICK);
+				writel(eth.zero,   wdt->rec + WDT_REC_OFF_ETH_ZERO);
+				writel(eth.seen,   wdt->rec + WDT_REC_OFF_ETH_SEEN);
+				writel(eth.iisr,   wdt->rec + WDT_REC_OFF_ETH_IISR);
+				writel(eth.iimr,   wdt->rec + WDT_REC_OFF_ETH_IIMR);
+				writel(eth.rx_idx, wdt->rec + WDT_REC_OFF_ETH_RXIDX);
+			} else {
+				writel(0, wdt->rec + WDT_REC_OFF_ETH_FLAGS);
+			}
+		}
 		memset_io(wdt->rec + WDT_REC_OFF_REASON, 0, WDT_REC_REASON_MAX);
 		memcpy_toio(wdt->rec + WDT_REC_OFF_REASON, reason, n);
 		wmb();
@@ -679,6 +754,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 
 	if (ver >= WDT_REC_VERSION_V2 && ver <= WDT_REC_VERSION) {
 		char v4stat[420];
+		char v5stat[128];
 
 		rtl819x_wdt_softirq_decode(sirqmask, sirq, sizeof(sirq));
 		rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NTFN, WDT_REC_OFF_TFNS,
@@ -695,7 +771,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 					  " overdue=%uj pending=%u", lag, npend);
 		}
 		v4stat[0] = '\0';
-		if (ver >= WDT_REC_VERSION) {	/* v4: NET_RX-side counters */
+		if (ver >= WDT_REC_VERSION_V4) {	/* v4: NET_RX-side counters */
 			char sc[160], napi[200];
 			size_t p = 0;
 			u32 s;
@@ -719,10 +795,32 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 				  " softirqs=[%s] hardirqs=%u napi=[%s]", sc,
 				  readl(wdt->rec + WDT_REC_OFF_HARDIRQ), napi);
 		}
+		v5stat[0] = '\0';
+		if (ver >= WDT_REC_VERSION) {	/* v5: eth #99 snapshot */
+			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS))
+				scnprintf(v5stat, sizeof(v5stat),
+					  " eth=[up=1 resync=%u kick=%u zero=%u seen=%u iisr=0x%x iimr=0x%x rxidx=%u]",
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RESYNC),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_KICK),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_ZERO),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_SEEN),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_IISR),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_IIMR),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RXIDX));
+			else
+				scnprintf(v5stat, sizeof(v5stat), " eth=[down]");
+		}
+		/*
+		 * v5stat (the eth #99 snapshot) is placed right after the softirq
+		 * mask — ahead of the long timers[]/hrtimers[]/softirqs[] blocks —
+		 * so that on a fully-populated #99 record approaching LOG_LINE_MAX
+		 * (WDT-013, §3.4) the decisive eth fields survive even if the tail
+		 * (reason, then the candidate lists) is truncated.
+		 */
 		dev_info(dev,
-			 "previous boot ended in panic: uptime=%us pc=%pS ra=%pS running=%pS softirq=0x%x[%s] timers=[%s] hrtimers=[%s]%s%s reason=\"%s\"\n",
+			 "previous boot ended in panic: uptime=%us pc=%pS ra=%pS running=%pS softirq=0x%x[%s]%s timers=[%s] hrtimers=[%s]%s%s reason=\"%s\"\n",
 			 up, (void *)(uintptr_t)epc, (void *)(uintptr_t)ra,
-			 (void *)(uintptr_t)fna, sirqmask, sirq, tfns, hfns,
+			 (void *)(uintptr_t)fna, sirqmask, sirq, v5stat, tfns, hfns,
 			 wstat, v4stat, reason);
 	} else {
 		dev_info(dev, "previous boot ended in panic (unknown record v%u)\n",
