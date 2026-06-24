@@ -43,7 +43,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.8"
+#define DRV_VERSION		"1.9"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -138,7 +138,7 @@
  * growing DOWN from page_top: HOLD magic (page_top-4), TFTP-IP magic
  * (page_top-8) and packed IPv4 (page_top-12) — the v3.7.0
  * download-mode-IP handoff. This record uses the BASE of the page,
- * growing UP (ends at base+0x1AF as of v5), leaving a ~3.6 KB gap so the two
+ * growing UP (ends at base+0x1D3 as of v6), leaving a ~3.6 KB gap so the two
  * never collide even if boothold gains more fields. The page is no-map, so the
  * kernel never treats it as general RAM — the record is not clobbered
  * between the panic write and the next-boot read. A panic reboot does not
@@ -252,6 +252,20 @@
  *                            (iisr & iimr = what is actually firing).
  *   +0x1AC u32   eth_rxidx   rtl8196e RX ring cursor at panic — where the poll
  *                            sat relative to the switch RX pointer.
+ *   +0x1B0 u32   eth_rxdesc  rx_pkthdr_ring[rx_idx] at panic — OWNED bit set
+ *                            (SWCORE) proves the switch still owns the slot the
+ *                            poll is parked on = the §6 RX desync. (v6)
+ *   +0x1B4 u32   eth_txprod  TX producer index. (v6)
+ *   +0x1B8 u32   eth_txcons  TX consumer (next-to-reclaim) index. (v6)
+ *   +0x1BC u32   eth_txfree  free TX descriptor slots. (v6)
+ *   +0x1C0 u32   eth_txdesc  tx_ring[tx_cons] — OWNED across the stall means
+ *                            TX-done is stuck (the vendor SDK's hang condition,
+ *                            a stall class distinct from RX runout). (v6)
+ *   +0x1C4 u32   eth_cpuicr  live CPUICR — CPU-port RX/TX DMA enable. (v6)
+ *   +0x1C8 u32   eth_sirr    live SIRR — switch interface (TRXRDY). (v6)
+ *   +0x1CC u32   eth_rxpkts  dev rx_packets (low 32) — forward-progress gauge:
+ *                            unchanged across captures = nothing received. (v6)
+ *   +0x1D0 u32   eth_txpkts  dev tx_packets (low 32) — forward-progress gauge. (v6)
  *
  * The candidate lists are cold-path only (read in the panic notifier), so
  * normal operation pays nothing — unlike the storm-2/3 hot-path rings that
@@ -273,10 +287,16 @@
  *                           rtl8196e_eth_panic_snapshot() — disambiguates
  *                           "rc2 resync fired but failed" from "never fired"
  *                           after the field recurrence of #99 on v4.0.0-rc2.
+ *   v6 (firmware v4.0.0)  + switch-core/TX/ring-progress state@+0x1B0..+0x1D0
+ *                           (rx_desc@rx_idx, tx_prod/cons/free, tx_desc@tx_cons,
+ *                           CPUICR, SIRR, rx/tx_packets) — tells an RX-runout
+ *                           storm from a broader switch-core or TX-done stall
+ *                           (the vendor stuck-detector watched TX-done).
  */
 #define WDT_REC_SIZE		0x200U
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
-#define WDT_REC_VERSION		5U
+#define WDT_REC_VERSION		6U
+#define WDT_REC_VERSION_V5	5U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V4	4U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V3	3U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V2	2U	/* still decoded: one-boot leftover after upgrade */
@@ -310,6 +330,16 @@
 #define WDT_REC_OFF_ETH_IISR	0x1A4		/* u32 live CPUIISR */
 #define WDT_REC_OFF_ETH_IIMR	0x1A8		/* u32 live CPUIIMR */
 #define WDT_REC_OFF_ETH_RXIDX	0x1AC		/* u32 RX ring cursor */
+/* v6: switch-core / DMA / ring-progress state (..0x1D3, clear of boothold@0xFF4) */
+#define WDT_REC_OFF_ETH_RXDESC	0x1B0		/* u32 rx_pkthdr_ring[rx_idx] */
+#define WDT_REC_OFF_ETH_TXPROD	0x1B4		/* u32 TX producer index */
+#define WDT_REC_OFF_ETH_TXCONS	0x1B8		/* u32 TX consumer index */
+#define WDT_REC_OFF_ETH_TXFREE	0x1BC		/* u32 free TX slots */
+#define WDT_REC_OFF_ETH_TXDESC	0x1C0		/* u32 tx_ring[tx_cons] */
+#define WDT_REC_OFF_ETH_CPUICR	0x1C4		/* u32 live CPUICR */
+#define WDT_REC_OFF_ETH_SIRR	0x1C8		/* u32 live SIRR */
+#define WDT_REC_OFF_ETH_RXPKTS	0x1CC		/* u32 dev rx_packets (low 32) */
+#define WDT_REC_OFF_ETH_TXPKTS	0x1D0		/* u32 dev tx_packets (low 32) */
 #define WDT_REC_STAT_UNSET	0xFFFFFFFFU	/* sentinel: stats walk did not complete */
 
 static_assert(NR_SOFTIRQS <= WDT_REC_NR_SIRQ,
@@ -600,6 +630,16 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 				writel(eth.iisr,   wdt->rec + WDT_REC_OFF_ETH_IISR);
 				writel(eth.iimr,   wdt->rec + WDT_REC_OFF_ETH_IIMR);
 				writel(eth.rx_idx, wdt->rec + WDT_REC_OFF_ETH_RXIDX);
+				/* v6: switch-core / DMA / ring-progress state */
+				writel(eth.rx_desc,    wdt->rec + WDT_REC_OFF_ETH_RXDESC);
+				writel(eth.tx_prod,    wdt->rec + WDT_REC_OFF_ETH_TXPROD);
+				writel(eth.tx_cons,    wdt->rec + WDT_REC_OFF_ETH_TXCONS);
+				writel(eth.tx_free,    wdt->rec + WDT_REC_OFF_ETH_TXFREE);
+				writel(eth.tx_desc,    wdt->rec + WDT_REC_OFF_ETH_TXDESC);
+				writel(eth.cpuicr,     wdt->rec + WDT_REC_OFF_ETH_CPUICR);
+				writel(eth.sirr,       wdt->rec + WDT_REC_OFF_ETH_SIRR);
+				writel(eth.rx_packets, wdt->rec + WDT_REC_OFF_ETH_RXPKTS);
+				writel(eth.tx_packets, wdt->rec + WDT_REC_OFF_ETH_TXPKTS);
 			} else {
 				writel(0, wdt->rec + WDT_REC_OFF_ETH_FLAGS);
 			}
@@ -754,7 +794,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 
 	if (ver >= WDT_REC_VERSION_V2 && ver <= WDT_REC_VERSION) {
 		char v4stat[420];
-		char v5stat[128];
+		char v5stat[256];
 
 		rtl819x_wdt_softirq_decode(sirqmask, sirq, sizeof(sirq));
 		rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NTFN, WDT_REC_OFF_TFNS,
@@ -796,10 +836,10 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 				  readl(wdt->rec + WDT_REC_OFF_HARDIRQ), napi);
 		}
 		v5stat[0] = '\0';
-		if (ver >= WDT_REC_VERSION) {	/* v5: eth #99 snapshot */
-			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS))
-				scnprintf(v5stat, sizeof(v5stat),
-					  " eth=[up=1 resync=%u kick=%u zero=%u seen=%u iisr=0x%x iimr=0x%x rxidx=%u]",
+		if (ver >= WDT_REC_VERSION_V5) {	/* eth #99 snapshot */
+			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS)) {
+				size_t p = scnprintf(v5stat, sizeof(v5stat),
+					  " eth=[up=1 resync=%u kick=%u zero=%u seen=%u iisr=0x%x iimr=0x%x rxidx=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RESYNC),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_KICK),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_ZERO),
@@ -807,8 +847,22 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 					  readl(wdt->rec + WDT_REC_OFF_ETH_IISR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_IIMR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RXIDX));
-			else
+				if (ver >= WDT_REC_VERSION)	/* v6: switch-core/TX/ring state */
+					p += scnprintf(v5stat + p, sizeof(v5stat) - p,
+					  " rxdesc=0x%x txprod=%u txcons=%u txfree=%u txdesc=0x%x cpuicr=0x%x sirr=0x%x rxpkts=%u txpkts=%u",
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RXDESC),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_TXPROD),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_TXCONS),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_TXFREE),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_TXDESC),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_CPUICR),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_SIRR),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RXPKTS),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_TXPKTS));
+				scnprintf(v5stat + p, sizeof(v5stat) - p, "]");
+			} else {
 				scnprintf(v5stat, sizeof(v5stat), " eth=[down]");
+			}
 		}
 		/*
 		 * v5stat (the eth #99 snapshot) is placed right after the softirq

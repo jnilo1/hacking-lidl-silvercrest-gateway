@@ -2,8 +2,8 @@
 
 | | |
 |---|---|
-| **Audit date** | 2026-06-12 (updated 2026-06-24: ETHDRV-015 recurred on rc2 → v5 panic-record instrumentation, driver 2.16) |
-| **Driver version** | 2.16 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) — v2.16 = v2.15 + diagnostic-only `rtl8196e_eth_panic_snapshot()`, no datapath change |
+| **Audit date** | 2026-06-12 (updated 2026-06-24: ETHDRV-015 recurred on rc2 → v5/v6 panic-record instrumentation, driver 2.17) |
+| **Driver version** | 2.17 (`RTL8196E_DRV_VERSION` in `rtl8196e_main.c`) — v2.16/v2.17 = v2.15 + diagnostic-only `rtl8196e_eth_panic_snapshot()` (v6 broadens the snapshot), no datapath change |
 | **Active release** | v3.10.0 GA (kernel `6.18.35-rtl8196e-v3.10.0`); v4.0.0-rc2 candidate carries the v2.15 ETHDRV-015 engine fix — which **recurred in the field** (§ETHDRV-015), now instrumented (v2.16) to diagnose |
 | **Audited artifacts** | `rtl8196e_main.c` (923 l), `rtl8196e_ring.c` (920 l), `rtl8196e_hw.c` (808 l), `rtl8196e_dt.c` (126 l), `rtl8196e_{desc,regs,hw,ring,dt}.h`, `Kconfig`, `Makefile`, `rtl819x.dtsi` / `rtl8196e.dts` ethernet nodes, `config-6.18-realtek.txt` |
 
@@ -386,11 +386,14 @@ with the original signature. Two surviving hypotheses with opposite fixes —
 resync fired and the storm continued (TRXRDY rewind insufficient → full
 `reinitSwitchCore`). The v2.15 counters that would decide this reset on reboot.
 **Resolution deferred; instrument first:** the watchdog panic record was
-extended to **v5** to capture an eth #99 snapshot at panic
-(`rtl8196e_eth_panic_snapshot()` in `rtl8196e_main.c`, contract in
-`include/linux/rtl8196e_eth_panic.h`; driver bumped to v2.16, diagnostic-only,
-no datapath change) — so the next field crash reports `resync`/`kick`/`zero`/
-`seen` + live `CPUIISR`/`CPUIIMR` and answers A vs B. Detail in `issue99.md` §12.
+extended to capture an eth #99 snapshot at panic (`rtl8196e_eth_panic_snapshot()`
+in `rtl8196e_main.c`, contract in `include/linux/rtl8196e_eth_panic.h`;
+diagnostic-only, no datapath change). **v5** records `resync`/`kick`/`zero`/`seen`
++ live `CPUIISR`/`CPUIIMR` + `rx_idx` (answers A vs B); **v6** adds switch-core /
+TX / ring-progress state (`rxdesc`@rx_idx, `tx_prod`/`cons`/`free`, `txdesc`@tx_cons,
+`CPUICR`, `SIRR`, `rx`/`tx_packets`) to also catch a broader switch-core or TX-done
+stall — the vendor stuck-detector watched TX-done, not only RX runout. Driver v2.17,
+wdt v1.9 / record v6. Detail in `issue99.md` §12.
 
 ---
 

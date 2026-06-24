@@ -26,7 +26,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.16"
+#define RTL8196E_DRV_VERSION "2.17"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -128,7 +128,15 @@ bool rtl8196e_eth_panic_snapshot(struct rtl8196e_eth_panic *out)
 	out->seen   = priv->swcore_runout_seen;
 	out->iisr   = rtl8196e_readl(CPUIISR);
 	out->iimr   = rtl8196e_readl(CPUIIMR);
-	out->rx_idx = rtl8196e_ring_rx_idx(priv->ring);
+	/* v6: switch-core / DMA state and ring progress, to tell an RX-runout
+	 * storm (Hyp. A/B) from a broader switch-core or TX-done stall. */
+	out->cpuicr = rtl8196e_readl(CPUICR);
+	out->sirr   = rtl8196e_readl(SIRR);
+	out->rx_packets = (u32)priv->ndev->stats.rx_packets;
+	out->tx_packets = (u32)priv->ndev->stats.tx_packets;
+	rtl8196e_ring_panic_snapshot(priv->ring, &out->rx_idx, &out->rx_desc,
+				     &out->tx_prod, &out->tx_cons,
+				     &out->tx_free, &out->tx_desc);
 
 	return true;
 }

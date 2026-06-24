@@ -688,17 +688,35 @@ __iram int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 }
 
 /*
- * Return the RX ring cursor (rx_idx). Read-only accessor for the panic-time
- * #99 snapshot (rtl8196e_eth_panic_snapshot): rx_idx is private to this
- * module, and pairing it with the live CPUIISR shows where the poll cursor
- * sat relative to the switch's RX pointer when the storm was captured.
+ * Read-only ring snapshot for the panic-time #99 capture
+ * (rtl8196e_eth_panic_snapshot, watchdog record v6). The ring internals are
+ * private to this module; this hands the watchdog the cursors and the two
+ * descriptor words that show whether HW handed buffers back:
+ *   rx_desc = rx_pkthdr_ring[rx_idx] — if OWNED (SWCORE) the switch still owns
+ *             the slot the poll is parked on = the §6 RX desync.
+ *   tx_desc = tx_ring[tx_cons]      — if OWNED across the stall, TX-done is
+ *             stuck (the vendor SDK's hang condition).
+ * Reads are plain loads of uncached KSEG1 ring memory — panic-safe, no locks,
+ * no cache ops, coherent with HW.
  */
-u32 rtl8196e_ring_rx_idx(struct rtl8196e_ring *ring)
+void rtl8196e_ring_panic_snapshot(struct rtl8196e_ring *ring,
+				  u32 *rx_idx, u32 *rx_desc,
+				  u32 *tx_prod, u32 *tx_cons,
+				  u32 *tx_free, u32 *tx_desc)
 {
-	if (!ring)
-		return 0;
+	if (!ring) {
+		*rx_idx = *rx_desc = *tx_prod = *tx_cons = *tx_free = *tx_desc = 0;
+		return;
+	}
 
-	return ring->rx_idx;
+	*rx_idx  = ring->rx_idx;
+	*rx_desc = (ring->rx_pkthdr_ring && ring->rx_idx < ring->rx_cnt)
+			? ring->rx_pkthdr_ring[ring->rx_idx] : 0;
+	*tx_prod = ring->tx_prod;
+	*tx_cons = ring->tx_cons;
+	*tx_free = (u32)rtl8196e_ring_tx_free_count(ring);
+	*tx_desc = (ring->tx_ring && ring->tx_cons < ring->tx_cnt)
+			? ring->tx_ring[ring->tx_cons] : 0;
 }
 
 /*

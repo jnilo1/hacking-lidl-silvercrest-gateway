@@ -27,6 +27,7 @@
 #include <linux/types.h>
 
 struct rtl8196e_eth_panic {
+	/* v5 fields */
 	u32 up;		/* 1 if the interface was running at panic, else 0 */
 	u32 resync;	/* rx_runout_resync   — poll-side full resyncs performed */
 	u32 kick;	/* rx_runout_kick     — swcore-watchdog NAPI kicks */
@@ -35,6 +36,20 @@ struct rtl8196e_eth_panic {
 	u32 iisr;	/* live CPUIISR at panic (which IRQ source is asserted) */
 	u32 iimr;	/* live CPUIIMR at panic (which sources are unmasked) */
 	u32 rx_idx;	/* driver RX ring cursor */
+	/*
+	 * v6 fields — switch-core / DMA / ring-progress state, to distinguish an
+	 * RX-runout storm from a broader switch-core or TX-done stall (the vendor
+	 * SDK's stuck-detector watched TX-done, not only RX runout):
+	 */
+	u32 rx_desc;	/* rx_pkthdr_ring[rx_idx] — OWNED bit + pkthdr ptr (desync proof) */
+	u32 tx_prod;	/* TX producer index */
+	u32 tx_cons;	/* TX consumer (next-to-reclaim) index */
+	u32 tx_free;	/* free TX descriptor slots */
+	u32 tx_desc;	/* tx_ring[tx_cons] — OWNED bit + flags (TX-done stuck?) */
+	u32 cpuicr;	/* live CPUICR — CPU-port RX/TX DMA enable */
+	u32 sirr;	/* live SIRR — switch interface (TRXRDY) */
+	u32 rx_packets;	/* dev->stats.rx_packets (low 32) — forward-progress gauge */
+	u32 tx_packets;	/* dev->stats.tx_packets (low 32) — forward-progress gauge */
 };
 
 /*

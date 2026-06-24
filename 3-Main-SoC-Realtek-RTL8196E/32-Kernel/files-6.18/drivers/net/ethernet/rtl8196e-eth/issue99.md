@@ -2,9 +2,9 @@
 
 **Status:** root mechanism identified and code-verified; RC1 shipped (v4.0.0-rc2) and
 **recurred in the field after ~4.3 days** — see §12. Detector left unchanged; the watchdog
-panic record extended to **v5** to capture the eth recovery state so the next field crash
-disambiguates the two surviving hypotheses (§12) before any further code change.
-**Date:** 2026-06-19, updated 2026-06-24.
+panic record extended to **v6** to capture the eth recovery + switch-core/TX/ring state so
+the next field crash disambiguates the three surviving hypotheses (§12) before any further
+code change. **Date:** 2026-06-19, updated 2026-06-24.
 **Audience:** senior kernel/driver reviewer. Everything below cites `file:line` against the
 in-tree driver (working tree = driver **v2.14**) and notes equivalence to the field build
 **v2.7** (shipped as `v3.8.5`). All line numbers are from this driver directory.
@@ -361,13 +361,17 @@ false fix on a public issue.
 
 ### Instrument first (do not touch the detector)
 
-To answer A vs B from the field instead of by guesswork, the watchdog panic record was
-extended to **v5** to carry an eth #99 snapshot, pulled at panic via the `__weak`
-`rtl8196e_eth_panic_snapshot()` (`drivers/net/ethernet/rtl8196e-eth/rtl8196e_main.c`,
-contract in `include/linux/rtl8196e_eth_panic.h`):
+To answer A vs B from the field instead of by guesswork, the watchdog panic record carries
+an eth #99 snapshot, pulled at panic via the `__weak` `rtl8196e_eth_panic_snapshot()`
+(`drivers/net/ethernet/rtl8196e-eth/rtl8196e_main.c`, contract in
+`include/linux/rtl8196e_eth_panic.h`). Record **v5** captured the recovery counters; **v6**
+broadens it with switch-core / TX / ring-progress state, because the storm need not be a
+pure RX runout — the vendor SDK's stuck-detector watched **TX-done**, not only RX runout, so
+a broader switch-core or TX-done stall is a third possibility v5 alone could miss:
 
 ```
-eth=[up=1 resync=N kick=N zero=N seen=N iisr=0x.. iimr=0x.. rxidx=N]
+eth=[up=1 resync=N kick=N zero=N seen=N iisr=0x.. iimr=0x.. rxidx=N \
+     rxdesc=0x.. txprod=N txcons=N txfree=N txdesc=0x.. cpuicr=0x.. sirr=0x.. rxpkts=N txpkts=N]
 ```
 
 Read on the boot after a #99 lockup (and persisted by `S26panicrec`):
@@ -378,10 +382,15 @@ Read on the boot after a #99 lockup (and persisted by `S26panicrec`):
   interrupt bit was actually storming (RUNOUT vs RX_DONE), telling us exactly how to
   widen the gate. `zero`/`seen` = 1 or 2 (below the threshold of 3) directly shows the
   consecutive-counter being reset mid-storm.
+- v6 fields settle the **third** case: `rxdesc` OWNED (SWCORE) confirms the §6 RX desync;
+  `txdesc` OWNED with `txfree` low points at a stuck TX-done switch core instead;
+  `rxpkts`/`txpkts` unchanged across captures show no forward progress at all; `cpuicr`/
+  `sirr` show whether the DMA / switch engine was even enabled.
 
 This is diagnosis plumbing only — **no datapath/detector behavior change** (driver bumped
-to v2.16, wdt to v1.8 / record v5). Validated on the bench via a synthetic
-`sysrq`-triggered panic: the eth fields are captured and self-consistent (an idle-box
-capture read `iisr=0x3206` with no RUNOUT bits, `iimr=0x807e01f8` decoding to exactly
-`RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL` — the live driver mask). The
-real fix waits for one decisive field crash.
+to v2.17, wdt to v1.9 / record v6). The v5 pipeline was validated on the bench via a
+synthetic `sysrq`-triggered panic: the eth fields are captured and self-consistent (an
+idle-box capture read `iisr=0x3206` with no RUNOUT bits, `iimr=0x807e01f8` decoding to
+exactly `RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL` — the live driver
+mask); v6 adds more reads of the same kind through the same path. The real fix waits for
+one decisive field crash.

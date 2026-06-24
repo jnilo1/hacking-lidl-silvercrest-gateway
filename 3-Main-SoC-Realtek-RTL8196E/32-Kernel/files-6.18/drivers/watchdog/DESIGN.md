@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Document date** | 2026-06-11 (updated 2026-06-12 for v1.5/v1.6; 2026-06-24 for v1.8 / record v5) |
-| **Driver version** | 1.8 (`DRV_VERSION` in `rtl819x_wdt.c`) — v1.8 adds the record-v5 eth #99 snapshot |
-| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`); v1.7 on v4.0.0-rc2, v1.8 (record v5) unreleased |
+| **Document date** | 2026-06-11 (updated 2026-06-12 for v1.5/v1.6; 2026-06-24 for v1.9 / record v6) |
+| **Driver version** | 1.9 (`DRV_VERSION` in `rtl819x_wdt.c`) — v1.8 added the record-v5 eth #99 snapshot, v1.9 broadens it to record v6 (switch-core/TX/ring state) |
+| **Active release** | v3.10.0 (kernel `6.18.35-rtl8196e-v3.10.0`); v1.7 on v4.0.0-rc2, v1.9 (record v6) deployed in-place on the rc2 branch |
 
 Architecture reference for the driver. Operator-facing usage lives in
 `README.md`; security and code findings in `AUDIT.md` (both in this
@@ -211,7 +211,7 @@ is read with the NMI-safe `ktime_get_boot_fast_ns()` (v1.6): the
 ordinary seqcount accessors could spin forever if the panic interrupted
 a timekeeping writer (WDT-011, closed).
 
-### 3.3 Record content (v5) and what each field discriminates
+### 3.3 Record content (v6) and what each field discriminates
 
 | Field | Names |
 |---|---|
@@ -221,7 +221,8 @@ a timekeeping writer (WDT-011, closed).
 | `timers[]` / `hrtimers[]` | candidate callbacks queued near expiry — a self-rearming culprit recurs across captures; `delayed_work` wrappers are resolved one level deeper to the work function |
 | `overdue` / `pending` | wheel-lag discriminator: huge overdue = death spiral (wheel never catches up); ~0 = vector re-raised over a healthy wheel |
 | `softirqs[]` / `hardirqs` / `napi[]` (v4) | per-softirq run counts + total hardirq count (÷uptime = average rates) and the NAPI poll-list — names the NET_RX engine the timer lists cannot |
-| `eth=[…]` (v5) | rtl8196e #99 recovery state pulled at panic via the `__weak` `rtl8196e_eth_panic_snapshot()`: `resync`/`kick` (did the rc2 poll resync / periodic watchdog fire — `resync>0` ⇒ fired and stormed anyway; `==0` ⇒ never fired), `zero`/`seen` (in-progress consecutive counters — 1/2 below the threshold of 3 shows the gate being reset), live `iisr`/`iimr` (*which* IRQ source was asserted/unmasked — RUNOUT vs RX_DONE), `rxidx` (ring cursor). Disambiguates the two surviving #99 hypotheses (issue99.md §12) |
+| `eth=[…]` (v5) | rtl8196e #99 recovery state pulled at panic via the `__weak` `rtl8196e_eth_panic_snapshot()`: `resync`/`kick` (did the rc2 poll resync / periodic watchdog fire — `resync>0` ⇒ fired and stormed anyway; `==0` ⇒ never fired), `zero`/`seen` (in-progress consecutive counters — 1/2 below the threshold of 3 shows the gate being reset), live `iisr`/`iimr` (*which* IRQ source was asserted/unmasked — RUNOUT vs RX_DONE), `rxidx` (ring cursor). Disambiguates Hyp. A vs B (issue99.md §12) |
+| `eth=[… rxdesc…]` (v6) | switch-core / TX / ring-progress state, for the third hypothesis (a broader switch-core or TX-done stall, not pure RX runout — the vendor stuck-detector watched TX-done): `rxdesc` = `rx_pkthdr_ring[rx_idx]` (OWNED ⇒ §6 RX desync), `tx_prod`/`tx_cons`/`tx_free` + `txdesc` = `tx_ring[tx_cons]` (OWNED + low free ⇒ stuck TX-done), `cpuicr`/`sirr` (DMA / switch-engine enabled?), `rx`/`tx_packets` (forward-progress gauge across captures) |
 
 Raw u32 addresses are stored at panic time and symbolised with `%pS` only
 at next boot (process context, same kernel image) — the atomic path stays
@@ -236,11 +237,11 @@ panic ──record──▶ DRAM page ──reset──▶ next boot probe ─�
 ```
 
 The decode is one-shot (magic cleared after reporting) and
-version-gated: v5 (current) plus v4/v3/v2 (one-boot leftovers that follow a
+version-gated: v6 (current) plus v5/v4/v3/v2 (one-boot leftovers that follow a
 firmware upgrade) decode; v1/unknown print a stub. All field reads are
 clamped/NUL-terminated (see AUDIT.md §1.2).
 
-**v5 eth snapshot — coupling.** The eth fields are produced by the
+**v5/v6 eth snapshot — coupling.** The eth fields are produced by the
 `rtl8196e-eth` driver's `rtl8196e_eth_panic_snapshot()` (contract in
 `include/linux/rtl8196e_eth_panic.h`). The watchdog carries a `__weak` default
 returning false; the eth driver provides the strong override, so the watchdog
@@ -253,11 +254,11 @@ it is as reliable as `epc`/`softirq`, not best-effort like the wheel walks.
 **Single-line emission — truncation risk (deferred, AUDIT WDT-013).** The
 report is one `dev_info()` concatenating every field, so it is bound by the
 kernel's per-record printk limit (`LOG_LINE_MAX`, ~1 KB including the
-`rtl819x-wdt …:` prefix). A fully-populated v5 record (long timer/hrtimer
-lists + the NET_RX counters + the eth snapshot + a long `reason`) can approach
-that limit and truncate the **tail**: `reason` is last, the candidate lists
-and the v4 `softirqs=/hardirqs=/napi=` block sit before it, so those are the
-first fields lost. The v5 `eth=[…]` block is deliberately placed **early**
+`rtl819x-wdt …:` prefix). A fully-populated v6 record (long timer/hrtimer
+lists + the NET_RX counters + the wider eth snapshot + a long `reason`) can
+approach that limit and truncate the **tail**: `reason` is last, the candidate
+lists and the v4 `softirqs=/hardirqs=/napi=` block sit before it, so those are
+the first fields lost. The `eth=[…]` block is deliberately placed **early**
 (right after the `softirq` mask, ahead of the long lists) so the decisive #99
 diagnostic survives even when the tail truncates. `S26panicrec` copies the
 dmesg line **verbatim** into
