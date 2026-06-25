@@ -4,6 +4,10 @@ Network Co-Processor (NCP) firmware for the EFR32MG1B232F256GM48 chip found in t
 
 This firmware enables communication with Zigbee coordinators like **Zigbee2MQTT** and **Home Assistant ZHA** via EZSP (EmberZNet Serial Protocol).
 
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`); e.g. `BOARD=sengled-e39-g8c` for the Sengled Smart Hub G4
+> (placeholder pins pending hardware validation — see [`../boards/README.md`](../boards/README.md)).
+
 ## Features
 
 - **EZSP v13** - EmberZNet 7.5.1 serial protocol

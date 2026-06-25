@@ -55,6 +55,7 @@
 #   -y, --yes       Non-interactive mode: skip all confirmation prompts
 #   --boot-ip <IP>  Bootloader-mode / TFTP server IP. Overrides the BOOT_IP
 #                   env var (precedence: flag > env > default 192.168.1.6).
+#   --force         Skip the board-mismatch safety check (upgrade path).
 #
 # Environment variables:
 #   BOOT_IP      - Gateway IP in bootloader (default: 192.168.1.6). On the
@@ -71,6 +72,8 @@
 #   NETMASK      - Netmask (default: 255.255.255.0)
 #   GATEWAY      - Default gateway (default: 192.168.1.1)
 #   RADIO_MODE   - "zigbee" or "thread" (skip radio prompt)
+#   BOARD        - "lidl" (default) or "sengled-e39-g8c" (kernel image baked in)
+#   KERNEL       - "6.18" (default) or "7.1" (kernel line baked in)
 #   CONFIRM      - Set to "y" to skip confirmation prompts (same as -y)
 #
 # J. Nilo - March 2026
@@ -84,6 +87,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "${SCRIPT_DIR}/lib/ssh.sh"
 # Safe-retry TFTP upload helpers — see lib/flash_tftp.sh.
 . "${SCRIPT_DIR}/lib/flash_tftp.sh"
+# (board, kernel) validation — see lib/kernel_image.sh.
+. "${SCRIPT_DIR}/lib/kernel_image.sh"
 LINUX_IP=""
 FW_VERSION=""
 # Default entry mode. Overridden to "auto" only when a running Linux exposes
@@ -99,6 +104,14 @@ CONFIG_SAVED=""
 BOOT_IP="${BOOT_IP:-192.168.1.6}"
 BOOT_IP_FLAG=""
 SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
+# BOARD/KERNEL select the pre-built kernel image baked into the fullflash
+# (default lidl / 6.18 = the historical image). Exported so build_fullflash.sh
+# (child) resolves the same pair.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+export BOARD KERNEL
+# --force overrides the board-mismatch guard (upgrade path).
+FORCE=0
 
 # --- argument parsing --------------------------------------------------------
 
@@ -118,10 +131,11 @@ while [ $# -gt 0 ]; do
             echo "  -y, --yes        Non-interactive mode (skip all prompts)"
             echo "  --boot-ip <IP|host>  Bootloader-mode / TFTP server IP (overrides BOOT_IP"
             echo "                   env; default: 192.168.1.6). A hostname is resolved host-side."
+            echo "  --force          Skip the board-mismatch safety check (upgrade path)."
             echo ""
-            echo "Environment: BOOT_IP (default: 192.168.1.6), SSH_TIMEOUT,"
-            echo "  SSH_PASSWORD (sshpass), NET_MODE, RADIO_MODE, CONFIRM,"
-            echo "  IPADDR, NETMASK, GATEWAY (network default gateway)"
+            echo "Environment: BOOT_IP (default: 192.168.1.6), BOARD, KERNEL,"
+            echo "  SSH_TIMEOUT, SSH_PASSWORD (sshpass), NET_MODE, RADIO_MODE,"
+            echo "  CONFIRM, IPADDR, NETMASK, GATEWAY (network default gateway)"
             exit 0
             ;;
         --boot-ip)
@@ -130,6 +144,7 @@ while [ $# -gt 0 ]; do
             BOOT_IP_FLAG="$1"
             ;;
         --boot-ip=*) BOOT_IP_FLAG="${1#*=}" ;;
+        --force) FORCE=1 ;;
         --*) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
         *)
             if [ -n "$LINUX_IP" ]; then
@@ -191,6 +206,9 @@ if [ "${#missing_pkgs[@]}" -gt 0 ]; then
     echo "  sudo apt install ${missing_pkgs[*]}" >&2
     exit 1
 fi
+
+# Fail fast on a bad BOARD/KERNEL before touching the gateway or building.
+kernel_image_validate "$BOARD" "$KERNEL" || exit 1
 
 # Resolve IFACE for BOOT_IP and require L2 reachability — the bootloader's TFTP
 # server only answers on the same L2 segment. Sets IFACE on success; exits with
@@ -288,6 +306,36 @@ build_image_and_confirm() {
     IMAGE_READY=1
 }
 
+# Board-mismatch guard for the upgrade path: the running gateway's
+# /proc/device-tree/model identifies the board. A full flash bundles a
+# board-specific kernel AND bootloader, so flashing a mismatched BOARD can brick
+# the gateway (the bootloader's DRAM config is per-board). Refuse on a clear
+# mismatch unless --force. An unreadable/unrecognised model is non-fatal (warn
+# and proceed). cat runs on the gateway (BusyBox has no tr); the trailing NUL is
+# stripped host-side. Expects FI_SSH_OPTS / FI_SSH_TARGET in scope (port-22 path).
+fi_check_board_match() {
+    local model sig
+    model="$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "cat /proc/device-tree/model" 2>/dev/null | tr -d '\0' || true)"
+    if [ -z "$model" ]; then
+        echo "Note: could not read the gateway's board model — skipping board check." >&2
+        return 0
+    fi
+    case "$BOARD" in
+        lidl)            sig="Lidl" ;;
+        sengled-e39-g8c) sig="Sengled" ;;
+        *)               return 0 ;;
+    esac
+    if printf '%s' "$model" | grep -q "$sig"; then
+        return 0
+    fi
+    echo "Error: board mismatch — selected BOARD='$BOARD', but the gateway reports:" >&2
+    echo "         model = \"$model\"" >&2
+    echo "  A full flash bundles a board-specific kernel and bootloader; flashing the" >&2
+    echo "  wrong board can brick the gateway (DRAM config). Re-run with the matching" >&2
+    echo "  BOARD=, or pass --force to override." >&2
+    return 1
+}
+
 
 # --- detect gateway state (early — fail fast before building) ----------------
 # If LINUX_IP is provided, probe SSH to determine firmware type and save config.
@@ -355,6 +403,12 @@ if [ -n "$LINUX_RUNNING" ]; then
             exit 1
         fi
 
+        # Board-mismatch guard: a full flash carries a board-specific kernel and
+        # bootloader; refuse a different board than the gateway reports (--force overrides).
+        if [ "$FORCE" != "1" ]; then
+            fi_check_board_match || exit 1
+        fi
+
         # boothold present = custom firmware we can warm-reboot into the
         # bootloader. Absent = Tuya, or custom too old to have boothold
         # (pre-v1.1.0) — either way, automated entry is impossible.
@@ -400,6 +454,8 @@ if [ -n "$LINUX_RUNNING" ]; then
         export SKELETON_DIR="$SKEL_WORK"
 
         SAVE_TAR=$(mktemp)
+        # User-configurable files; other user-added paths under /userdata are
+        # carried by preserve_user_additions below.
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" \
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
@@ -411,6 +467,11 @@ if [ -n "$LINUX_RUNNING" ]; then
             export RADIO_MODE="skip"
         fi
         rm -f "$SAVE_TAR"
+
+        # Also carry any user-added paths under /userdata (custom programs,
+        # scripts, whole new directories) — anything not shipped in the skeleton
+        # and not already re-injected above — into the new image.
+        preserve_user_additions "$SKEL_WORK" "$FI_SSH_TARGET" "${FI_SSH_OPTS[@]}"
 
         # v2 → v3 migration: pre-v3.0 firmware shipped serialgateway and
         # had no /userdata/etc/radio.conf — the EFR32-side baud was hard-
@@ -714,6 +775,11 @@ print_complete() {
     echo "========================================="
     echo ""
     echo "SSH: root@${GW_HINT_IP}:22 (no password) in ~30 seconds."
+    echo ""
+    echo "If it does not come back (a first full-flash from a pre-V2.9 bootloader"
+    echo "can loop once): unplug the gateway for a few seconds and plug it back in."
+    echo "A cold power cycle clears it; a warm reboot will not. V2.9 onward boots"
+    echo "clean automatically after a full-flash."
 }
 
 # Post-flash SSH probe target for confirm_autoflash — only set when the

@@ -51,6 +51,14 @@ Environment variables for non-interactive use:
 NET_MODE=static RADIO_MODE=zigbee ./flash_install_rtl8196e.sh -y
 ```
 
+**Board and kernel selection** — `BOARD` (`lidl` default, or `sengled-e39-g8c`) and
+`KERNEL` (`6.18` default, or `7.1`) pick which kernel image is baked into the fullflash.
+A Lidl gateway needs neither; set them for the Sengled Smart Hub G4 or the 7.1 line:
+```bash
+KERNEL=7.1 ./flash_install_rtl8196e.sh -y 192.168.1.88
+BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh
+```
+
 **LAN not on the `192.168.1.x` subnet** — the bootloader's download-mode /
 TFTP server IP defaults to `192.168.1.6`. Override it with `--boot-ip` (or the
 `BOOT_IP` env var; the flag wins). The `--boot-ip` flag is available from
@@ -127,7 +135,7 @@ standalone.
 | Partition | Flash offset | Source | Header handling |
 |-----------|-------------|--------|-----------------|
 | boot+cfg | 0x000000 | `31-Bootloader/boot.bin` | Strip cvimg header |
-| kernel | 0x020000 | `32-Kernel/kernel-6.18.img` | Keep cs6c header |
+| kernel | 0x020000 | `32-Kernel/kernel-img/<board>/kernel-<line>.img` (default `lidl`/`6.18`) | Keep cs6c header |
 | rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
 | userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |
 
@@ -142,7 +150,10 @@ the `boothold` binary). Does NOT work on Tuya/stock firmware or v1.0 — use
 For **userdata**, the script saves user config via SSH before flashing (eth0.conf,
 mac_address, radio.conf, passwd, TZ, hostname, dropbear host keys, SSH keys,
 Thread credentials). The config is injected into the new image so it survives
-the reflash — no prompts needed.
+the reflash — no prompts needed. It also carries over **anything you added under
+`/userdata`** that the skeleton does not ship — a custom program in `usr/bin`, a
+script, a whole new directory (subdirectories and empty dirs included). Skeleton
+defaults are taken from the new image.
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
@@ -234,6 +245,13 @@ The script:
 - **TFTP transfer fails** — check firewall (UDP 69), verify same subnet, no other TFTP server
 - **"Flash Write Successed!" doesn't appear** — wait longer (userdata takes 1-2 min)
 - **SSH refused after reboot** — wait 30s, check IP on serial console (`ip addr`)
+- **Boot loop right after a full-flash** — only the *first* full-flash from a
+  pre-V2.9 bootloader can do this: the old bootloader still runs the kernel
+  handoff for that one reboot, and the switch DMA scribbles DRAM during early
+  boot. **Unplug the gateway for a few seconds and plug it back in** — a cold
+  power cycle clears it; a warm `reboot` will not. V2.9 (shipped from this
+  release) stops the switch DMA before handoff, so every full-flash after V2.9 is
+  in place boots clean on its own.
 
 ### EFR32 (OTA flash)
 

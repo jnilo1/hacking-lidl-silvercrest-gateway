@@ -12,7 +12,7 @@ This is the **last missing piece** that makes the entire gateway firmware stack 
 
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.7 - 2026.05.27 - J. Nilo
+Bootloader: V2.9 - 2026.06.20 - J. Nilo
 ```
 
 **Download progress in %** — The stock bootloader prints endless `.` or `#` characters that flood the serial console during TFTP transfers. This version shows a clean percentage indicator:
@@ -94,7 +94,7 @@ Same workflow — just send the image with the right Realtek header:
 ```bash
 tftp -m binary 192.168.1.6 -c put rootfs.bin        # Will not reboot
 tftp -m binary 192.168.1.6 -c put userdata.bin      # Will not reboot
-tftp -m binary 192.168.1.6 -c put kernel-6.18.img   # Will reboot
+tftp -m binary 192.168.1.6 -c put kernel-img/lidl/kernel-6.18.img   # Will reboot
 ```
 
 The bootloader identifies each image by its header signature and writes it to the correct flash partition.

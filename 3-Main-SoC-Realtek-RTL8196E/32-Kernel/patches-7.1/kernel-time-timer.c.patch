@@ -1,0 +1,124 @@
+--- a/kernel/time/timer.c
++++ b/kernel/time/timer.c
+@@ -44,6 +44,7 @@
+ #include <linux/compat.h>
+ #include <linux/random.h>
+ #include <linux/sysctl.h>
++#include <linux/workqueue.h>
+ 
+ #include <linux/uaccess.h>
+ #include <asm/unistd.h>
+@@ -1342,6 +1343,113 @@
+ }
+ EXPORT_SYMBOL_GPL(add_timer_on);
+ 
++/*
++ * timer_get_running_fn - return the timer callback currently executing on
++ * this CPU, or NULL if none. Used by the RTL8196E watchdog panic notifier
++ * (drivers/watchdog/rtl819x_wdt.c) to name the culprit of a soft-lockup
++ * timer storm. The SoC is UP, so the panicking CPU is the only base set
++ * worth inspecting. raw_cpu_ptr(): the atomic panic path already has
++ * preemption disabled, so skip the preempt-debug check.
++ */
++void *timer_get_running_fn(void)
++{
++	int idx;
++
++	for (idx = 0; idx < NR_BASES; idx++) {
++		struct timer_base *base = raw_cpu_ptr(&timer_bases[idx]);
++		struct timer_list *t = base->running_timer;
++
++		if (t)
++			return (void *)t->function;
++	}
++	return NULL;
++}
++EXPORT_SYMBOL_GPL(timer_get_running_fn);
++
++/*
++ * timer_collect_pending_fns - collect the .function pointers of timers queued
++ * in the wheel on this CPU, nearest-expiry first, up to @max; returns the
++ * count. Used by the RTL8196E watchdog panic notifier
++ * (drivers/watchdog/rtl819x_wdt.c) to name a self-rearming timer behind a
++ * TIMER_SOFTIRQ storm (issue #99): at panic time running_timer is NULL (we are
++ * between callbacks), but the storming timer is sitting in a near bucket. Cold
++ * path only (panic context) — no hot-path cost. UP SoC, preemption already off
++ * in the panic path, so raw_cpu_ptr() is safe.
++ *
++ * Timers wrapping a delayed_work all expose the same callback
++ * (delayed_work_timer_fn), which hides the actual subsystem behind an
++ * anonymous wrapper — the first #99 field capture showed four
++ * indistinguishable delayed_work_timer_fn entries. Resolve those one level
++ * deeper, to the work function the wrapper would queue.
++ */
++int timer_collect_pending_fns(void **out, int max)
++{
++	int idx, n = 0;
++
++	for (idx = 0; idx < NR_BASES && n < max; idx++) {
++		struct timer_base *base = raw_cpu_ptr(&timer_bases[idx]);
++		unsigned long bit;
++
++		for_each_set_bit(bit, base->pending_map, WHEEL_SIZE) {
++			struct timer_list *t;
++
++			hlist_for_each_entry(t, &base->vectors[bit], entry) {
++				void *fn = (void *)t->function;
++
++				if (n >= max)
++					return n;
++				if (fn == (void *)delayed_work_timer_fn)
++					fn = (void *)container_of(t, struct delayed_work, timer)->work.func;
++				out[n++] = fn;
++			}
++		}
++	}
++	return n;
++}
++EXPORT_SYMBOL_GPL(timer_collect_pending_fns);
++
++/*
++ * timer_wheel_stats - how far behind is the timer wheel on this CPU?
++ * @overdue:    out — jiffies the earliest queued timer is past its expiry
++ *              (0 when the wheel keeps up; thousands when a storm has been
++ *              outrunning the tick for seconds).
++ * @nr_pending: out — total timers queued in the wheel.
++ *
++ * Discriminates the two softirq-storm shapes behind issue #99: a wheel that
++ * never catches up to jiffies (death spiral — large @overdue) vs a softirq
++ * re-raised at line rate over a caught-up wheel (@overdue ~0). Same usage
++ * rules as timer_collect_pending_fns() above: RTL8196E watchdog panic
++ * notifier only, cold path, UP SoC.
++ */
++void timer_wheel_stats(unsigned long *overdue, unsigned int *nr_pending)
++{
++	unsigned long lag = 0;
++	unsigned int count = 0;
++	int idx;
++
++	for (idx = 0; idx < NR_BASES; idx++) {
++		struct timer_base *base = raw_cpu_ptr(&timer_bases[idx]);
++		unsigned long bit;
++
++		if (base->timers_pending) {
++			long delta = (long)(jiffies - base->next_expiry);
++
++			if (delta > 0 && (unsigned long)delta > lag)
++				lag = delta;
++		}
++
++		for_each_set_bit(bit, base->pending_map, WHEEL_SIZE) {
++			struct timer_list *t;
++
++			hlist_for_each_entry(t, &base->vectors[bit], entry)
++				count++;
++		}
++	}
++	*overdue = lag;
++	*nr_pending = count;
++}
++EXPORT_SYMBOL_GPL(timer_wheel_stats);
++
+ /**
+  * __timer_delete - Internal function: Deactivate a timer
+  * @timer:	The timer to be deactivated

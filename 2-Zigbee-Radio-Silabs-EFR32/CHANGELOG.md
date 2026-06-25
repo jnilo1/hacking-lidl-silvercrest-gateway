@@ -4,6 +4,56 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [4.0.0-rc3] - 2026-06-25
+
+_EFR32 deliverables shipped in `v4.0.0-rc3`: the Sengled G4 NCP firmware is validated on
+real hardware and committed as a prebuilt, and `flash_efr32.sh` gains a `BOARD=` selector
+with a hardware-match guard. The multi-board build groundwork (the `BOARD=` build
+mechanism, with the G4 routing still a placeholder) remains under `[4.0.0-pre]` below._
+
+### G4 (Sengled Smart Hub E39-G8C) — NCP validated on hardware, prebuilt committed
+
+@hlyi flashed the `BOARD=sengled-e39-g8c` NCP build to a real G4 and confirmed it
+end-to-end — Home Assistant talks to the radio (#130). Two follow-ups from that:
+
+- `boards/sengled-e39-g8c/board.env` is now **validated**, not a placeholder. The
+  G4 wires the EFR32 UART on the **same USART/pins as Lidl** (USART0, PA0 = TX,
+  PA1 = RX) — confirmed on hardware — so the only board-specific facts are the
+  MG13P OPN (#133) and software flow control (#123).
+- A **prebuilt G4 NCP `.gbl`** is committed
+  (`24-NCP-UART-HW/firmware/ncp-uart-hw-7.5.1-115200-sengled-e39-g8c.gbl`, baud
+  115200, reproducible), so a G4 user can flash without building. OT-RCP builds
+  for the G4 but its Thread path is not functionally validated there yet — it
+  stays build-it-yourself. @hlyi's cosmetic note (the `-hw-` in the filename and
+  the `24-NCP-UART-HW` dir should read `sw` for this board) is deferred as
+  non-critical.
+
+### `BOARD=` support for `flash_efr32.sh` (flash half of the multi-board work)
+
+`flash_efr32.sh` now takes the same `BOARD=` selector as the builds (env var or
+`--board`, default `lidl`). A Lidl user sets nothing and the flash path is
+unchanged; a non-lidl board flashes its `-<board>`-suffixed NCP/OT-RCP firmware
+from the same flat `firmware/` directory.
+
+- **Per-board resolution.** For a non-lidl `BOARD=`, the firmware glob gains the
+  `-<board>` suffix (`ncp-uart-hw-*-<baud>-<board>.gbl`, `ot-rcp-<baud>-<board>.gbl`).
+  The lidl globs don't match the suffixed files and vice-versa, so lidl
+  resolution is byte-for-byte unchanged. rcp/router/bootloader for a non-lidl
+  board are refused with a clear lidl-only message (`--firmware-file` still
+  bypasses for power users).
+- **Authoritative board-match guardrail.** Because the script always runs against
+  a live gateway, it reads `/proc/device-tree/model` (folded into its SSH detect
+  block) and refuses to flash before pushing firmware when the selected board
+  disagrees with the hardware (`lidl`→"Lidl", `sengled-e39-g8c`→"Sengled"). Since
+  the effective board defaults to `lidl`, this also catches the common slip of
+  forgetting `BOARD=` on a G4 box. `--force` overrides; an unreadable model skips
+  the check.
+- Per-board `firmware/<board>/` subdirectories and `BOARD=` for the other three
+  firmwares are deferred until there's demand (the flat `firmware/` + `-<board>`
+  suffix suffices today).
+
+---
+
 ## [4.0.0-pre] - 2026-06-13
 
 ### `BOARD=` support for the firmware builds (radio half of the multi-board work)

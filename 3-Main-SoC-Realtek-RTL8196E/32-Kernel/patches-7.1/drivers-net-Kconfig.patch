@@ -1,0 +1,11 @@
+--- a/drivers/net/Kconfig
++++ b/drivers/net/Kconfig
+@@ -507,6 +507,8 @@
+ 
+ source "drivers/net/ethernet/Kconfig"
+ 
++source "drivers/net/rtl8196e-uart-bridge/Kconfig"
++
+ source "drivers/net/fddi/Kconfig"
+ 
+ source "drivers/net/ipa/Kconfig"

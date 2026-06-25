@@ -7,6 +7,10 @@ This firmware transforms the EFR32 into a **raw 802.15.4 radio** using the
 Spinel/HDLC protocol. It is the **single firmware** shared by all 3 use cases
 described below.
 
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`); e.g. `BOARD=sengled-e39-g8c` for the Sengled Smart Hub G4
+> (placeholder pins pending hardware validation — see [`../boards/README.md`](../boards/README.md)).
+
 ---
 
 ## 1. Firmware

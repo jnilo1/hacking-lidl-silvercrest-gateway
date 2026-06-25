@@ -1,0 +1,10 @@
+--- a/arch/mips/Kbuild.platforms
++++ b/arch/mips/Kbuild.platforms
+@@ -28,6 +28,7 @@
+ platform-$(CONFIG_SGI_IP28)		+= sgi-ip22/
+ platform-$(CONFIG_SGI_IP30)		+= sgi-ip30/
+ platform-$(CONFIG_SGI_IP32)		+= sgi-ip32/
++platform-$(CONFIG_REALTEK)		+= realtek/
+ platform-$(CONFIG_SIBYTE_BCM112X)	+= sibyte/
+ platform-$(CONFIG_SIBYTE_SB1250)	+= sibyte/
+ platform-$(CONFIG_SIBYTE_BCM1x80)	+= sibyte/

@@ -19,6 +19,16 @@ docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
 ./build_efr32.sh --help       # Show available targets
 ```
 
+> **Per-board builds:** the NCP and OT-RCP firmwares take a `BOARD=` parameter
+> (default `lidl`). For the **Sengled Smart Hub G4** use `BOARD=sengled-e39-g8c` —
+> its NCP is validated on real G4 hardware (#130) and ships **prebuilt**, so a G4
+> user can flash it directly (`BOARD=sengled-e39-g8c ./flash_efr32.sh -y ncp`); G4
+> OT-RCP builds but isn't Thread-validated yet, so build it yourself. See
+> [`boards/README.md`](./boards/README.md) for the supported boards and the
+> porting contract. RCP, Router and the bootloader are lidl-only for now.
+> `flash_efr32.sh` honours the same `BOARD=` (a Lidl user sets nothing) and refuses
+> a board mismatch against the gateway's devicetree model.
+
 ## Contents
 
 | Directory | Description |

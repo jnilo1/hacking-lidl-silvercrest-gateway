@@ -75,6 +75,12 @@ cd hacking-lidl-silvercrest-gateway
 
 The script builds a complete 16 MiB flash image and uploads it via TFTP.
 
+> **Board & kernel (advanced):** the defaults install the **Lidl** board with the **6.18**
+> kernel. For another combination, prefix any command with `BOARD=` and/or `KERNEL=` — e.g.
+> `KERNEL=7.1 ./flash_install_rtl8196e.sh 192.168.1.88` or
+> `BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh`. `BOARD` ∈ {`lidl`, `sengled-e39-g8c`},
+> `KERNEL` ∈ {`6.18`, `7.1`}. These same two variables work on every flash/build script.
+
 - **First flash** (no argument): the gateway must already be in bootloader mode
   (serial console + ESC on power-on). User config cannot be saved — you will be
   prompted for network and radio settings.
@@ -94,6 +100,7 @@ Once the gateway is running (SSH access on port 22):
 ./flash_efr32.sh -y ncp                    # default IP 192.168.1.88
 ./flash_efr32.sh -y ncp 460800             # NCP at 460800 baud
 ./flash_efr32.sh -y -g 10.0.0.5 otrcp      # custom IP, OT-RCP
+BOARD=sengled-e39-g8c ./flash_efr32.sh -y ncp   # Sengled Smart Hub G4 (Lidl users set nothing)
 ./flash_efr32.sh --help                    # full CLI reference
 ```
 

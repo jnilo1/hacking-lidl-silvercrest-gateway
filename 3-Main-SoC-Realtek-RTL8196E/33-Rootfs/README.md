@@ -2,6 +2,11 @@
 
 This directory contains the root filesystem for the gateway.
 
+> **Board- and kernel-agnostic:** the same `rootfs.bin` works for every board
+> (`lidl`, `sengled-e39-g8c`) and kernel line (`6.18`, `7.1`) — board specifics
+> live in the device tree and bootloader, persistent config in `/userdata`. No
+> `BOARD`/`KERNEL` selection applies here.
+
 ## Overview
 
 The root filesystem is a minimal Linux system based on:

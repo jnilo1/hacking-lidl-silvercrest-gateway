@@ -59,11 +59,22 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 
 | Image | File | Size | Description |
 |-------|------|------|-------------|
-| Kernel | [`32-Kernel/kernel-6.18.img`](./32-Kernel/README.md) | ~1.2 MB | Linux 6.18 kernel |
-| Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/README.md) | ~900 KB | Base system (BusyBox, Dropbear) |
-| Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/README.md) | ~12 MB | Apps (nano, otbr-agent, boothold) |
+| Kernel | [`32-Kernel/kernel-img/<board>/kernel-<line>.img`](./32-Kernel/README.md) | ~1.4 MB | Linux kernel — `<board>` ∈ {`lidl`, `sengled-e39-g8c`}, `<line>` ∈ {`6.18`, `7.1`}; four images shipped |
+| Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/README.md) | ~900 KB | Base system (BusyBox, Dropbear) — board/kernel-agnostic |
+| Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/README.md) | ~12 MB | Apps (nano, otbr-agent, boothold) — board/kernel-agnostic |
 
 > **Note:** The userdata image is 12 MB because it must fill the entire JFFS2 partition to avoid filesystem errors at boot. The actual data is only ~1 MB.
+
+> **Choosing board and kernel:** every flash/build script accepts two environment
+> variables — `BOARD` (`lidl` default, or `sengled-e39-g8c` for the Sengled Smart Hub G4)
+> and `KERNEL` (`6.18` default, or `7.1`). A Lidl user sets neither and gets the historical
+> `lidl`/`6.18` image unchanged.
+>
+> **Non-Lidl board safety:** a full install (`flash_install_rtl8196e.sh`) also flashes the
+> **bootloader**, whose DRAM config is board-specific — for `BOARD=sengled-e39-g8c` you must
+> first build the matching `31-Bootloader/boot.bin` (`BOARD=sengled-e39-g8c ./build_bootloader.sh`)
+> or the gateway can brick. The upgrade path verifies `/proc/device-tree/model` and refuses a
+> board mismatch unless `--force`.
 
 ### Flashing
 
@@ -71,7 +82,9 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 2. Run the install script **from the repository root**:
 
 ```bash
-./flash_install_rtl8196e.sh      # Build fullflash.bin and install
+./flash_install_rtl8196e.sh                        # Build fullflash.bin and install (lidl / 6.18)
+KERNEL=7.1 ./flash_install_rtl8196e.sh             # ... with the 7.1 kernel line
+BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh  # ... for the Sengled Smart Hub G4
 ```
 
 The script auto-detects the gateway state:
@@ -96,10 +109,20 @@ cd 3-Main-SoC-Realtek-RTL8196E
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
 ./flash_remote.sh rootfs 192.168.1.88                    # Flash rootfs remotely
-./flash_remote.sh kernel 192.168.1.88                    # Flash kernel (auto-reboots)
+./flash_remote.sh kernel 192.168.1.88                    # Flash kernel (lidl / 6.18, auto-reboots)
+KERNEL=7.1 ./flash_remote.sh kernel 192.168.1.88         # Flash the 7.1 kernel line
+BOARD=sengled-e39-g8c ./flash_remote.sh kernel 192.168.1.88  # Flash the Sengled G4 kernel
 ./flash_remote.sh bootloader 192.168.1.88                # Flash bootloader
 ./flash_remote.sh userdata 192.168.1.88                  # Flash userdata (defaults: static IP, Zigbee)
 ```
+
+> The `kernel` component checks the gateway's `/proc/device-tree/model` and refuses to flash
+> a kernel built for a different board (pass `--force` to override).
+
+> Flashing **userdata** over SSH preserves your config (network, password, SSH keys, radio,
+> Thread credentials) **and** anything you added under `/userdata` that the skeleton does
+> not ship — a custom program in `usr/bin`, a script, a whole new directory. A bare
+> `34-Userdata/flash_userdata.sh` does a clean wipe instead.
 
 Override defaults via environment variables:
 

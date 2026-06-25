@@ -1,0 +1,25 @@
+--- a/net/core/gro.c
++++ b/net/core/gro.c
+@@ -1,6 +1,13 @@
+ // SPDX-License-Identifier: GPL-2.0-or-later
+ #include <net/psp.h>
+ #include <net/gro.h>
++
++#if defined(CONFIG_RTL8196E_IMEM) && defined(CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT)
++#define __iram_hotpath __attribute__((section(".iram")))
++#else
++#define __iram_hotpath
++#endif
++
+ #include <net/dst_metadata.h>
+ #include <net/busy_poll.h>
+ #include <trace/events/net.h>
+@@ -633,7 +640,7 @@
+ 	return ret;
+ }
+ 
+-gro_result_t gro_receive_skb(struct gro_node *gro, struct sk_buff *skb)
++gro_result_t __iram_hotpath gro_receive_skb(struct gro_node *gro, struct sk_buff *skb)
+ {
+ 	gro_result_t ret;
+ 

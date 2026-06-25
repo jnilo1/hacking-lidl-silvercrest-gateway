@@ -1,5 +1,5 @@
 #!/bin/bash
-# lint_patches.sh — from-clean dry-run of the 6.18 patch set.
+# lint_patches.sh — from-clean dry-run of a kernel line's patch set (6.18 or 7.1).
 #
 # Why this exists: build_kernel.sh only feeds patches-6.18/*.patch to patch(1)
 # when it extracts a *fresh* tree (`if [ ! -f "$BUILD_DIR/Makefile" ]`). Every
@@ -17,7 +17,8 @@
 # would succeed. It catches malformed hunk headers, rejects, and context drift
 # across point releases — none of which a reused-tree build can see.
 #
-# Usage:  ./lint_patches.sh
+# Usage:  ./lint_patches.sh             # 6.18 line (default)
+#         KERNEL=7.1 ./lint_patches.sh  # 7.1 line
 # Exit:   0 = all patches apply clean from-clean; 1 = at least one would fail.
 #
 # Zero project deps: only patch, wget, tar, xz. Caches the tarball next to
@@ -28,13 +29,23 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${SCRIPT_DIR}/build_kernel.sh"
 
-# Single source of truth: pull the version constants straight out of
-# build_kernel.sh so this guard can never test a different kernel than the
-# build does.
-field() { grep -m1 "^$1=" "$BUILD" | cut -d'"' -f2; }
-KERNEL_VERSION="$(field KERNEL_VERSION)"
-KERNEL_MAJOR="$(field KERNEL_MAJOR)"
-KERNEL_MAJOR_MINOR="$(field KERNEL_MAJOR_MINOR)"
+# Single source of truth: pull the version constants for the selected KERNEL
+# line straight out of build_kernel.sh's `case "$KERNEL"` block, so this guard
+# can never test a different kernel than the build does. (The constants are
+# indented inside the case branch, hence the branch-aware parse rather than a
+# line-anchored grep.)
+KERNEL="${KERNEL:-6.18}"
+branch_field() {
+    # Print <var>'s value from inside build_kernel.sh's `${KERNEL})` case branch.
+    awk -v line="$KERNEL" -v var="$1" '
+        $0 ~ "^[[:space:]]*"line"\\)"     { inb=1; next }
+        inb && /;;/                       { inb=0 }
+        inb && $0 ~ "^[[:space:]]*"var"=" { v=$0; sub(/^[^"]*"/,"",v); sub(/".*/,"",v); print v; exit }
+    ' "$BUILD"
+}
+KERNEL_VERSION="$(branch_field KERNEL_VERSION)"
+KERNEL_MAJOR="$(branch_field KERNEL_MAJOR)"
+KERNEL_MAJOR_MINOR="$(branch_field KERNEL_MAJOR_MINOR)"
 
 if [ -z "$KERNEL_VERSION" ] || [ -z "$KERNEL_MAJOR" ]; then
     echo "ERROR: could not read KERNEL_VERSION/KERNEL_MAJOR from build_kernel.sh" >&2

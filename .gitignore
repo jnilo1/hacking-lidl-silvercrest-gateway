@@ -20,8 +20,9 @@ node_modules/
 !3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot.bin
 *.img
 *.img.gz
-# Exception: shipped kernel flash image
-!3-Main-SoC-Realtek-RTL8196E/32-Kernel/kernel-6.18.img
+# Exception: shipped pre-built kernel images, one per (board, kernel) pair
+# (kernel-img/<board>/kernel-<line>.img — see 32-Kernel/build_kernel.sh).
+!3-Main-SoC-Realtek-RTL8196E/32-Kernel/kernel-img/**
 
 # Build directories
 build/

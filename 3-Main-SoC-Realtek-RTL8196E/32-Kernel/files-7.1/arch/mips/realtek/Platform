@@ -1,0 +1,9 @@
+#
+# Realtek SoCs
+#
+
+platform-$(CONFIG_REALTEK)	+= realtek/
+
+cflags-$(CONFIG_SOC_RTL8196E)	+= -I$(srctree)/arch/mips/include/asm/mach-realtek/rtl8196e
+load-$(CONFIG_SOC_RTL8196E)		= 0xffffffff80000000
+

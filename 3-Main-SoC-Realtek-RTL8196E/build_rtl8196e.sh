@@ -178,7 +178,7 @@ echo "========================================="
 echo ""
 echo "Built:"
 [ $BUILD_BOOTLOADER -eq 1 ] && ls -lh "${SCRIPT_DIR}/31-Bootloader/boot.bin" 2>/dev/null || true
-[ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel-6.18.img" 2>/dev/null || true
+[ $BUILD_KERNEL -eq 1 ] && ls -lh "${SCRIPT_DIR}/32-Kernel/kernel-img/${BOARD:-lidl}/kernel-${KERNEL:-6.18}.img" 2>/dev/null || true
 [ $BUILD_ROOTFS -eq 1 ] && echo "  rootfs components: busybox, dropbear → skeleton/bin/"
 [ $BUILD_USERDATA -eq 1 ] && echo "  userdata components: boothold, nano, otbr-agent, ot-ctl → skeleton/usr/bin/"
 cd "$PROJECT_ROOT"

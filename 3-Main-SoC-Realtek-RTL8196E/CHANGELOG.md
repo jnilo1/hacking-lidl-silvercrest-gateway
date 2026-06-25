@@ -6,13 +6,77 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.0.0-rc3] - 2026-06-25
+
+_Supersedes `v4.0.0-rc2`. Headline: **issue #99 switch-core self-recovery** (ETHDRV-016,
+eth v2.18) — the driver now detects a wedged switch core and performs a full hardware
+switch-core reset to recover at runtime instead of riding the lockup to a watchdog reboot,
+restoring the deep recovery the vendor SDK shipped and the from-scratch rewrite had
+dropped. It pairs with the new **watchdog post-mortem record** (v6): the next field event
+either self-heals visibly (a `switch core reset done (#N)` log line) or is captured in the
+panic record. rc3 also rolls up the full rc2-development-cycle work that the public
+`v4.0.0-rc2` branch predated — **board + kernel-line selection** (four pre-built images),
+**bootloader V2.9**, **flash user-file preservation**, **quiet boot**, and the **QA/bench
+tooling** (each detailed under `[4.0.0-rc2]` below). Both kernel lines (6.18 and 7.1) are
+brought in sync. Release candidate, not GA. (The validated Sengled G4 NCP **radio**
+firmware, #130, is tracked in the EFR32 changelog under `2-Zigbee-Radio-Silabs-EFR32/`.)_
+
+### `rtl8196e-eth` v2.15 → v2.18 — issue #99 switch-core self-recovery (ETHDRV-016)
+
+Building on the rc2 detector + ring-resync (ETHDRV-015), three changes reconstruct the
+stock firmware's self-healing that our rewrite had omitted:
+
+- **Deep switch-core reset (escalation).** A new process-context worker performs the
+  vendor `FullAndSemiReset` sequence (switch-core clock cycle + `FULL_RST`) followed by a
+  full re-bring-up, when the cheap in-poll ring resync repeatedly fails to clear a RUNOUT
+  storm. It runs from a workqueue (it sleeps ~650 ms), never in the NAPI poll.
+- **TX-done hang watchdog.** The 1 s timer now also detects a TX-done descriptor left
+  owned by the switch across consecutive checks — a switch-core stall the RX-runout
+  detector cannot see — and triggers the deep reset (mirrors the vendor
+  `rtl_check_swCore_tx_hang`).
+- **Clear-RUNOUT-on-forward-progress.** A budget-saturating poll now clears the RUNOUT
+  status as the vendor receive path does, so a transient runout self-clears.
+
+New `ethtool -S` counter `rtl8196e_swcore_deep_reset`. No datapath regression (TCP RX
+~94, TX median ~69 Mbit/s, retrans 0). Bench-validated on the lab unit: the deep reset
+recovers a live gateway cleanly with no reboot, and both the RUNOUT-storm and TX-hang
+paths detect and recover under fault injection.
+
+### Watchdog post-mortem record v4 → v6 — eth #99 state captured at panic
+
+The DRAM-backed panic record (`rtl819x-wdt` v1.7 → v1.9), decoded one boot after a
+soft-lockup, now carries an Ethernet `#99` snapshot pulled at panic via a `__weak`
+provider in the eth driver, so a recurrence is diagnosable from the field rather than by
+guesswork:
+
+- **record v5** — the recovery counters (resyncs / NAPI kicks performed, in-progress
+  zero-work and RUNOUT-seen counts) plus the live `CPUIISR`/`CPUIIMR` and the RX ring
+  cursor.
+- **record v6** — broadened to switch-core / TX-done / ring-progress state
+  (`rxdesc`, `txprod`/`txcons`/`txfree`/`txdesc`, `cpuicr`, `sirr`, rx/tx packet counts),
+  to tell an RX-runout storm apart from a broader switch-core or TX-done stall.
+
+Persisted to `/userdata/panic/history` by `S26panicrec` (first occurrence after each
+clear). rc3 keeps this instrumentation alongside the self-recovery above — so the next
+event is either healed (a reset log line) or fully captured.
+
+### Both kernel lines synced (6.18 + 7.1)
+
+The 7.1 overlay (experimental dual-kernel line) had lagged at eth v2.15 / watchdog v1.7;
+it is brought to parity — eth **v2.18**, watchdog **v1.9 / record v6** — with identical
+drivers across both lines. rc3 ships four images (`{lidl, sengled-e39-g8c} × {6.18,
+7.1}`).
+
+---
+
 ## [4.0.0-rc2] - 2026-06-19
 
 _Supersedes `v4.0.0-rc1`. Carries the **issue #99 engine fix** (ETHDRV-015,
 eth v2.15) after the rc1-line fix (ETHDRV-013) proved insufficient in the field,
-the **bootloader auto-boot PHY-quiesce** that closes the remaining post-flash boot
-loop, and the harmonized init-script output. Field confirmation of #99 is still
-pending — release candidate, not GA._
+the **bootloader fixes (V2.9)** that close the post-flash boot loop on both a
+kernel flash (PHY-quiesce) and a 16 MiB full-flash (switch-DMA stop), and the
+harmonized init-script output. Field confirmation of #99 is still pending —
+release candidate, not GA._
 
 ### `rtl8196e-eth` v2.15 — issue #99 engine fix (poll-side RUNOUT-storm recovery)
 
@@ -46,7 +110,7 @@ Two `ethtool -S` counters expose the recovery firing: `rtl8196e_rx_runout_resync
 and `rtl8196e_rx_runout_kick` (both 0 unless a storm was caught). ETHDRV-013 and
 ETHDRV-014 are retained as defence in depth. Candidate pending field confirmation.
 
-### Bootloader V2.8 — quiesce the Ethernet PHY before the post-flash watchdog reset
+### Bootloader V2.9 — stop the switch DMA and quiesce the PHY before kernel handoff
 
 Fixes an intermittent **boot loop after a `flash_remote` kernel flash**: the box
 looped in early boot (resetting around the `/sbin/init` handoff, no panic text)
@@ -89,6 +153,25 @@ Re-validated: 10 consecutive `flash_remote` kernel cycles plus 3 manual reboots,
 all clean on the serial console (previously reproducible within a couple of
 cycles). Folded into V2.8 (still unreleased); `BOOT_CODE_TIME` refreshed.
 
+**Follow-up — a 16 MiB full-flash needed more than the PHY-off (V2.8 → V2.9).**
+Disabling the PHY stops *new* ingress but not a CPU-port DMA that is already
+armed, and a full `flash_install` (16 MiB over TFTP) leaves far more in flight
+than the ~1.4 MB kernel flash V2.8 was validated against — so the switch kept
+DMAing into DRAM through the handoff and the box looped until a cold power cycle
+(a warm `reboot` and a single-partition `flash_remote` were unaffected). V2.9
+adds, before the PHY-off in both `autoreboot()` and `goToLocalStartMode()`, a
+`CPUICR = 0` (clears the CPU-port `TXCMD`/`RXCMD` DMA enables) and a
+`FullAndSemiReset()` — the same switch-core reset `swCore_init()` runs on every
+cold boot, which aborts any in-flight DMA. The reset re-defaults the port
+registers, so the PHY-off deliberately stays *after* it. Validated on the bench:
+three consecutive 16 MiB `flash_install` full-flash cycles each auto-rebooted
+straight to userspace with no manual power cycle (previously reproducible on the
+first full-flash). Build stays reproducible (`B_VERSION` V2.8 → V2.9, pinned
+`BOOT_CODE_TIME` refreshed). Caveat: a gateway still running a pre-V2.9
+bootloader runs its *old* `autoreboot()` for the very first full-flash, so that
+one upgrade may still loop once — clear it with a cold power cycle (unplug/replug,
+not a warm reboot); every flash after V2.9 is in place boots clean on its own.
+
 ### Init-script output — one consistent, sober convention
 
 The per-service init scripts now print a single uniform `<service>: <state>` line
@@ -103,6 +186,74 @@ off the login prompt. The dead `34-Userdata/…/init.d/rcS` is removed — it wa
 never executed (the bootstrap runs the rootfs `rcS` at sysinit and the userdata
 `rcK` at shutdown; the `S??*` glob it iterates never matches `rcS`). Cosmetic
 only; no service behaviour changes.
+
+### Rootfs — quiet the console at the end of boot
+
+The kernel's `random: crng init done` notice (KERN_NOTICE, level 5) lands ~11 s
+into boot on this low-entropy SoC — just after getty prints the `zigbeegw login:`
+prompt, so it trailed the prompt on the serial console. At the very end of `rcS`
+(after the userdata init loop, so klogd is already draining the kernel ring buffer
+into `/var/log/messages`, and right before getty), `console_loglevel` is lowered to
+5: level-5 notices no longer reach the console while warnings/errors (level < 5)
+still do, and `/var/log/messages` keeps everything. Writing one value to
+`/proc/sys/kernel/printk` touches only `console_loglevel` (7 4 1 4 → 5 4 1 4).
+Cosmetic; no service behaviour changes.
+
+### Board + kernel selection — pick `BOARD` and `KERNEL`, four pre-built images
+
+Every flash and build script now accepts two environment variables, both defaulting to
+the historical Lidl 6.18 build so **nothing changes for a Lidl user**:
+
+* `BOARD` — `lidl` (default) or `sengled-e39-g8c` (Sengled Smart Hub G4).
+* `KERNEL` — `6.18` (default) or `7.1`.
+
+The Linux **7.1 line** is now shipped alongside 6.18 (`patches-7.1/`, `files-7.1/`,
+`config-7.1-realtek.txt`); `build_kernel.sh` builds it with `KERNEL=7.1`. Pre-built
+images moved under `32-Kernel/kernel-img/<board>/kernel-<line>.img` — four shipped
+images (`{lidl, sengled-e39-g8c}` × `{6.18, 7.1}`). The flash scripts
+(`flash_kernel.sh`, `flash_remote.sh`, `build_fullflash.sh`, `create_fullflash.sh`,
+`flash_install_rtl8196e.sh`) resolve the image from `BOARD`/`KERNEL` through a shared
+helper (`lib/kernel_image.sh`); an explicit `--image` still wins (flash_remote.sh
+first gained a kernel `--image` passthrough, now generalised to `BOARD`/`KERNEL`).
+`flash_remote.sh` and `flash_install_rtl8196e.sh` (upgrade path) read the gateway's
+`/proc/device-tree/model` and refuse a board-mismatched flash unless `--force`; a
+full install additionally warns when `BOARD` is non-default that the bundled
+bootloader (`31-Bootloader/boot.bin`) must be built for the same board, since its
+DRAM config is per-board (a mismatch bricks the gateway). The 6.18 production line
+is byte-for-byte unchanged.
+
+### Flash — preserve user-added files across a userdata reflash
+
+`flash_install_rtl8196e.sh` (upgrade path) and `flash_remote.sh userdata` already re-inject
+the saved config into the rebuilt `userdata.bin`; they now also carry over **anything the
+user added under `/userdata`** — a custom program in `usr/bin`, a hand-pushed
+`iperf3`/`ethtool`, a script, or a whole new directory (subdirectories and empty dirs
+included). The rule: every path the gateway has under `/userdata` that the fresh skeleton
+does not ship is preserved (files, symlinks and directories, with the executable bit kept);
+skeleton-shipped paths come from the new image (its version wins, never shadowed by the
+gateway's old copy), and *edits* to shipped files keep the shipped version — curated config
+edits are still re-injected by the separate save list. A shared
+`lib/ssh.sh:preserve_user_additions` does it best-effort over the existing SSH session
+(BusyBox-safe enumeration via `tar`, run after the config save so config is excluded
+automatically). First-flash-from-bootloader and a bare `34-Userdata/flash_userdata.sh` are
+unchanged — the latter still does a clean wipe.
+
+### Developer & QA tooling
+
+- **Functional test harnesses** (`32-Kernel/scripts/test_{leds,button,watchdog}.sh`):
+  host-side scripts that drive each peripheral over SSH and verify it. LEDs walks the
+  status/LAN LEDs through ON/DIM/OFF with software read-back; the button harness fakes
+  a press via `devmem` (no physical contact) and checks short-press, long-press →
+  `recover_efr32`, and the #131 LED restore; the watchdog harness validates the armed
+  state and, opt-in, a real panic → record → reboot → re-arm cycle.
+- **Portable per-release iperf3 bench** (`bench_release_iperf3.sh`): RX/TX with
+  inter-session medians and no `ethtool` dependency, for reproducible release gating.
+- **Cross-version TX comparison** (`bench_history_sweep.sh`): flashes a set of releases
+  in drift-cancelling randomized rounds (arming the bootloader via `devmem`, so it works
+  on early DTBs that predate the boothold node) to compare TCP-TX across versions without
+  session/thermal bias.
+- Prebuilt `iperf3` and `ethtool` MIPS binaries are committed next to their build scripts
+  so benching needs no rebuild (they are not part of the shipped userdata image).
 
 ---
 

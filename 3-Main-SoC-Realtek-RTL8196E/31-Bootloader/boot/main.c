@@ -406,6 +406,10 @@ void goToDownMode()
 	return;
 }
 
+/* swCore.c — full switch-core reset (active_swcore toggle), used to flush any
+ * in-flight CPU-port DMA before the kernel handoff. */
+extern void FullAndSemiReset(void);
+
 void goToLocalStartMode(unsigned long addr, IMG_HEADER_Tp pheader)
 {
 	unsigned short *word_ptr;
@@ -424,14 +428,20 @@ void goToLocalStartMode(unsigned long addr, IMG_HEADER_Tp pheader)
 
 		cli();
 		/*
-		 * Quiesce the switch PHY before handing off to the kernel. The
-		 * kernel re-inits the MAC, but until it does a live PHY lets the
-		 * switch DMA inbound frames into DRAM during early boot and corrupt
-		 * it — the intermittent post-flash boot loop. This is the auto-boot
-		 * counterpart of the same quiesce already done in the `J` command
-		 * (monitor.c) and in autoreboot() (tftpd.c); the path actually taken
-		 * on every boot was handing off with the PHY still live.
+		 * Quiesce the Ethernet switch before handing off to the kernel.
+		 * The kernel re-inits the MAC, but until it does, a live switch can
+		 * DMA inbound frames into DRAM during early boot and corrupt it —
+		 * the intermittent post-flash boot loop. Turning the PHY interface
+		 * off stops new ingress but NOT an already-armed DMA, so on the
+		 * auto-boot path (taken on every boot) first stop the CPU-port DMA
+		 * engine and hard-reset the switch core (the same active_swcore reset
+		 * swCore_init() runs on every boot, which aborts any in-flight
+		 * transfer), THEN hold the PHY off (the reset re-defaults PCRP, so
+		 * PHY-off must come after it). Counterpart of the same quiesce in the
+		 * `J` command (monitor.c) and autoreboot() (tftpd.c).
 		 */
+		WRITE_MEM32(CPUICR, 0); /* stop CPU-port RX/TX DMA */
+		FullAndSemiReset();	/* hard-reset switch core — flush in-flight DMA */
 		WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
 		WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
 		WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));

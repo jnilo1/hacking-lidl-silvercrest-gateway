@@ -10,20 +10,34 @@ boards/
 ├── README.md                 this file
 ├── lib_uart_config.sh        shared helper: applies BOARD_UART_* to a VCOM header
 ├── lidl/board.env            reference board (default)
-└── sengled-e39-g8c/board.env contributed (placeholder pending hardware validation)
+└── sengled-e39-g8c/board.env contributed, NCP validated on G4 hardware (#130)
 ```
 
 ## Usage
 
 ```bash
+# Build
 ./build_efr32.sh ncp                 # BOARD=lidl (default)
 BOARD=sengled-e39-g8c ./build_efr32.sh ncp ot-rcp
 BOARD=lidl ./24-NCP-UART-HW/build_ncp.sh   # per-firmware scripts honour BOARD too
+
+# Flash (repo root) — same BOARD= selector
+./flash_efr32.sh -y ncp                          # lidl (default), nothing to set
+BOARD=sengled-e39-g8c ./flash_efr32.sh -y ncp    # flashes the -<board>-suffixed GBL
 ```
 
-Scope today: **NCP** and **OT-RCP** are board-parameterised. RCP, Router and the
-Gecko bootloader remain lidl-only and are skipped for non-lidl boards until their
-builds learn `BOARD=`.
+Non-lidl artefacts keep the historical flat `firmware/` directory but carry a
+`-<board>` filename suffix (e.g. `ncp-uart-hw-7.5.1-115200-sengled-e39-g8c.gbl`),
+so the lidl reference firmware is never shadowed. `flash_efr32.sh` resolves that
+suffixed file for a non-lidl `BOARD=` and, because it always runs against a live
+gateway, **guards on `/proc/device-tree/model`**: it refuses to push a board's
+radio firmware to a different board (`lidl`→"Lidl", `sengled-e39-g8c`→"Sengled"),
+which also catches forgetting `BOARD=` on a non-lidl box. `--force` overrides.
+
+Scope today: **NCP** and **OT-RCP** are board-parameterised (build *and* flash).
+RCP, Router and the Gecko bootloader remain lidl-only — skipped for non-lidl
+boards on the build side, and refused with a clear message on the flash side —
+until their builds learn `BOARD=`.
 
 ## What `board.env` defines
 
@@ -48,13 +62,17 @@ for flow control differ between them and are supplied by each build script
 `none`→the respective `…None`). Software flow is a first-class SDK option, not
 a patch — the generated init code keys off the same `_FLOW_CONTROL_TYPE` token.
 
-> **G4 status:** `BOARD=sengled-e39-g8c` builds NCP and OT-RCP end-to-end (MG13
-> target, software flow). The NCP `.slcp` pinned the lidl MCU as a device
-> component, so the build re-points it at `BOARD_TARGET_DEVICE` before
+> **G4 status (validated, #130):** `BOARD=sengled-e39-g8c` builds NCP and OT-RCP
+> end-to-end (MG13 target, software flow). The NCP `.slcp` pinned the lidl MCU as
+> a device component, so the build re-points it at `BOARD_TARGET_DEVICE` before
 > `slc generate` (otherwise two device families link → duplicate symbols); for
-> lidl that is the same string, so its build is unchanged. The one thing still
-> missing is the real **USART/pin routing** — the placeholder uses Lidl pins, so
-> the image is structurally correct but electrically wrong until #130 lands.
+> lidl that is the same string, so its build is unchanged. The G4 wires the EFR32
+> UART on the **same USART/pins as Lidl** (USART0, PA0/PA1), confirmed on hardware
+> by @hlyi — so the firmware is electrically correct, not just structurally. The
+> **NCP** image was flashed to a real G4 and validated end-to-end (Home Assistant
+> talks to the radio); a prebuilt G4 NCP `.gbl` is committed. **OT-RCP** builds
+> for the G4 but its Thread path hasn't been functionally tested there yet — build
+> it yourself and validate over SWD before trusting it.
 
 ## Porting contract
 

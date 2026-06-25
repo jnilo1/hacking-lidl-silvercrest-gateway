@@ -21,6 +21,8 @@
 # Usage: ./create_fullflash.sh [--flash] [--boot-ip IP] [--output FILE]
 #
 # Environment variables (for non-interactive use):
+#   BOARD       - "lidl" (default) or "sengled-e39-g8c" (selects the kernel image)
+#   KERNEL      - "6.18" (default) or "7.1" (selects the kernel line)
 #   NET_MODE    - "static", "dhcp", or "skip"
 #   IPADDR      - Static IP address (default: 192.168.1.88)
 #   NETMASK     - Netmask (default: 255.255.255.0)
@@ -34,11 +36,27 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 
+# Shared (board, kernel) → pre-built kernel image resolver.
+. "${SCRIPT_DIR}/lib/kernel_image.sh"
+
+# BOARD (default lidl) and KERNEL (default 6.18) select the pre-built kernel
+# image; a Lidl user who sets neither gets the historical kernel-6.18.img.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+
 BOOTLOADER_IMG="${RTL_DIR}/31-Bootloader/boot.bin"
-KERNEL_IMG="${RTL_DIR}/32-Kernel/kernel-6.18.img"
+KERNEL_IMG="$(resolve_kernel_image "$BOARD" "$KERNEL")" || exit 1
 ROOTFS_IMG="${RTL_DIR}/33-Rootfs/rootfs.bin"
 USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
+
+# The full flash bundles 31-Bootloader/boot.bin, which is board-specific (DRAM
+# config). For a non-default board it must have been built for the SAME board or
+# the gateway can brick — we cannot read the board from the binary, so warn.
+if [ "$BOARD" != "lidl" ]; then
+    echo "Warning: BOARD=${BOARD} — make sure 31-Bootloader/boot.bin was built with" >&2
+    echo "  'BOARD=${BOARD} ./build_bootloader.sh'; a mismatched bootloader bricks the gateway (DRAM)." >&2
+fi
 
 OUTPUT="${SCRIPT_DIR}/fullflash.bin"
 BOOT_IP="${BOOT_IP:-192.168.1.6}"
@@ -72,7 +90,7 @@ while [ $# -gt 0 ]; do
             echo "  --boot-ip IP    Gateway IP in bootloader (default: 192.168.1.6)"
             echo "  --output FILE   Output path (default: fullflash.bin)"
             echo ""
-            echo "Environment: NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
+            echo "Environment: BOARD, KERNEL, NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -199,7 +217,7 @@ userdata_max=$((FLASH_SIZE - OFF_USERDATA)) # 12288 KiB
 
 echo "Image sizes (data written to flash):"
 echo "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
-echo "  kernel-6.18.img: $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
+echo "  $(basename "$KERNEL_IMG"): $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
 echo "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
 echo "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
 echo ""
@@ -210,7 +228,7 @@ if [ $boot_data -gt $boot_max ]; then
     OVERFLOW=1
 fi
 if [ $kernel_data -gt $kernel_max ]; then
-    echo "Error: kernel-6.18.img ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
+    echo "Error: $(basename "$KERNEL_IMG") ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
     OVERFLOW=1
 fi
 if [ $rootfs_data -gt $rootfs_max ]; then

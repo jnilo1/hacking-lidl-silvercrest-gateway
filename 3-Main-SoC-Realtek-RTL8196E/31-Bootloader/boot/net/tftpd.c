@@ -387,6 +387,10 @@ SIGN_T sign_tbl[] = { //  signature, name, sig_len, skip, maxSize, reboot
 #define MAX_SIG_TBL (sizeof(sign_tbl) / sizeof(SIGN_T))
 int autoBurn = 1;
 
+/* swCore.c — full switch-core reset (active_swcore toggle), used to flush any
+ * in-flight CPU-port DMA before a kernel handoff / watchdog reset. */
+extern void FullAndSemiReset(void);
+
 void autoreboot()
 {
 	volatile unsigned int d;
@@ -410,15 +414,20 @@ void autoreboot()
 	cli();
 	/*
 	 * Quiesce the Ethernet switch before the watchdog reset. The watchdog
-	 * reset preserves DRAM (that is how the boothold flag survives across
-	 * it) and does not fully reset the switch DMA engine — so a flash that
-	 * has just finished a large TFTP transfer can leave the switch DMAing
-	 * incoming frames into DRAM across the reset and into early kernel boot,
-	 * corrupting it (intermittent post-flash boot loop). Disabling the PHY
-	 * interface on every port stops that, mirroring the direct-jump-to-kernel
-	 * path in monitor.c which already does this "to prevent ethernet [from
-	 * disturbing] Linux kernel booting".
+	 * reset preserves DRAM (that is how the boothold flag survives across it)
+	 * and does NOT reset the switch DMA engine — so a flash that has just
+	 * finished a large TFTP transfer can leave the switch DMAing incoming
+	 * frames into DRAM across the reset and into early kernel boot, corrupting
+	 * it (the intermittent post-flash boot loop). Turning the PHY interface
+	 * off stops new ingress but NOT an already-armed DMA — which is why a
+	 * ~1.4 MiB kernel flash recovered yet a 16 MiB full-flash still looped.
+	 * So first stop the CPU-port DMA engine and hard-reset the switch core
+	 * (the same active_swcore reset swCore_init() runs on every boot, which
+	 * aborts any in-flight transfer), THEN hold the PHY interface off (the
+	 * reset re-defaults PCRP, so PHY-off must come after it).
 	 */
+	WRITE_MEM32(CPUICR, 0); /* stop CPU-port RX/TX DMA (clears TXCMD|RXCMD) */
+	FullAndSemiReset();	/* hard-reset switch core — flush in-flight DMA */
 	WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
 	WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
 	WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));

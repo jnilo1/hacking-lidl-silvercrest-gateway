@@ -1,0 +1,10 @@
+--- a/arch/mips/kernel/Makefile
++++ b/arch/mips/kernel/Makefile
+@@ -44,6 +44,7 @@
+ 
+ sw-y				:= r4k_switch.o
+ sw-$(CONFIG_CPU_R3000)		:= r2300_switch.o
++sw-$(CONFIG_CPU_RLX4181)	:= r2300_switch.o
+ sw-$(CONFIG_CPU_CAVIUM_OCTEON)	:= octeon_switch.o
+ obj-y				+= $(sw-y)
+ 

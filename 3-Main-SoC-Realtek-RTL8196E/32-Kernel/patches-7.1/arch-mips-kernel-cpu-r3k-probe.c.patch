@@ -1,0 +1,20 @@
+--- a/arch/mips/kernel/cpu-r3k-probe.c
++++ b/arch/mips/kernel/cpu-r3k-probe.c
+@@ -117,6 +117,17 @@
+ 			c->options |= MIPS_CPU_FPU;
+ 		c->tlbsize = 64;
+ 		break;
++	case PRID_COMP_LEGACY | PRID_IMP_LX4380: {
++		/* Lexra LX4380 / Realtek RLX4181 (R3000-class, no FPU, no ll/sc) */
++		extern void lexra_cache_init(void);
++		c->cputype = CPU_RLX4181;
++		__cpu_name[cpu] = "Lexra LX4380 / RLX4181";
++		c->options = MIPS_CPU_TLB | MIPS_CPU_3K_CACHE | MIPS_CPU_NOFPUEX;
++		c->ases = MIPS_ASE_MIPS16;
++		c->tlbsize = 32;
++		lexra_cache_init();
++		break;
++	}
+ 	}
+ 
+ 	BUG_ON(!__cpu_name[cpu]);

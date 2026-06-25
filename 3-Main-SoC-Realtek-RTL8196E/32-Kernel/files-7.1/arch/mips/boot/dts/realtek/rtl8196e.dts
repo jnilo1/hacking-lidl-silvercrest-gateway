@@ -1,0 +1,207 @@
+// SPDX-License-Identifier: GPL-2.0
+/dts-v1/;
+#include <dt-bindings/gpio/gpio.h>
+#include "rtl819x.dtsi"
+
+/ {
+	compatible = "realtek,rtl8196e", "realtek,rtl819x-soc";
+	model = "Lidl Silvercrest Gateway";
+
+	chosen {
+	    bootargs = "console=ttyS0,38400 loglevel=7 root=/dev/mtdblock2 rootfstype=squashfs";
+	};
+
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x02000000>;  /* 32MB */
+	};
+
+	reserved-memory {
+		#address-cells = <1>;
+		#size-cells = <1>;
+		ranges;
+
+		/* One 4 KB page, high DRAM just below the btcode stack, shared
+		 * by three consumers that address it RELATIVE to this node:
+		 *   - boothold flag words at the page TOP (boothold tool reads
+		 *     this node at runtime via /sys/firmware/devicetree),
+		 *   - the watchdog panic record at the page BASE (bound via
+		 *     the memory-region phandle below),
+		 *   - the bootloader read side (compile-time constant per
+		 *     board — must match this address).
+		 * A board with a different DRAM size relocates the node (and
+		 * must keep the boothold: label so the phandle resolves). */
+		boothold: boothold@1ffe000 {
+			reg = <0x01FFE000 0x1000>;  /* 4KB reserved for boothold flag (high DRAM, just below btcode stack) */
+			no-map;
+		};
+	};
+
+	leds {
+		compatible = "gpio-leds-pwm";
+
+		status-led {
+			label = "status";
+			gpios = <&gpio0 11 GPIO_ACTIVE_LOW>;
+			default-state = "off";
+		};
+
+		/* LAN LED (pad B6 / LED_PORT4, see realtek,led-pads below) is
+		 * driven by the switch ASIC LED controller — GPIO has no
+		 * effect on it.  Controlled via LEDCREG in the Ethernet
+		 * driver. */
+	};
+
+	/* Board wiring of the EFR32 radio link, consumed by the in-kernel
+	 * rtl8196e-uart-bridge at init to seed its defaults.  Module
+	 * parameters (kernel cmdline or sysfs) override these values.
+	 * The node is optional: without it the driver falls back to the
+	 * Lidl defaults (nRST on GPIO 12 / pad B4, hardware flow control).
+	 * No platform driver binds here — the bridge looks the node up by
+	 * compatible; the resulting unbound platform device is harmless.
+	 *
+	 * realtek,hw-flow-control: a board-capability boolean — present means
+	 * the EFR32 UART has RTS/CTS physically wired (the Lidl case). It sets
+	 * the flow_control default to hw and caps it (an hw request on a board
+	 * without it is clamped to sw). It is NOT a firmware-mode selection:
+	 * the runtime mode is chosen via radio.conf FIRMWARE_FLOW_CTRL, which
+	 * S50uart_bridge/S70otbr write to the sysfs flow_control knob. */
+	radio-bridge {
+		compatible = "realtek,rtl8196e-uart-bridge";
+		nrst-gpios = <&gpio0 12 (GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN)>;
+		realtek,hw-flow-control;
+	};
+};
+
+/* Activation de l'UART0 pour la console */
+&uart0 {
+	status = "okay";
+};
+
+&uart1 {
+	status = "okay";
+};
+
+&gpio0 {
+	status = "okay";
+
+	/* Board-level names for the SoC GPIO lines (ports A..D, 8 bits
+	 * each).  Userspace finds lines by name through the GPIO cdev
+	 * (s40button looks up "reset-button"), so a different board only
+	 * needs to move the names — no code change.  Unwired lines stay
+	 * empty. */
+	gpio-line-names =
+		"", "", "", "", "", "", "", "",			/* A0-A7  */
+		"", "reset-button", "", "status-led",		/* B0-B3  */
+		"efr32-nrst", "", "", "",			/* B4-B7  */
+		"", "", "", "", "", "", "", "",			/* C0-C7  */
+		"", "", "", "", "", "", "", "";			/* D0-D7  */
+
+	/* Shared pads B2-B6 (lines 10-14) that the board wires to the
+	 * switch's link/activity LED outputs.  The ethernet driver muxes
+	 * listed pads to the ASIC LED function (PIN_MUX_SEL_2 field 0b00),
+	 * named pads to GPIO, and pads in neither set to unclaimed GPIO
+	 * (Hi-Z).  On both known boards the LED pad follows the Table 36
+	 * pad<->LED_PORTn naming for the member port (Lidl: port 4 ->
+	 * B6/LED_PORT4, Sengled G4: port 0 -> B2/LED_PORT0), but it stays
+	 * declared rather than derived from member-ports: it is a wiring
+	 * fact a port mask cannot prove (a member port may have no LED
+	 * wired), and only a visual check does — this value first shipped
+	 * as B2 and the dead LED was caught by eye, not by register
+	 * readback (#126).  Boards overriding gpio-line-names must also
+	 * override this property (the Sengled G4 does).  Without it every
+	 * unnamed pad falls back to the ASIC LED function. */
+	realtek,led-pads = <14>;			/* B6: LAN LED */
+};
+
+&watchdog {
+	status = "okay";
+	/* Storage for the panic post-mortem record (base of the boothold
+	 * page). Without this property — or without the reservation — the
+	 * driver disables the post-mortem feature; the watchdog itself is
+	 * unaffected. */
+	memory-region = <&boothold>;
+};
+
+/* Configuration SPI Flash */
+&spi0 {
+	status = "okay";
+	
+	flash@0 {
+		compatible = "jedec,spi-nor";
+		reg = <0>;
+		spi-max-frequency = <25000000>;
+		
+		partitions {
+			compatible = "fixed-partitions";
+			#address-cells = <1>;
+			#size-cells = <1>;
+			
+			partition@0 {
+				label = "boot+cfg";
+				reg = <0x000000 0x020000>;      /* 128 KB */
+				read-only;
+			};
+			
+			partition@20000 {
+				label = "linux";
+				reg = <0x020000 0x1e0000>;      /* 1920 KB (1.9 MB) */
+			};
+			
+			partition@200000 {
+				label = "rootfs";
+				reg = <0x200000 0x200000>;      /* 2 MB  */
+			};
+
+			partition@420000 {
+				label = "jffs2-fs";
+				reg = <0x400000 0xc00000>;      /* 12 MB */
+			};
+		};
+	};
+};
+
+/* Ethernet configuration */
+&ethernet {
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	/* DT v3.0: Full VLAN configuration with multi-interface support
+	 * Each child node represents one network interface (eth0, eth1, etc.)
+	 * Replaces hardcoded vlanconfig[] array in rtl_nic.c:260-267
+	 */
+
+	interface@0 {
+		reg = <0>;
+		ifname = "eth0";
+
+		/* No local-mac-address: driver randomises at boot.
+		 * S10network generates a stable locally-administered MAC on first
+		 * boot, persists it to /userdata/etc/mac_address, and restores it
+		 * on every subsequent boot via "ifconfig eth0 hw ether <mac>". */
+
+		/* VLAN configuration */
+		vlan-id = <1>;              /* VLAN ID (VID) */
+		forwarding-id = <0>;        /* Forwarding database ID (FID) */
+		member-ports = <0x10>;      /* Port mask: 0x10 = port 4 (bit 4 set) */
+		untag-ports = <0x10>;       /* Untagged port mask: port 4 untagged */
+		is-wan = <0>;               /* 0 = LAN interface, 1 = WAN interface */
+		mtu = <1500>;               /* Maximum transmission unit */
+	};
+
+	/* Example for future eth1/WAN interface:
+	 *
+	 * interface@1 {
+	 *     reg = <1>;
+	 *     ifname = "eth1";
+	 *     local-mac-address = [02 14 B8 EE B7 55];
+	 *     vlan-id = <2>;
+	 *     forwarding-id = <0>;
+	 *     member-ports = <0x20>;    // Port 5 (bit 5)
+	 *     untag-ports = <0x20>;
+	 *     is-wan = <1>;             // WAN interface
+	 *     mtu = <1500>;
+	 * };
+	 */
+};

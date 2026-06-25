@@ -5,6 +5,10 @@ gateway's hardware. It includes component identification, debug interface
 pinout, and serial specifications to help you understand and repurpose the
 device.
 
+> **Other boards:** the RTL8196E sits in several near-identical hubs. See
+> [Sengled Smart Hub G4 (E39-G8C)](./sengled-e39-g8c/README.md) for that board's
+> hardware notes; the firmware builds for it with `BOARD=sengled-e39-g8c`.
+
 ______________________________________________________________________
 
 ## 🧱 Physical Construction

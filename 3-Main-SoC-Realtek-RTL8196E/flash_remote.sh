@@ -29,6 +29,8 @@
 #                  (sudo apt install sshpass).
 #   NET_MODE     - "static" or "dhcp" (skip network prompt, userdata only)
 #   RADIO_MODE   - "zigbee" or "thread" (skip radio prompt, userdata only)
+#   BOARD        - "lidl" (default) or "sengled-e39-g8c" (kernel component)
+#   KERNEL       - "6.18" (default) or "7.1" (kernel component)
 #   CONFIRM      - Set to "y" to skip confirmation prompts (same as -y)
 #
 # J. Nilo - March 2026
@@ -41,6 +43,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Sourced before argument parsing so valid_ipv4 can vet --boot-ip / BOOT_IP.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/../lib/ssh.sh"
+# (board, kernel) validation + image resolver (kernel_image_validate).
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../lib/kernel_image.sh"
 
 # --- argument parsing --------------------------------------------------------
 
@@ -50,9 +55,15 @@ LINUX_IP=""
 # captured into BOOT_IP_FLAG during parsing and applied after the loop.
 BOOT_IP="${BOOT_IP:-192.168.1.6}"
 BOOT_IP_FLAG=""
-# Optional kernel-image override, forwarded to flash_kernel.sh --image
-# (e.g. --image kernel-7.1.img). Honored for the kernel component only.
+# Optional kernel-image override, forwarded to flash_kernel.sh --image (e.g.
+# --image kernel-img/lidl/kernel-7.1.img). Honored for the kernel component only.
 IMAGE_OVERRIDE=""
+# BOARD/KERNEL pick the pre-built kernel image (kernel component only),
+# forwarded to flash_kernel.sh. Defaults reproduce the Lidl 6.18 path.
+# FORCE overrides the board-mismatch guard.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+FORCE=0
 SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
 
 usage() {
@@ -69,10 +80,15 @@ usage() {
     echo "  -y, --yes        Non-interactive mode (skip all prompts)"
     echo "  --boot-ip <IP|host>  Bootloader-mode / TFTP server IP (overrides BOOT_IP"
     echo "                   env; default: 192.168.1.6). A hostname is resolved host-side."
-    echo "  --image <file>   Kernel image to flash (kernel component only; default"
-    echo "                   kernel-6.18.img). E.g. --image kernel-7.1.img."
+    echo "  --board <name>   Board image (kernel component; default lidl; also"
+    echo "                   sengled-e39-g8c). Overrides the BOARD env var."
+    echo "  --kernel <line>  Kernel line (kernel component; default 6.18; also 7.1)."
+    echo "                   Overrides the KERNEL env var."
+    echo "  --image <file>   Explicit kernel image (kernel component; overrides"
+    echo "                   --board/--kernel). E.g. --image kernel-img/lidl/kernel-7.1.img."
+    echo "  --force          Skip the board-mismatch safety check."
     echo ""
-    echo "Environment: BOOT_IP (default: 192.168.1.6), SSH_TIMEOUT,"
+    echo "Environment: BOOT_IP (default: 192.168.1.6), BOARD, KERNEL, SSH_TIMEOUT,"
     echo "  SSH_PASSWORD (sshpass), NET_MODE, RADIO_MODE, CONFIRM"
     exit 1
 }
@@ -93,6 +109,19 @@ while [ $# -gt 0 ]; do
             IMAGE_OVERRIDE="$1"
             ;;
         --image=*) IMAGE_OVERRIDE="${1#*=}" ;;
+        --board)
+            shift
+            [ $# -gt 0 ] || { echo "Error: --board requires an argument." >&2; exit 1; }
+            BOARD="$1"
+            ;;
+        --board=*) BOARD="${1#*=}" ;;
+        --kernel)
+            shift
+            [ $# -gt 0 ] || { echo "Error: --kernel requires an argument." >&2; exit 1; }
+            KERNEL="$1"
+            ;;
+        --kernel=*) KERNEL="${1#*=}" ;;
+        --force) FORCE=1 ;;
         --*) echo "Unknown option: $1. Use --help for usage." >&2; exit 1 ;;
         *)
             if [ -z "$COMPONENT" ]; then
@@ -141,6 +170,12 @@ if [ ! -f "${FLASH_DIR}/${FLASH_SCRIPT}" ]; then
     exit 1
 fi
 
+# Validate BOARD/KERNEL early (kernel component, no explicit --image) so a typo
+# fails before we touch the gateway. flash_kernel.sh resolves the real image.
+if [ "$COMPONENT" = "kernel" ] && [ -z "$IMAGE_OVERRIDE" ]; then
+    kernel_image_validate "$BOARD" "$KERNEL" || exit 1
+fi
+
 # --- helpers ------------------------------------------------------------------
 
 # Check if bootloader is reachable (ARP resolves on BOOT_IP)
@@ -157,6 +192,35 @@ bootloader_reachable() {
     local nei
     nei="$(ip neigh show "$BOOT_IP" dev "$iface" 2>/dev/null || true)"
     echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'
+}
+
+# check_board_match <board> — refuse to flash a kernel built for a different
+# board than the one currently running. /proc/device-tree/model on the gateway
+# identifies the hardware (set by the running DTB). cat runs on the gateway
+# (BusyBox has no tr); the trailing NUL is stripped host-side. An unreadable or
+# unrecognised model is non-fatal — warn and proceed rather than block the
+# common path on an unexpected string. Returns non-zero only on a clear
+# mismatch (caller exits unless --force).
+check_board_match() {
+    local want="$1" model sig
+    model="$(ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" "cat /proc/device-tree/model" 2>/dev/null | tr -d '\0' || true)"
+    if [ -z "$model" ]; then
+        echo "Note: could not read the gateway's board model — skipping board check." >&2
+        return 0
+    fi
+    case "$want" in
+        lidl)            sig="Lidl" ;;
+        sengled-e39-g8c) sig="Sengled" ;;
+        *)               return 0 ;;
+    esac
+    if printf '%s' "$model" | grep -q "$sig"; then
+        return 0
+    fi
+    echo "Error: board mismatch — selected BOARD='$want', but the gateway reports:" >&2
+    echo "         model = \"$model\"" >&2
+    echo "  Flashing a kernel built for a different board will not boot correctly." >&2
+    echo "  Re-run with the matching BOARD=, or pass --force to override." >&2
+    return 1
 }
 
 # --- step 1: detect gateway state -------------------------------------------
@@ -223,6 +287,11 @@ if ! ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" "command -v devmem" >/dev/null 2>&
     exit 1
 fi
 
+# Board-mismatch guard (kernel component, no explicit --image). --force skips it.
+if [ "$COMPONENT" = "kernel" ] && [ -z "$IMAGE_OVERRIDE" ] && [ "$FORCE" != "1" ]; then
+    check_board_match "$BOARD" || exit 1
+fi
+
 # --- step 3: preserve config before reboot (userdata only) ------------------
 
 CONFIG_PRESERVED=""
@@ -234,7 +303,8 @@ if [ "$COMPONENT" = "userdata" ]; then
     export SKELETON_DIR="$SKEL_WORK"
 
     SAVE_TAR=$(mktemp)
-    # Save only user-configurable files (not init scripts or system files)
+    # Save user-configurable files (not init scripts or system files). Other
+    # user-added paths under /userdata are preserved separately below.
     SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
     ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" \
         "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
@@ -247,6 +317,11 @@ if [ "$COMPONENT" = "userdata" ]; then
         echo "Warning: could not save config from gateway."
     fi
     rm -f "$SAVE_TAR"
+
+    # Also carry any user-added paths under /userdata (custom programs, scripts,
+    # whole new directories) — anything not shipped in the skeleton and not
+    # already re-injected above — across the reflash.
+    preserve_user_additions "$SKEL_WORK" "$SSH_TARGET" "${SSH_OPTS[@]}"
 fi
 
 # --- step 4: send boothold + reboot ------------------------------------------
@@ -326,8 +401,13 @@ if [ "$COMPONENT" = "userdata" ]; then
         export RADIO_MODE="${RADIO_MODE:-zigbee}"
     fi
 fi
-# Forward an explicit kernel image to flash_kernel.sh when requested. Only
-# the kernel script understands --image; warn (don't fail) for the others.
+# Forward the kernel selection to flash_kernel.sh. An explicit --image wins over
+# BOARD/KERNEL (flash_kernel.sh resolves the image from the exported BOARD/KERNEL
+# when no --image is given). Only the kernel script understands --image; warn
+# (don't fail) for the others.
+if [ "$COMPONENT" = "kernel" ]; then
+    export BOARD KERNEL
+fi
 FLASH_ARGS=("$BOOT_IP")
 if [ -n "$IMAGE_OVERRIDE" ]; then
     if [ "$COMPONENT" = "kernel" ]; then

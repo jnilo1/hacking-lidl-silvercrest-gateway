@@ -77,11 +77,21 @@ Options:
       --firmware-file PATH
                      Flash this exact .gbl file instead of resolving by glob
   -y, --yes          Skip the "Flash?" confirmation prompt
+      --board NAME   Board to flash for (default: lidl). A non-lidl board
+                     flashes its -<board>-suffixed NCP/OT-RCP firmware. Also
+                     settable via the BOARD env var (this flag wins).
+      --force        Skip the board-match guard (flash even if the gateway's
+                     devicetree model disagrees with the selected board)
       --no-reboot    Do not reboot the gateway after a successful flash
                      (useful for chaining multiple invocations)
   -h, --help         Show this help and exit
 
 Environment variables:
+  BOARD          Board to flash for (default: lidl; e.g. sengled-e39-g8c for
+                 the Sengled Smart Hub G4). A Lidl user sets nothing. The
+                 gateway's devicetree model is checked against this before
+                 flashing (override with --force). Only ncp and otrcp are
+                 board-parameterised; rcp/router/bootloader are lidl-only.
   SSH_PASSWORD   Root password for non-interactive password auth (CI / no
                  tty). When set, the first ssh call is fed via sshpass and
                  the ControlMaster takes over for the rest. Requires
@@ -102,6 +112,7 @@ Examples:
   flash_efr32.sh -y ncp 460800              # NCP @ 460800
   flash_efr32.sh -y -g 10.0.0.5 otrcp       # OT-RCP on a custom IP
   flash_efr32.sh -y --firmware-file ./fw.gbl ncp 460800
+  BOARD=sengled-e39-g8c flash_efr32.sh -y ncp   # NCP on the Sengled G4
   SSH_PASSWORD=root flash_efr32.sh -y ncp   # Non-interactive password
 USAGE
 }
@@ -125,6 +136,8 @@ GW_IP=
 NO_REBOOT=
 CONFIRM_FLAG=
 FIRMWARE_FILE=
+board_arg=
+FORCE=
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -148,6 +161,16 @@ while [ $# -gt 0 ]; do
                            FIRMWARE_FILE="$1"; shift
                            ;;
         --firmware-file=*) FIRMWARE_FILE="${1#--firmware-file=}"; shift ;;
+        --board)
+                           shift
+                           if [ $# -eq 0 ]; then
+                               echo "Error: --board requires an argument." >&2
+                               exit 1
+                           fi
+                           board_arg="$1"; shift
+                           ;;
+        --board=*)         board_arg="${1#--board=}"; shift ;;
+        --force)           FORCE=1; shift ;;
         --no-reboot)       NO_REBOOT=1; shift ;;
         --)                shift; break ;;
         -*)
@@ -257,6 +280,22 @@ ssh_gw() {
 
 FW_DIR="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32"
 
+# --- Board selection -------------------------------------------------------
+#
+# BOARD picks which board's firmware to flash (default lidl). A Lidl user sets
+# nothing. A non-lidl board flashes its `-<board>`-suffixed NCP/OT-RCP firmware,
+# built from boards/<board>/board.env (see 2-Zigbee-Radio-Silabs-EFR32/boards/
+# README.md). RCP/Router/Bootloader stay lidl-only. The --board flag wins over
+# the BOARD env var, which wins over the default.
+BOARD="${board_arg:-${BOARD:-lidl}}"
+if [ ! -f "${FW_DIR}/boards/${BOARD}/board.env" ]; then
+    echo "Error: unknown BOARD='${BOARD}'." >&2
+    echo "Available boards: $(cd "${FW_DIR}/boards" 2>/dev/null && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# Prefix for the example commands we echo back (empty for lidl).
+if [ "$BOARD" = "lidl" ]; then BOARD_PREFIX=""; else BOARD_PREFIX="BOARD=${BOARD} "; fi
+
 # --- Firmware × baud matrix ------------------------------------------------
 #
 # v3.1 ships pre-built GBLs at multiple bauds. Filenames embed the baud:
@@ -302,13 +341,27 @@ FW_BTL="${FW_DIR}/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-2.4.
 # the implicit choice. Use --firmware-file to make the image selection explicit.
 resolve_firmware() {
     local choice="$1" baud="$2"
-    local pattern dir build_dir build_script
+    local pattern dir build_dir build_script bsuf=""
     local candidates candidate_count
+
+    # Per-board selection. Only NCP (2) and OT-RCP (4) are board-parameterised;
+    # their non-lidl artefacts carry a -<board> filename suffix in the same flat
+    # firmware/ dir. RCP/Router/Bootloader are lidl-only. An explicit
+    # --firmware-file bypasses all board logic (power-user escape hatch).
+    if [ -z "$FIRMWARE_FILE" ] && [ "$BOARD" != "lidl" ]; then
+        case "$choice" in
+            2|4) bsuf="-${BOARD}" ;;
+            *) echo "Error: BOARD=${BOARD}: only 'ncp' and 'otrcp' are board-parameterised." >&2
+               echo "       rcp/router/bootloader are lidl-only — build/flash them with the" >&2
+               echo "       default lidl, or pass --firmware-file to flash an exact image." >&2
+               exit 1 ;;
+        esac
+    fi
     case "$choice" in
         1) FIRMWARE="${FIRMWARE_FILE:-$FW_BTL}"; FW_LABEL="Gecko Bootloader"; return 0 ;;
-        2) build_dir="24-NCP-UART-HW";  build_script="build_ncp.sh";    pattern="ncp-uart-hw-*-${baud}.gbl";   FW_LABEL="NCP-UART-HW @ ${baud} baud" ;;
+        2) build_dir="24-NCP-UART-HW";  build_script="build_ncp.sh";    pattern="ncp-uart-hw-*-${baud}${bsuf}.gbl";   FW_LABEL="NCP-UART-HW @ ${baud} baud" ;;
         3) build_dir="25-RCP-UART-HW";  build_script="build_rcp.sh";    pattern="rcp-uart-802154-${baud}.gbl"; FW_LABEL="RCP-UART-HW @ ${baud} baud" ;;
-        4) build_dir="26-OT-RCP";       build_script="build_ot_rcp.sh"; pattern="ot-rcp-${baud}.gbl";          FW_LABEL="OT-RCP @ ${baud} baud" ;;
+        4) build_dir="26-OT-RCP";       build_script="build_ot_rcp.sh"; pattern="ot-rcp-${baud}${bsuf}.gbl";          FW_LABEL="OT-RCP @ ${baud} baud" ;;
         5) build_dir="27-Router";       build_script="build_router.sh"; pattern="z3-router-*-${baud}.gbl";     FW_LABEL="Z3-Router @ ${baud} baud" ;;
         *) echo "Invalid firmware choice: $choice" >&2; exit 1 ;;
     esac
@@ -330,8 +383,8 @@ resolve_firmware() {
     FIRMWARE=$(printf '%s\n' "$candidates" | sed '/^$/d' | head -1)
     if [ -z "$FIRMWARE" ] || [ ! -f "$FIRMWARE" ]; then
         echo "Error: no GBL found matching $dir/$pattern" >&2
-        echo "       Build with: cd 2-Zigbee-Radio-Silabs-EFR32/${build_dir} && ./${build_script} ${baud}" >&2
-        echo "       Or run: cd 2-Zigbee-Radio-Silabs-EFR32 && ./make-all-bauds.sh" >&2
+        echo "       Build with: cd 2-Zigbee-Radio-Silabs-EFR32/${build_dir} && ${BOARD_PREFIX}./${build_script} ${baud}" >&2
+        echo "       Or run: cd 2-Zigbee-Radio-Silabs-EFR32 && ${BOARD_PREFIX}./make-all-bauds.sh" >&2
         exit 1
     fi
     if [ "$candidate_count" -gt 1 ]; then
@@ -407,6 +460,7 @@ fi
 echo ""
 echo "Firmware: $(basename "$FIRMWARE")"
 echo "Image:    $FIRMWARE"
+[ "$BOARD" != "lidl" ] && echo "Board:    ${BOARD}"
 echo "Gateway:  ${GW_IP}:${GW_PORT}"
 echo ""
 
@@ -563,6 +617,10 @@ fi
 emit MODE "$MODE"
 emit CFG_BAUD "$FIRMWARE_BAUD_CFG"
 
+# Board model from the devicetree — authoritative since this script always runs
+# against a live gateway. The trailing NUL is dropped by command substitution.
+emit MODEL "$(cat /proc/device-tree/model 2>/dev/null)"
+
 ARMED=$(cat "$BRIDGE_SYSFS/armed" 2>/dev/null || echo 0)
 SELF_ARMED=0
 
@@ -631,6 +689,7 @@ CONFIG_BAUD=$(detect_get CFG_BAUD)
 CURRENT_BAUD=$(detect_get BAUD)
 SELF_ARMED=$(detect_get SELF_ARMED)
 PEER=$(detect_get PEER)
+GW_MODEL=$(detect_get MODEL)
 
 case "$DETECT_STATUS" in
     ok) ;;
@@ -660,6 +719,32 @@ case "$DETECT_STATUS" in
         exit 1
         ;;
 esac
+
+# --- Board-match guardrail -------------------------------------------------
+#
+# flash_efr32 always runs against a live gateway, so /proc/device-tree/model is
+# authoritative: refuse to push a board's radio firmware to a different board.
+# The effective BOARD is the explicit --board/BOARD= or the default lidl, so this
+# also catches the common slip — forgetting BOARD= on a G4 box (effective lidl
+# vs a "Sengled" model). Skipped only if the model is unreadable; --force bypasses.
+if [ "$FORCE" != "1" ] && [ -n "$GW_MODEL" ]; then
+    case "$BOARD" in
+        lidl)            want_sig="Lidl" ;;
+        sengled-e39-g8c) want_sig="Sengled" ;;
+        *)               want_sig="" ;;   # board with no known model signature
+    esac
+    if [ -n "$want_sig" ] && ! printf '%s' "$GW_MODEL" | grep -q "$want_sig"; then
+        echo "Error: board mismatch — selected BOARD='${BOARD}', but ${GW_IP} reports:" >&2
+        echo "         model = \"${GW_MODEL}\"" >&2
+        case "$GW_MODEL" in
+            *Sengled*) echo "  This looks like a Sengled G4 — re-run with BOARD=sengled-e39-g8c." >&2 ;;
+            *Lidl*)    echo "  This looks like a Lidl gateway — re-run with BOARD=lidl (the default)." >&2 ;;
+        esac
+        echo "  Flashing another board's radio firmware is wrong for this hardware." >&2
+        echo "  Re-run with the matching BOARD=, or pass --force to override." >&2
+        exit 1
+    fi
+fi
 
 # Refuse to flash if another TCP client is already attached. The bridge
 # silently replaces clients (rtl8196e_uart_bridge_main.c "replacing
@@ -1104,10 +1189,10 @@ if [ "$IS_BOOTLOADER_FLASH" = "1" ]; then
     echo ""
     echo "Bootloader flashed successfully. The app slot is now empty."
     echo "Flash an application firmware with one of:"
-    echo "  ./flash_efr32.sh -y ncp     ${GW_IP:+--gateway $GW_IP}"
-    echo "  ./flash_efr32.sh -y rcp     ${GW_IP:+--gateway $GW_IP}"
-    echo "  ./flash_efr32.sh -y otrcp   ${GW_IP:+--gateway $GW_IP}"
-    echo "  ./flash_efr32.sh -y router  ${GW_IP:+--gateway $GW_IP}"
+    echo "  ${BOARD_PREFIX}./flash_efr32.sh -y ncp     ${GW_IP:+--gateway $GW_IP}"
+    echo "  ${BOARD_PREFIX}./flash_efr32.sh -y rcp     ${GW_IP:+--gateway $GW_IP}"
+    echo "  ${BOARD_PREFIX}./flash_efr32.sh -y otrcp   ${GW_IP:+--gateway $GW_IP}"
+    echo "  ${BOARD_PREFIX}./flash_efr32.sh -y router  ${GW_IP:+--gateway $GW_IP}"
     FLASH_OK=1
     exit 0
 fi

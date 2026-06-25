@@ -1,0 +1,102 @@
+# SPDX-License-Identifier: GPL-2.0
+if REALTEK
+
+choice
+	prompt "Realtek SoC selection"
+	default SOC_RTL8196E
+	help
+	  Select Realtek SoC type.
+
+	config SOC_RTL8196E
+		bool "RTL8196E"
+		select USE_GENERIC_EARLY_PRINTK_8250
+		select SYS_SUPPORTS_BIG_ENDIAN
+		select SYS_HAS_CPU_RLX4181
+		select HW_HAS_PCI
+		select GPIOLIB
+		select GPIO_GENERIC
+		select GPIOLIB_IRQCHIP
+		select RTL819X_INTC
+		select CLKSRC_RTL819X
+		select SYS_SUPPORTS_ZBOOT
+		select SYS_SUPPORTS_ZBOOT_UART16550
+
+endchoice
+
+choice
+	prompt "Devicetree selection"
+	default DTB_RTK_NONE
+	help
+	  Select the board devicetree built into the kernel image.
+	  Exactly one dtb is linked in (BUILTIN_DTB / __dtb_start).
+
+	  To add a board: write the dts in arch/mips/boot/dts/realtek/
+	  (include rtl819x.dtsi, override memory size, gpio-line-names,
+	  the radio-bridge node and the ethernet interface), add a
+	  choice entry here and the dtb- line in that directory's
+	  Makefile. build_kernel.sh selects the entry via BOARD=<name>.
+
+	config DTB_RTK_NONE
+		bool "None"
+
+	config DTB_RTL8196E_GEN
+		bool "Lidl Silvercrest Gateway (rtl8196e.dtb)"
+		depends on SOC_RTL8196E
+		select BUILTIN_DTB
+
+	config DTB_RTL8196E_SENGLED_E39_G8C
+		bool "Sengled Smart Hub G4 E39-G8C (rtl8196e-sengled-e39-g8c.dtb)"
+		depends on SOC_RTL8196E
+		select BUILTIN_DTB
+
+endchoice
+
+config RTL8196E_IMEM
+	bool "Use on-chip I-MEM for hot-path functions"
+	depends on SOC_RTL8196E
+	default y
+	help
+	  Place hot-path functions (IRQ dispatch, NAPI poll, TX submit,
+	  DMA cache ops) in the 16 KB on-chip instruction SRAM (I-MEM)
+	  for zero wait-state instruction fetch.  The RLX4181 COP3
+	  coprocessor maps a 16 KB SDRAM region to the on-chip SRAM
+	  at boot time via IRAM Fill.
+
+	  If unsure, say Y.
+
+config RTL8196E_IMEM_DEFAULT_PLACEMENT
+	bool "Place the default set of hot functions in I-MEM"
+	depends on RTL8196E_IMEM
+	default y
+	help
+	  When enabled (the production default), the existing __iram /
+	  __iram_hotpath / __iram_gen / __iram_fwd annotations scattered
+	  across the tree resolve to real section attributes, and the
+	  matching functions are loaded into on-chip I-MEM at boot.
+
+	  When disabled, those annotations expand to nothing.  Functions
+	  marked with the dedicated __iram_poc macro still get placed
+	  (controlled by RTL8196E_IMEM_POC_IRAM below), which lets the
+	  IRAM PoC isolate one or two specific functions in I-MEM without
+	  competing for the 16 KB budget with the rest of the default set.
+
+	  Disable only for IRAM PoC measurements.  Keep Y for production.
+
+config RTL8196E_IMEM_POC_IRAM
+	bool "Activate __iram_poc placement (PoC code in I-MEM)"
+	depends on RTL8196E_IMEM
+	default n
+	help
+	  When enabled, functions annotated with __iram_poc are placed in
+	  the .iram linker section and loaded into on-chip I-MEM.  Used
+	  by the IRAM PoC to opt one or two specific functions into IRAM
+	  in isolation (typically alongside RTL8196E_IMEM_DEFAULT_PLACEMENT=n).
+
+# CONFIG_RTL8196E_IMEM_POC_DRAM was removed in v3.4.2: the v3.4.0 IRAM
+# PoC measured -4 % UDP TX when ring metadata was placed in DMEM, so no
+# code carries __dram_poc annotations and the option became dead config.
+# The DMEM init code is preserved in imem.S as the documented 4-stage
+# SDRAM->DMEM copy sequence; .dram stays empty at boot and the init
+# path takes its skip_dram branch.
+
+endif

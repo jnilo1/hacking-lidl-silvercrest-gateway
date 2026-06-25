@@ -164,3 +164,103 @@ resolve_ipv4() {
     fi
     return 1
 }
+
+# preserve_user_additions <skel_dir> <ssh_target> [ssh_opts...]
+# Carry every user-added path across a userdata reflash. The flashed userdata is
+# rebuilt from the skeleton, which would otherwise drop anything a user added
+# under /userdata next to the shipped tree — a custom program in usr/bin, a whole
+# new directory, a script, config the skeleton does not ship. This copies into
+# <skel_dir> every path the gateway has under /userdata that is NOT already
+# present in the working skeleton: files, symlinks AND directories/subtrees
+# (including empty ones).
+#
+# It deliberately preserves *new paths*, not *edits to shipped files*: a path the
+# skeleton ships keeps the fresh shipped version (so a newer shipped file is never
+# shadowed by the gateway's old copy), and curated user config is re-injected
+# separately by the caller's SAVE_FILES list. Because the caller extracts
+# SAVE_FILES into <skel_dir> BEFORE calling us, that config is already "present"
+# and is excluded here — so what remains are the genuine user additions. (Trade
+# off: preservation is by-default under /userdata, so if an app writes state
+# there it is carried too; on this platform volatile state lives on ramfs, not
+# /userdata, so in practice only real user files match.)
+#
+# Runs only on the live-gateway (upgrade) path — the caller already has an SSH
+# session. Best-effort: no SSH, no extra paths, or any error → silent no-op, so
+# it never blocks a flash. Reuses ssh_retry above.
+preserve_user_additions() {
+    local skel_dir="$1" target="$2"; shift 2  # remaining args = ssh opts
+    [ -d "$skel_dir" ] || return 0
+
+    # Paths already in the working skeleton — the shipped tree PLUS the config the
+    # caller just re-injected from SAVE_FILES. Relative, no leading ./, dirs with
+    # no trailing slash. Anything the gateway has on top of this is a user add.
+    local nl present
+    nl=$'\n'
+    present="$( cd "$skel_dir" && find . -mindepth 1 -print 2>/dev/null | sed 's|^\./||' )" || return 0
+    present="${nl}${present}${nl}"
+
+    # Every path under /userdata on the gateway, BusyBox-native: no find/tr; tar
+    # enumerates the tree (dirs come back with a trailing slash, all with a
+    # leading ./). Reading the contents once to list names is cheap next to the
+    # 16 MiB the flash itself moves.
+    local listing
+    listing="$(ssh_retry "$@" "$target" \
+        'tar cf - -C /userdata . 2>/dev/null | tar tf - 2>/dev/null' \
+        2>/dev/null)" || return 0
+
+    # extras = gateway paths not already present in the skeleton. Pure-bash
+    # membership test — /usr/bin/grep may be ugrep here, so don't lean on it.
+    local p rel extras=""
+    while IFS= read -r p; do
+        rel="${p#./}"; rel="${rel%/}"
+        [ -n "$rel" ] || continue
+        case "$present" in *"${nl}${rel}${nl}"*) continue ;; esac
+        extras="${extras}${rel}${nl}"
+    done <<EOF
+$listing
+EOF
+    [ -n "$extras" ] || return 0
+
+    # Reduce to a minimal cover: drop any extra whose parent dir is also an extra,
+    # so tar pulls a new directory whole (subdirs and empty dirs included) and the
+    # arg list stays short. Sort so a parent always precedes its children.
+    local extras_sorted extra_set e parent top=""
+    extras_sorted="$(printf '%s' "$extras" | sort)"
+    extra_set="${nl}${extras_sorted}${nl}"
+    while IFS= read -r e; do
+        [ -n "$e" ] || continue
+        parent="${e%/*}"
+        if [ "$parent" = "$e" ]; then
+            top="${top}${e}${nl}"                       # top-level path, always keep
+        else
+            case "$extra_set" in
+                *"${nl}${parent}${nl}"*) : ;;           # parent is an extra → tar covers it
+                *) top="${top}${e}${nl}" ;;
+            esac
+        fi
+    done <<EOF
+$extras_sorted
+EOF
+    [ -n "$top" ] || return 0
+
+    # Build the tar arg list (space-separated; same no-spaces-in-names limit as
+    # the SAVE_FILES list) plus a count + names for the summary.
+    local args="" names="" count=0 t
+    while IFS= read -r t; do
+        [ -n "$t" ] || continue
+        args="${args:+$args }$t"
+        names="${names:+$names, }$t"
+        count=$((count + 1))
+    done <<EOF
+$top
+EOF
+    [ "$count" -gt 0 ] || return 0
+
+    # tar preserves mode (+x), symlinks and directory structure. Best-effort.
+    local tmp; tmp="$(mktemp)"
+    if ssh_retry "$@" "$target" "tar cf - -C /userdata $args 2>/dev/null" > "$tmp" 2>/dev/null \
+       && [ -s "$tmp" ] && tar xf "$tmp" -C "$skel_dir" 2>/dev/null; then
+        echo "Preserved $count user addition(s) in /userdata: $names"
+    fi
+    rm -f "$tmp"
+}

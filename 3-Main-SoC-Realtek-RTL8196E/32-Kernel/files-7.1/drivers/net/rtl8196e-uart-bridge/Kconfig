@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: GPL-2.0
+config RTL8196E_UART_BRIDGE
+	bool "Realtek RTL8196E in-kernel UART<->TCP bridge"
+	depends on MIPS && SERIAL_8250 && INET && GPIOLIB
+	help
+	  In-kernel byte shoveler between a TTY port (typically /dev/ttyS1,
+	  the link to the Silabs EFR32 Zigbee/Thread radio) and a listening
+	  TCP socket. Replaces the userspace serialgateway daemon, removing
+	  the user/kernel context-switch overhead per byte that capped the
+	  earlier daemon at moderate baud rates on the single-core Lexra
+	  RLX4181. Sustains 892857 baud (the SoC's N+1 divisor maximum) with
+	  no overrun/framing errors under multi-hour soak.
+
+	  Protocol-agnostic: forwards raw bytes in both directions, used by
+	  EZSP (NCP), CPC (RCP), and Spinel (OT-RCP) clients alike.
+
+	  Also provides the nrst_pulse / nrst_gpio sysfs knobs that recover
+	  a stuck radio by pulsing the EFR32 nRST line low through the
+	  gpio-rtl819x chip (hence the GPIOLIB dependency), and the
+	  blmode_pulse / blmode_gpio knobs that reset the radio into its
+	  Gecko bootloader on boards that wire the bootloader-entry pin to
+	  a SoC GPIO (e.g. the Sengled G4; disabled when blmode_gpio=-1,
+	  the Lidl default).
+
+	  Must be built in (=y), not as a module. The driver registers at
+	  late_initcall and depends on the tty/serial and net subsystems
+	  being initialized; there is no module exit path because the
+	  driver is never unloaded.
+
+	  If unsure, say N.

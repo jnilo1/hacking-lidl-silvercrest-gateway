@@ -1,0 +1,205 @@
+// SPDX-License-Identifier: GPL-2.0
+/ {
+	#address-cells = <1>;
+	#size-cells = <1>;
+	compatible = "realtek,rtl819x-soc";
+
+	/*
+	 * RTL8196E with 32 MiB DDR2
+	 * Physical memory: 0x00000000 - 0x01FFFFFF
+	 */
+	memory@0 {
+		device_type = "memory";
+		reg = <0x00000000 0x02000000>;  /* 32 MiB */
+	};
+
+	cpuintc: cpuintc {
+		#address-cells = <0>;
+		#interrupt-cells = <1>;
+		interrupt-controller;
+		compatible = "mti,cpu-interrupt-controller";
+	};
+
+	refclk: refclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <25000000>;
+	};
+
+	/*
+	 * 25 kHz timer/watchdog tick. The Clock Division Base Register
+	 * (CDBR, sysc + 0x3118) is shared by Timer0 (clockevent), Timer1
+	 * (clocksource) and the on-chip watchdog. The timer driver
+	 * programs CDBR DivFactor = busclk / slowclk = 200 MHz / 25 kHz
+	 * = 8000 (the same DivFactor the SDK BSP uses). At 25 kHz the
+	 * watchdog overflow ceiling at OVSEL=1001 grows from ~671 ms
+	 * (at DivFactor=8) to ~671 s, finally giving a userspace feeder
+	 * comfortable headroom and closing WDT-005 in
+	 * drivers/watchdog/AUDIT.md. Trade-off: sched_clock granularity
+	 * drops from 40 ns to 40 µs — fine for kernel timekeeping
+	 * (HZ=250 = 4 ms tick), visible only in perf/ftrace precision.
+	 */
+	slowclk: slowclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <25000>;
+	};
+
+	busclk: busclk {
+		#clock-cells = <0>;
+		compatible = "fixed-clock";
+		clock-frequency = <200000000>;  /* LX bus clock: 200 MHz on RTL8196E */
+	};
+
+	soc {
+		compatible = "simple-bus";
+		#address-cells = <1>;
+		#size-cells = <1>;
+		
+		/*
+		 * Map 64 MiB window to access all peripherals including Switch
+		 * This is address space mapping, NOT RAM consumption
+		 */
+		ranges = <0x00000000 0x18000000 0x04000000>;
+
+		sysc: system-controller@0 {
+			compatible = "realtek,rtl819x-sysc", "syscon";
+			reg = <0x00000000 0x1000>;
+		};
+
+		memc: memory-controller@1000 {
+			compatible = "realtek,rtl819x-memc";
+			reg = <0x00001000 0x100>;
+		};
+
+		uart0: serial@2000 {
+			compatible = "ns16550a";
+			reg = <0x00002000 0x100>;
+			interrupt-parent = <&intc>;
+			interrupts = <12>;
+			reg-shift = <2>;
+			clock-frequency = <200000000>;
+			status = "disabled";
+		};
+
+		uart1: serial@2100 {
+			/* Single compatible, not "ns16550a" fallback.
+			 *
+			 * In kernel 6.18 the of_platform matcher prefers the
+			 * 8250_of.c driver (which matches "ns16550a") over our
+			 * rtl8196e-uart driver, even though the latter lists
+			 * "realtek,rtl8196e-uart" as its exact compatible. When
+			 * 8250_of wins the probe, the UART1 pin mux (BIT(1) and
+			 * BIT(6) of PIN_MUX_SEL) never gets configured, so the
+			 * TX pin is muxed (BIT(3) is the power-on default and is
+			 * enough for TXD alone) but the RX pin stays wired to a
+			 * different function — you see tx flowing, rx=0, IRQ 29
+			 * counting TX events only, and EZSP ASH stuck resetting.
+			 *
+			 * Keeping a single "realtek,rtl8196e-uart" compatible
+			 * forces our platform driver to win the match on both
+			 * 5.10 and 6.18. The driver still uses the 8250 core
+			 * internally via serial8250_register_8250_port().
+			 */
+			compatible = "realtek,rtl8196e-uart";
+			reg = <0x00002100 0x100>;
+			interrupt-parent = <&intc>;
+			interrupts = <13>;
+			reg-shift = <2>;
+			clock-frequency = <200000000>;
+			/* Enable hardware flow control (RTS/CTS) for EFR32 Zigbee */
+			auto-flow-control;
+			realtek,syscon = <&sysc>;
+			status = "disabled";
+		};
+
+		intc: intc@3000 {
+			compatible = "realtek,rtl819x-intc";
+			reg = <0x00003000 0x100>;
+			interrupt-controller;
+			#interrupt-cells = <1>;
+			interrupt-parent = <&cpuintc>;
+			/*
+			 * IP2 = cascade for sources routed via INTC GIMR/GISR
+			 *       (UART0 hwirq 12, etc. — see IRR1).
+			 * IP3 = Switch/Ethernet fast path (hwirq 15 -> IP3).
+			 * IP4 = UART1 fast path (hwirq 13 -> IP4).
+			 *
+			 * UART1 sits on the higher-priority IP because it carries
+			 * the Zigbee link (8250, 16-byte RX FIFO, overrun = lost
+			 * frame), while the Ethernet driver uses DMA rings + NAPI
+			 * and tolerates extra latency.
+			 */
+			interrupts = <2>, <3>, <4>;
+			interrupt-names = "cascade", "switch", "uart1";
+		};
+
+		timer: timer@3100 {
+			compatible = "realtek,rtl819x-timer";
+			/* 0x1c, not 0x20: the timer block ends at CLOCK_DIV
+			 * (0x3118); 0x311c is WDTCNR, owned by watchdog@311c.
+			 * A 0x20 window overlapped the watchdog reg (audit
+			 * TMR-009) — harmless only while this driver maps
+			 * without claiming. */
+			reg = <0x00003100 0x1c>;
+			interrupt-parent = <&cpuintc>;
+			interrupts = <7>;
+			/*
+			 * clocks[0] = slowclk drives Timer0/Timer1 and the
+			 * shared on-chip watchdog. See the slowclk node
+			 * description for the WDT-005 rationale.
+			 */
+			clocks = <&slowclk>, <&busclk>;
+			clock-names = "refclk", "busclk";
+		};
+
+		watchdog: watchdog@311c {
+			compatible = "realtek,rtl8196e-wdt";
+			reg = <0x0000311c 0x4>;
+			/*
+			 * 60 s soft timeout; the driver picks the smallest
+			 * OVSEL bucket whose hardware overflow exceeds it.
+			 * Hardware ceiling at the slowclk (25 kHz) CDBR
+			 * tick is ~671 s (OVSEL=1001); 60 s buys 2× margin
+			 * over the BusyBox S25watchdog -t 30 kick cadence.
+			 */
+			timeout-sec = <60>;
+		};
+
+		gpio0: gpio-controller@3500 {
+			compatible = "realtek,rtl8196e-gpio";
+			reg = <0x00003500 0x38>;
+			gpio-controller;
+			#gpio-cells = <2>;
+			realtek,syscon = <&sysc>;
+			status = "disabled";
+		};
+
+		spi0: spi@1200 {
+			compatible = "realtek,rtl819x-spi";
+			reg = <0x00001200 0x10>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			clocks = <&busclk>;
+			status = "disabled";
+		};
+
+		ethernet: ethernet@10000 {
+			compatible = "realtek,rtl8196e-mac";
+			/*
+			 * Three windows (ETH-S01): CPU interface, switch
+			 * ASIC indirect-table window (type << 16 selector)
+			 * and the switch-core register block.
+			 */
+			reg = <0x00010000 0x1000>,
+			      <0x03000000 0x100000>,
+			      <0x03800000 0x8000>;
+			reg-names = "cpu-interface", "asic-table",
+				    "switch-core";
+			interrupt-parent = <&intc>;
+			interrupts = <15>;
+			realtek,syscon = <&sysc>;
+			status = "disabled";
+		};
+	};
+};

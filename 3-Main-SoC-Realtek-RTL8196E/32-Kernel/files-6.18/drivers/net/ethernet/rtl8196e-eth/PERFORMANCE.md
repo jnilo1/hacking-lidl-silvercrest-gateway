@@ -70,8 +70,11 @@ Attribution: no driver code changed between v3.4.1 and v3.5.0; the TX
 lift is most plausibly the gcc 8.5 → 15.2 toolchain rebuild (the v3.5.0
 kernel banner already documented +0.65 % BogoMIPS and −56 KB code), with
 better register allocation in the TCP send-side hot path being the
-likely amplifier. RX is already near the per-packet cache-flush
-ceiling described below, so it does not see a similar lift.
+likely amplifier. **(2026-06-20: refuted — the paired history sweep below
+("Release/driver history sweep") shows no measurable gcc TX gain; this
+cross-session +3.9 % was session drift, not the toolchain.)** RX is already
+near the per-packet cache-flush ceiling described below, so it does not see a
+similar lift.
 
 ## v3.8.0 confirmation run (June 2026)
 
@@ -361,6 +364,197 @@ of it (6.18 → 7.1, driver held constant at v2.14), see the A/B in the 7.1
 line's `PERFORMANCE.md` (`files-7.1/…`, branch `exp/kernel-7.1`): 7.1 ≈ 72.1, a
 further ~+3 over rc1. Same-box hierarchy: rc0 67.6 → (guard) rc1 69.0 →
 (kernel) 7.1 72.1.
+
+## Driver v2.15 gate run (June 2026, #99 trigger-agnostic poll-side resync)
+
+`scripts/test_rtl8196e_eth_iperf3.sh` against the v4.0.0-rc2 candidate
+(`6.18.35-rtl8196e-v4.0.0-rc2`), OTBR stopped. Driver 2.14 → 2.15 adds
+**ETHDRV-015** — the field fix for issue #99 after ETHDRV-013 (the v2.7
+`tx_timeout` RX-resync) proved insufficient (olivluca re-hung after ~3.7 d
+with that fix already present). Full root-cause in this directory's
+`issue99.md`; in short the RUNOUT storm is self-sustaining and
+trigger-agnostic, so the fix moves out of the recovery path and into the
+poll itself:
+
+- a **poll-side detector** — three consecutive zero-work polls entered under
+  `PKTHDR_DESC_RUNOUT` trigger a full `rtl8196e_hw_ring_resync()` from poll
+  context (no `napi_disable`), breaking the handshake whatever opened it;
+- a **periodic `swcore_check_timer`** (~1 s) that re-schedules NAPI if RUNOUT
+  persists — restoring the safety net the original Realtek SDK 2.6.30 driver
+  carried (`rtl_check_swCore_tx_hang` → `rtl865x_reinitSwitchCore`) and that
+  this rewrite had dropped.
+
+Both sit off the steady-state hot path by construction: the detector is a
+single conditional MMIO read taken **only** on a zero-work poll, the timer
+reads CPUIISR once a second. Two diagnostic `ethtool -S` counters were added
+(`rtl8196e_rx_runout_resync`, `rtl8196e_rx_runout_kick`).
+
+| Workload                    | v2.14 (rc1) | v2.15 (rc2) |
+|-----------------------------|------------:|------------:|
+| TCP RX (host → gateway)     | 93.6        | 93.2        |
+| TCP TX (gateway → host)     | 70.3        | 70.0        |
+
+(v2.15 RX is a single clean gate run; v2.15 TX is the canonical-rig
+inter-session median from the campaign below. RX on this SoC is
+line-rate/DMA-bound and rig-insensitive — see the TX/RX asymmetry section —
+so the 0.4 dip is noise.) Both new counters read `0` after the suite,
+rx/tx errors 0, rx/tx_dropped 0; OTBR up, no `tx_timeout` / RUNOUT /
+soft-lockup over the run.
+
+### 013/014 cost A/B — a short-run signal, refuted at steady state (2026-06-19)
+
+A question worth settling directly: do the two v2.14 robustness changes
+(ETHDRV-013, the `tx_timeout` dual-ring reset; ETHDRV-014, the software
+TX-reclaim timer) cost anything once shipped? Measured back-to-back on the
+same box and session, OTBR stopped, 5-rep medians. These were short 6 s runs
+on a slightly slower bench host, so the absolute numbers run ~1–2 Mbit/s low
+— but the **A/B delta at identical methodology is the clean signal**:
+
+| Build                              | RX (host→gw)     | TX (gw→host)     |
+|------------------------------------|------------------|------------------|
+| with 013/014 (v2.15 as shipped)    | 92.9 (92.8–93.6) | 67.9 (67.7–67.9) |
+| without 013/014 (015 kept)         | 93.2 (92.5–93.6) | 69.3 (69.0–69.7) |
+| **Δ**                              | ~0 (noise)       | **+1.4 (~2 %)**  |
+
+At this 6 s methodology **013/014 measured ~1.4 Mbit/s (~2 %) on TX, zero on
+RX** — the two TX clusters did not overlap (67.7–67.9 vs 69.0–69.7).
+Attribution within the A/B:
+
+- **015 is not the cause** — it is present in *both* arms, confirming the new
+  #99 engine fix is genuinely off the hot path.
+- **013 is off-datapath** (runs only on `tx_timeout`) → ~0 cost.
+- **014** is the only hot-path actor: even guarded by `timer_pending()`, during
+  TX it arms a reclaim timer, and at 6 s (cwnd not ramped, the queue spends a
+  large fraction of the run XOFF-stopped → the timer arms often) that churn is
+  visible.
+
+**This ~2 % does NOT hold at steady state — it is a short-run artifact.** It
+was checked directly (2026-06-20): a build with 014 relaxed **4 ms → 50 ms**,
+benched with the *same* 15-run / 30 s inter-session protocol as the campaign
+below, gave median **69.5**, mean 69.21, range 68.1–69.9 (sd 0.64) — i.e. **no
+recovery**; if anything marginally *below* the 4 ms median (~70), and squarely
+inside the inter-session noise band. At a realistic 30 s transfer the queue is
+rarely XOFF-stopped, so the timer almost never re-arms and 4 ms vs 50 ms is
+indistinguishable; the ~3 Mbit/s inter-session spread dwarfs the effect. (The
+two builds were on different sessions, so they cannot be *ranked* at the
+sub-Mbit level, but the absence of any gain at 50 ms is unambiguous.)
+
+Conclusion: **014's 4 ms timer is throughput-neutral at realistic transfer
+sizes** — the 6 s A/B over-attributed a methodology artifact to it. 4 ms is
+kept for rc2: it gives the tightest no-RX TX-stall recovery (well under the
+10 s netdev watchdog, important for Zigbee/Thread control-traffic latency) at
+no measurable steady-state throughput cost. Relaxing it buys nothing and only
+lengthens that recovery, so there is no reason to.
+
+### Inter-session TX campaign on the canonical rig (2026-06-20)
+
+The A/B above used short runs on a slower host for a clean *relative* signal;
+the *absolute* rc2 TX was then characterised properly on the canonical bench
+rig (host 192.168.1.200, direct Cat-6, OTBR stopped, gw running clean
+v4.0.0-rc2), inter-session: fresh connection, 30 s each, spaced.
+
+| Campaign        | runs (Mbit/s)                                     | median | spread / range      | sd   |
+|-----------------|---------------------------------------------------|-------:|---------------------:|-----:|
+| N=5             | 71.9 69.3 70.7 72.3 70.6                           |  70.7  | 3.0 (69.3–72.3)      | 1.19 |
+| N=10            | 70.1 71.8 69.9 71.3 69.5 69.6 69.5 69.7 69.5 69.4 |  69.7  | 2.4 (69.4–71.8)      | 0.84 |
+| **N=15 (both)** | —                                                 |  ~70   | **3.0 (69.3–72.3)**  | —    |
+
+N=15 envelope **69.3–72.3** = exactly the documented run-to-run spread
+(69.3–72.8 across sessions with no driver change), median ~70. **v2.15 TX is
+on baseline; ETHDRV-015 is throughput-neutral.** The N=10 run also shows the
+platform's *settling* behaviour cleanly — the first 4 runs span 69.9–71.8,
+the last 6 converge to 69.4–69.7 — which is why a warm back-to-back burst
+reads ultra-tight (0.2–0.7 intra-session) while a cold spaced campaign
+reopens the ~3 Mbit/s band. Methodology, not code: intra-session bursts are
+not comparable to the inter-session baseline.
+
+## Standardized release bench — v4.0.0-rc2 (2026-06-20)
+
+First run of the new per-release suite `scripts/bench_release_iperf3.sh`
+(`6.18.35-rtl8196e-v4.0.0-rc2 #8`). The suite is the reproducible, portable
+successor to the ad-hoc campaigns above: **3× TCP RX, 10× TCP TX, 1× 300 s
+stress, 3× UDP TX (`-b 0`), 3× UDP RX (`-b 100M`)**, medians reported. It
+uses **no ethtool** (counters from `/proc/net/dev` + `/proc/net/snmp`, split
+into a TCP window that must be 0 and a UDP-flood window where line-rate ring
+drops are expected), a configurable gateway iperf3 path (`IPERF3_BIN`, so it
+runs against stock Lidl firmware), and a strict inter-session protocol —
+**each rep restarts a fresh gateway iperf3 server + fresh client**, spaced by
+`GAP` (10 s here). Rig: host 192.168.1.200 direct Cat-6 on `enp2s0`, OTBR
+(`S70otbr`) quiesced for the run and restarted after.
+
+| Workload | Reps | Median (Mbit/s) | Spread / loss |
+|---|:--:|--:|---|
+| TCP RX (host → gateway)          | 3  | 93.9 | range 93.4–93.9 |
+| **TCP TX (gateway → host)**      | 10 | **69.0** | spread 1.4, sd 0.47, range 68.7–70.1 |
+| TCP stress (host → gw, 300 s)    | 1  | 93.9 | retrans 0.0000% |
+| UDP TX (gateway → host, `-b 0`)  | 3  | 31.7 | loss 0.0% |
+| UDP RX (host → gateway, `-b 100M`)| 3  | 31.3 | loss 67.0% |
+
+TCP-phase counters: rx_errs / rx_drop / tx_errs / tx_drop **all +0**;
+RetransSegs **+0 of 1,917,714** (0.0000%). UDP-flood window: rx_drop +0.
+**Verdict: PASS.**
+
+The 10 TX reps were 68.7 70.1 69.0 68.8 69.0 69.0 69.9 68.8 69.1 68.7 —
+spread **1.4** (sd 0.47), a settled-low session sitting at the floor of the
+documented 69.3–72.8 band. Note the within-bench TX spread is *drift-bounded*
+(the box holds one thermal/clock state across the ~18-min run), so a single
+suite run reads tighter (~1–1.5) than the full cross-session ~3 Mbit/s band;
+the wide band only appears across separate boots/sessions. The new UDP
+figures (TX ~31.7, RX ~31.3) are the iperf3 baselines for this tool and do
+not compare to the older iperf2 UDP numbers (37.9 / 42) — more per-packet
+overhead in iperf3, and `-b 0` is the cleanest TX-ceiling probe (it beat a
+bounded `-b 100M`, 31.5 vs 27.4, on this CPU).
+
+## Release/driver history sweep — drift-cancelled (2026-06-20)
+
+`scripts/bench_history_sweep.sh --preset perf-boundaries --rounds 3`: every
+release image is replayed on **one box in one session**, in **randomized
+interleaved rounds**, and each build's TX is **normalized to rc2 measured in the
+same round** so the ~3 Mbit/s session drift cancels (the ±95 % CI is on the
+per-round ratio). 21 points, ~64 min, all booted, box restored to rc2. This is
+the objective cross-version comparison the single-session sections above cannot
+give. The preset is the only releases where eth driver code, kernel minor, or
+gcc actually change (detected from git); perf-identical releases are skipped.
+
+| Build (6.18 line) | kernel | TX median | TX vs rc2 (±95 % CI) | distinguishable? |
+|---|---|---:|---:|---|
+| v3.0.0 | 6.18.24 | 68.6 | 1.004× ±0.015 | no |
+| v3.4.0 | 6.18.24 | 69.4 | 1.018× ±0.026 | no |
+| **v3.4.1** | 6.18.24 | 70.3 | **1.035× ±0.018** | **yes — +3.5 %** |
+| v3.5.0 | 6.18.24 | 69.0 | 1.017× ±0.048 | no |
+| v3.8.0 | 6.18.24 | 68.5 | 1.009× ±0.044 | no |
+| v3.9.0 | 6.18.35 | 68.8 | 1.007× ±0.019 | no |
+| rc2 | 6.18.35 | 68.2 | 1.000× (ref) | — |
+
+**Findings:**
+- **TX is flat to ~1-2 % across the whole 6.18 history**, with a single nominal
+  peak: **v3.4.1** (Track A `kick_tx` coalescing) at **+3.5 %** over rc2 — the
+  only build whose CI excludes 1.000, and only barely at n=3. rc2 sits at the
+  bottom of an otherwise flat cluster (v3.5.0…rc2 all ~1.00–1.02, mutually
+  indistinguishable).
+- **The "regression" below the v3.4.1 peak is NOT attributable to BQL/014.** A
+  direct paired A/B (2026-06-20, 5 rounds, rc2 vs a build with **both** BQL and
+  the 4 ms reclaim timer disabled) recovered only **1.012× ±0.018** — CI
+  [0.994, 1.030] **includes 1.000, i.e. not significant**. Removing the prime
+  suspects does *not* close the gap to v3.4.1. Likeliest reading: v3.4.1's
+  +3.5 % is partly an n=3 high read, and TX across the 6.18 line is flat within
+  ~2-3 % measurement noise — there is **no robustly-attributable post-v3.4.1
+  regression**. (This also confirms BQL + the 4 ms timer are ≈free at realistic
+  transfer sizes; the earlier 6 s 013/014 A/B's ~2 % was a short-run artifact —
+  see the v2.15 section.)
+- **gcc 8.5 → 15.2 gave no measurable TX gain.** The `v3.4.1 → v3.5.0`
+  transition changes *only* the toolchain (driver code identical) and reads
+  1.035× → 1.017× — flat-to-slightly-lower, CIs overlapping. The "+3.9 % from
+  the toolchain" attributed in the v3.5.0 confirmation section above was a
+  **cross-session drift artifact**, not a real effect — exactly the trap this
+  paired design removes.
+- **The kernel minor 6.18.24 → 6.18.35 gave no measurable TX effect** either:
+  `v3.8.0 → v3.9.0` (driver code identical) reads 1.009× → 1.007×.
+
+Caveat: at 3 rounds the CIs are wide (±0.015–0.048); v3.4.1's signal is clear,
+but separating v3.5.0/v3.8.0 at the sub-percent level would need more rounds. RX
+held line-rate (93.2–94.1) on every build. Raw data:
+`test_results_history_sweep_*/sweep.tsv`.
 
 ## TX path per-packet decomposition (driver v2.4 + Track A, probe-on)
 

@@ -1,0 +1,12 @@
+--- a/arch/mips/include/asm/cpu-features.h
++++ b/arch/mips/include/asm/cpu-features.h
+@@ -140,6 +140,9 @@
+ 	__res;								\
+ })
+ #endif
++#ifndef cpu_has_lexra_cache
++#define cpu_has_lexra_cache	0
++#endif
+ /* Don't override `cpu_has_fpu' to 1 or the "nofpu" option won't work.  */
+ #ifndef cpu_has_fpu
+ # ifdef CONFIG_MIPS_FP_SUPPORT
