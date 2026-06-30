@@ -14,10 +14,29 @@
 #include <linux/kernel.h>
 #include <linux/build_bug.h>
 #include <linux/stddef.h>
+#include <linux/moduleparam.h>
 #include <asm/io.h>
 #include <asm/mach-realtek/imem.h>
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
+
+#ifdef CONFIG_RTL8196E_ETH_DEBUG
+/*
+ * issue #99 fault injection (debug builds only — CONFIG_RTL8196E_ETH_DEBUG,
+ * never shipped). When non-zero, rtl8196e_ring_rx_poll force-drops each
+ * consumed RX descriptor and decrements this count, reproducing the field
+ * drop-flood storm: every descriptor is processed, nothing is delivered. Used
+ * to prove the bounded poll returns under saturation (no soft-lockup) and that
+ * the zero-delivery stall detector escalates to a switch-core deep reset which
+ * restores RX once the flood clears. Countdown so the burst auto-expires and RX
+ * self-restores even if the operator's SSH session drops mid-test. Set via
+ * /sys/module/rtl8196e_eth/parameters/rtl8196e_force_dropflood.
+ */
+unsigned int rtl8196e_force_dropflood;
+module_param(rtl8196e_force_dropflood, uint, 0644);
+MODULE_PARM_DESC(rtl8196e_force_dropflood,
+		 "issue#99 DEBUG: force-drop the next N consumed RX descriptors (0=off). Never enable in production.");
+#endif
 
 /*
  * Compile-time guard on the descriptor ABI shared with the switch ASIC.
@@ -473,14 +492,15 @@ __iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 /* NAPI RX poll: process up to @budget received packets and hand them to the stack. */
 __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
-				 struct net_device *dev)
+				 struct net_device *dev, int *delivered_out)
 {
-	int work_done = 0;
+	int processed = 0;
+	int delivered = 0;
 
 	if (unlikely(!ring))
 		return 0;
 
-	while (work_done < budget) {
+	while (processed < budget) {
 		u32 entry = ring->rx_pkthdr_ring[ring->rx_idx];
 		struct rtl_pktHdr *ph;
 		struct rtl_mBuf *mb;
@@ -491,6 +511,15 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 		if (entry & RTL8196E_DESC_OWNED_BIT)
 			break;
+		/*
+		 * Bound the poll by descriptors *processed*, not packets delivered.
+		 * Every drop path below re-arms and advances rx_idx without
+		 * delivering; counting only deliveries (the old work_done) let a
+		 * flood of droppable descriptors spin this poll forever — issue #99:
+		 * the poll never returns, CPU pinned in NET_RX softirq -> soft-lockup.
+		 * The vendor RX DSR bounds by total iterations (rtl_nic.c:4068).
+		 */
+		processed++;
 
 		ph = rtl8196e_desc_ptr(entry);
 		/* Defense in depth: the ring entry came from HW/uncached memory;
@@ -518,6 +547,17 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		mbuf_index = (unsigned int)(mb - ring->rx_mbuf_base);
 
 		/*
+		 * issue #99 probe: count how often the switch pairs pkthdr[rx_idx]
+		 * with an mbuf whose ring index differs from rx_idx. The note below
+		 * says this skew appears only at/near RX saturation; the leading
+		 * hypothesis is that sustained skew is what eventually desyncs the
+		 * switch RX pointer from rx_idx. Cheap: one compare per consumed
+		 * descriptor, no hot-path cost in the common (no-skew) case.
+		 */
+		if (unlikely(mbuf_index != ring->rx_idx))
+			ring->diag.rx_pkthdr_mbuf_skew++;
+
+		/*
 		 * Under RX ring saturation the switch links pkthdr[rx_idx] to a
 		 * mbuf whose ring index differs from rx_idx (skew appears only
 		 * at/near saturation, never in flow-controlled TCP). The shadow
@@ -538,6 +578,20 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 			ring->diag.rx_no_skb++;
 			goto rearm_drop;
 		}
+
+#ifdef CONFIG_RTL8196E_ETH_DEBUG
+		/*
+		 * issue #99 fault injection: force this otherwise-deliverable
+		 * descriptor down the drop path so the poll saturates with zero
+		 * delivery, exactly like the field storm. ph/mb/mbuf_index/rxb
+		 * are all valid here, so rearm_drop re-arms through the normal
+		 * machinery. Decrement so the burst auto-expires.
+		 */
+		if (unlikely(rtl8196e_force_dropflood)) {
+			rtl8196e_force_dropflood--;
+			goto rearm_drop;
+		}
+#endif
 
 		len = ph->ph_len;
 		if (unlikely(len < ETH_ZLEN || len > ring->buf_size))
@@ -591,7 +645,7 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 
 		napi_gro_receive(napi, skb);
 
-		work_done++;
+		delivered++;
 		goto rearm;
 
 rearm_drop:
@@ -664,7 +718,9 @@ rearm:
 			ring->rx_idx = 0;
 	}
 
-	return work_done;
+	if (delivered_out)
+		*delivered_out = delivered;
+	return processed;
 }
 
 /* Return the number of free TX descriptor slots available for new submissions. */

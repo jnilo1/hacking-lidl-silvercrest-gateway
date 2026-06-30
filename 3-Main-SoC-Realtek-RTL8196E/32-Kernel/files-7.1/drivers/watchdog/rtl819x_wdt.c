@@ -43,7 +43,7 @@
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.9"
+#define DRV_VERSION		"1.10"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -293,9 +293,10 @@
  *                           storm from a broader switch-core or TX-done stall
  *                           (the vendor stuck-detector watched TX-done).
  */
-#define WDT_REC_SIZE		0x200U
+#define WDT_REC_SIZE		0x280U
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
-#define WDT_REC_VERSION		6U
+#define WDT_REC_VERSION		7U
+#define WDT_REC_VERSION_V6	6U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V5	5U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V4	4U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V3	3U	/* still decoded: one-boot leftover after upgrade */
@@ -340,6 +341,18 @@
 #define WDT_REC_OFF_ETH_SIRR	0x1C8		/* u32 live SIRR */
 #define WDT_REC_OFF_ETH_RXPKTS	0x1CC		/* u32 dev rx_packets (low 32) */
 #define WDT_REC_OFF_ETH_TXPKTS	0x1D0		/* u32 dev tx_packets (low 32) */
+/* v7: bounded-poll detector state + A/B discriminator + switch desync (..0x1FF, clear of boothold@0xFF4) */
+#define WDT_REC_OFF_ETH_POLLHIT		0x1D4	/* u32 poll_budget_hit */
+#define WDT_REC_OFF_ETH_STALLRUN	0x1D8	/* u32 rx_stall_run (detector run) */
+#define WDT_REC_OFF_ETH_DEEPRST		0x1DC	/* u32 swcore_deep_reset */
+#define WDT_REC_OFF_ETH_RPDCR0		0x1E0	/* u32 live CPURPDCR0 (switch RX pkthdr ptr) */
+#define WDT_REC_OFF_ETH_RMDCR0		0x1E4	/* u32 live CPURMDCR0 (switch RX mbuf ptr) */
+#define WDT_REC_OFF_ETH_WILDPH		0x1E8	/* u32 diag rx_wild_pkthdr     (A) */
+#define WDT_REC_OFF_ETH_WILDMB		0x1EC	/* u32 diag rx_wild_mbuf       (A) */
+#define WDT_REC_OFF_ETH_NOSHADOW	0x1F0	/* u32 diag rx_mbuf_no_shadow  (A) */
+#define WDT_REC_OFF_ETH_SKEW		0x1F4	/* u32 diag rx_pkthdr_mbuf_skew (A) */
+#define WDT_REC_OFF_ETH_BADLEN		0x1F8	/* u32 diag rx_bad_len         (B) */
+#define WDT_REC_OFF_ETH_P6DCR0		0x1FC	/* u32 live P6_DCR0 (CPU-port desc counter) */
 #define WDT_REC_STAT_UNSET	0xFFFFFFFFU	/* sentinel: stats walk did not complete */
 
 static_assert(NR_SOFTIRQS <= WDT_REC_NR_SIRQ,
@@ -625,8 +638,10 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 				writel(eth.up,     wdt->rec + WDT_REC_OFF_ETH_FLAGS);
 				writel(eth.resync, wdt->rec + WDT_REC_OFF_ETH_RESYNC);
 				writel(eth.kick,   wdt->rec + WDT_REC_OFF_ETH_KICK);
-				writel(eth.zero,   wdt->rec + WDT_REC_OFF_ETH_ZERO);
-				writel(eth.seen,   wdt->rec + WDT_REC_OFF_ETH_SEEN);
+				/* zero/seen retired in v7 (RUNOUT-latch model) — keep the
+				 * slots zeroed so a v7 record reads unambiguously. */
+				writel(0,          wdt->rec + WDT_REC_OFF_ETH_ZERO);
+				writel(0,          wdt->rec + WDT_REC_OFF_ETH_SEEN);
 				writel(eth.iisr,   wdt->rec + WDT_REC_OFF_ETH_IISR);
 				writel(eth.iimr,   wdt->rec + WDT_REC_OFF_ETH_IIMR);
 				writel(eth.rx_idx, wdt->rec + WDT_REC_OFF_ETH_RXIDX);
@@ -640,6 +655,18 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 				writel(eth.sirr,       wdt->rec + WDT_REC_OFF_ETH_SIRR);
 				writel(eth.rx_packets, wdt->rec + WDT_REC_OFF_ETH_RXPKTS);
 				writel(eth.tx_packets, wdt->rec + WDT_REC_OFF_ETH_TXPKTS);
+				/* v7: bounded-poll detector + A/B discriminator + switch desync */
+				writel(eth.poll_budget_hit,   wdt->rec + WDT_REC_OFF_ETH_POLLHIT);
+				writel(eth.rx_stall_run,      wdt->rec + WDT_REC_OFF_ETH_STALLRUN);
+				writel(eth.swcore_deep_reset, wdt->rec + WDT_REC_OFF_ETH_DEEPRST);
+				writel(eth.cpurpdcr0,         wdt->rec + WDT_REC_OFF_ETH_RPDCR0);
+				writel(eth.cpurmdcr0,         wdt->rec + WDT_REC_OFF_ETH_RMDCR0);
+				writel(eth.wild_pkthdr,       wdt->rec + WDT_REC_OFF_ETH_WILDPH);
+				writel(eth.wild_mbuf,         wdt->rec + WDT_REC_OFF_ETH_WILDMB);
+				writel(eth.mbuf_no_shadow,    wdt->rec + WDT_REC_OFF_ETH_NOSHADOW);
+				writel(eth.skew,              wdt->rec + WDT_REC_OFF_ETH_SKEW);
+				writel(eth.bad_len,           wdt->rec + WDT_REC_OFF_ETH_BADLEN);
+				writel(eth.p6_dcr0,           wdt->rec + WDT_REC_OFF_ETH_P6DCR0);
 			} else {
 				writel(0, wdt->rec + WDT_REC_OFF_ETH_FLAGS);
 			}
@@ -794,7 +821,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 
 	if (ver >= WDT_REC_VERSION_V2 && ver <= WDT_REC_VERSION) {
 		char v4stat[420];
-		char v5stat[256];
+		char v5stat[480];
 
 		rtl819x_wdt_softirq_decode(sirqmask, sirq, sizeof(sirq));
 		rtl819x_wdt_fns_decode(wdt, WDT_REC_OFF_NTFN, WDT_REC_OFF_TFNS,
@@ -839,15 +866,20 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 		if (ver >= WDT_REC_VERSION_V5) {	/* eth #99 snapshot */
 			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS)) {
 				size_t p = scnprintf(v5stat, sizeof(v5stat),
-					  " eth=[up=1 resync=%u kick=%u zero=%u seen=%u iisr=0x%x iimr=0x%x rxidx=%u",
+					  " eth=[up=1 resync=%u kick=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RESYNC),
-					  readl(wdt->rec + WDT_REC_OFF_ETH_KICK),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_KICK));
+				if (ver <= WDT_REC_VERSION_V6)	/* v5/v6: legacy RUNOUT-latch in-progress counters */
+					p += scnprintf(v5stat + p, sizeof(v5stat) - p,
+					  " zero=%u seen=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_ZERO),
-					  readl(wdt->rec + WDT_REC_OFF_ETH_SEEN),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_SEEN));
+				p += scnprintf(v5stat + p, sizeof(v5stat) - p,
+					  " iisr=0x%x iimr=0x%x rxidx=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_IISR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_IIMR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RXIDX));
-				if (ver >= WDT_REC_VERSION)	/* v6: switch-core/TX/ring state */
+				if (ver >= WDT_REC_VERSION_V6)	/* v6: switch-core/TX/ring state */
 					p += scnprintf(v5stat + p, sizeof(v5stat) - p,
 					  " rxdesc=0x%x txprod=%u txcons=%u txfree=%u txdesc=0x%x cpuicr=0x%x sirr=0x%x rxpkts=%u txpkts=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RXDESC),
@@ -859,6 +891,20 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 					  readl(wdt->rec + WDT_REC_OFF_ETH_SIRR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RXPKTS),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_TXPKTS));
+				if (ver >= WDT_REC_VERSION)	/* v7: bounded-poll detector + A/B + switch desync */
+					p += scnprintf(v5stat + p, sizeof(v5stat) - p,
+					  " pollhit=%u stallrun=%u deepreset=%u rpdcr0=0x%x rmdcr0=0x%x p6dcr0=0x%x A:wildph=%u wildmb=%u noshadow=%u skew=%u B:badlen=%u",
+					  readl(wdt->rec + WDT_REC_OFF_ETH_POLLHIT),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_STALLRUN),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_DEEPRST),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RPDCR0),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_RMDCR0),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_P6DCR0),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_WILDPH),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_WILDMB),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_NOSHADOW),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_SKEW),
+					  readl(wdt->rec + WDT_REC_OFF_ETH_BADLEN));
 				scnprintf(v5stat + p, sizeof(v5stat) - p, "]");
 			} else {
 				scnprintf(v5stat, sizeof(v5stat), " eth=[down]");

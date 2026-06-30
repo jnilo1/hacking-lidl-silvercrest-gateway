@@ -6,6 +6,59 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.0.0-rc4] - 2026-06-30
+
+_Supersedes `v4.0.0-rc3`. Headline: **issue #99 — the real root cause, fixed.** Two field
+units still soft-locked on rc3 (frtz13, olivluca), and their `v6` panic records revised the
+diagnosis: not the RUNOUT desync rc1–rc3 targeted (the field signature is `iisr=0x320e` —
+RX_DONE set, **RUNOUT clear**), but an **unbounded RX poll loop**. The NAPI poll bounded
+itself by packets *delivered*, while every drop/error path re-armed and advanced the ring
+cursor without counting — so under a flood of droppable descriptors the poll never returned,
+pinning the CPU in softirq (100% softirq / 0% hardirq) until the watchdog rebooted. rc3's
+switch-core recovery was structurally blind to it (it gates on RUNOUT, which was clear). rc4
+**bounds the poll by descriptors processed**, restoring the vendor SDK's iteration bound the
+rewrite had dropped: the poll now provably returns within one NAPI budget, converting the
+fatal lockup into a survivable yielding poll. A **RUNOUT-independent stall detector** escalates
+a sustained zero-delivery saturating poll to the existing switch-core deep reset. The
+post-mortem capture is widened (record **v7**) and now **also logged live at every recovery**,
+so a self-heal that never reboots still records what triggered it. Both kernel lines (6.18 and
+7.1) in sync. Release candidate, not GA._
+
+### `rtl8196e-eth` v2.18 → v2.19 — issue #99 bounded RX poll + RUNOUT-independent recovery
+
+- **Bounded RX poll (the fix).** `rtl8196e_ring_rx_poll` now counts descriptors *processed*
+  (incremented unconditionally every iteration), not packets *delivered*, and returns that to
+  NAPI; the packet count is reported separately. The loop terminates in ≤ budget iterations by
+  construction, so a droppable-descriptor flood can no longer spin it forever. This restores the
+  behaviour of the 2012 vendor driver, which bounds its receive loop by total iterations.
+- **RUNOUT-independent stall detector.** A budget-saturating poll that delivered nothing, for
+  `rtl8196e_rx_stall_thresh` (default 32) consecutive polls, escalates to the bench-validated
+  switch-core deep reset — independent of the RUNOUT status the rc1–rc3 recovery gated on (and
+  which the field captures showed clear). Tunable via the module parameter (`0` disables).
+- No datapath regression (TCP RX ~94, TX median ~70 Mbit/s, retrans 0). Bench-validated under
+  fault injection: the bounded poll absorbs a sustained forced-drop flood (~64 K drops/s) with
+  the box staying schedulable (no soft-lockup), the detector escalates to a deep reset, and RX
+  returns to line rate afterward.
+
+### Watchdog post-mortem record v6 → v7 + live recovery fingerprint (`rtl819x-wdt` v1.9 → v1.10)
+
+The DRAM panic record is re-focused on the narrowed root cause, and the same fingerprint is now
+emitted to the kernel log at each recovery action — so the next field event is diagnosable
+whether it self-heals (a log line, no reboot) or rides a hang to the watchdog (the DRAM record):
+
+- **Retired** the RUNOUT-latch in-progress counters (`zero`, `seen`) of the disproved model.
+- **Added** the bounded-poll detector state (`poll_budget_hit`, `rx_stall_run`,
+  `swcore_deep_reset`); an **A-vs-B discriminator** (the switch-desync counters
+  `wild_pkthdr`/`wild_mbuf`/`mbuf_no_shadow`/`skew` vs the runt-flood counter `bad_len`); and
+  the switch's own RX descriptor pointers and CPU-port descriptor counter
+  (`CPURPDCR0`/`CPURMDCR0`/`P6_DCR0`, real vendor register addresses) cross-checked against the
+  driver's ring cursor.
+- The eth driver emits the same fingerprint via `netdev_warn` at the four rate-limited deep
+  recovery sites (RX-poll stall, TX-done stuck, TX timeout, RUNOUT escalation).
+
+Record size widened to `0x280`; the v5/v6 decoders are retained for the one-boot-after-upgrade
+leftover.
+
 ## [4.0.0-rc3] - 2026-06-25
 
 _Supersedes `v4.0.0-rc2`. Headline: **issue #99 switch-core self-recovery** (ETHDRV-016,

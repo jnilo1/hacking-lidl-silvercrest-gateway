@@ -28,6 +28,8 @@ struct rtl8196e_ring_diag {
 	u32 rx_alloc_fail;	/* RX replacement skb allocation failed */
 	u32 rx_rearm_badidx;	/* RX rearm mbuf index outside the mbuf ring */
 	u32 rx_mbuf_no_shadow;	/* HW mbuf index has no rx_bufs shadow skb */
+	u32 rx_pkthdr_mbuf_skew;/* RX mbuf_index != rx_idx: switch paired a skewed mbuf
+				 * (saturation-only per the rx_poll note; issue #99 probe) */
 	u32 tx_bad_args;	/* TX submit with null/zero arguments */
 	u32 tx_bad_len;		/* TX submit length over 1518 */
 	u32 tx_ring_full;	/* TX submit found the ring full */
@@ -58,7 +60,7 @@ int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,
-				 struct net_device *dev);
+				 struct net_device *dev, int *delivered_out);
 
 int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring);
 void rtl8196e_ring_panic_snapshot(struct rtl8196e_ring *ring,

@@ -76,6 +76,18 @@ static inline u32 rtl8196e_readl(u32 reg)
 #define TRXRDY     (1 << 0)
 #define MEMCR      (0x34 + SWMISC_BASE)
 
+/*
+ * Switch-core descriptor diagnostics (vendor SDK V3.4.7.3
+ * rtl865xc_asicregs.h, real values): SWCORECNR = SWCORE_BASE + 0x6000;
+ * DESCDIAG_BASE = SWCORECNR + 0x100. Per-port descriptor counters follow,
+ * port 6 = CPU port. Read-only; used by the issue #99 panic/recovery
+ * fingerprint as a switch-side view of CPU-port descriptor progress to
+ * cross-check against the driver's rx_idx (switch-vs-driver desync).
+ */
+#define SWCORECNR     (SWCORE_BASE + 0x6000)
+#define DESCDIAG_BASE (SWCORECNR + 0x100)
+#define P6_DCR0       (DESCDIAG_BASE + 0x070)  /* Port CPU Descriptor Counter Register 0 */
+
 /* LED controller (switch ASIC) */
 #define LEDCREG        (0x0100 + SWMISC_BASE)  /* 0xBB804300 */
 #define LEDMODE_DIRECT (2 << 20)               /* Bits 21:20 = 10: direct mode */
