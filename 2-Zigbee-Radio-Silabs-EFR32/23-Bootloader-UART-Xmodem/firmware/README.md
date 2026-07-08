@@ -2,6 +2,12 @@
 
 Built firmware files for EFR32MG1B232F256GM48 (Lidl Silvercrest Gateway).
 
+> Non-lidl `BOARD=` builds (#143) produce `-<board>`-suffixed files here and
+> are **not** shipped prebuilt — never validated on hardware, and a bad
+> bootloader flash is an SWD-only recovery. Note the memory map below is the
+> MG1B case; MG13 boards use the dedicated bootloader region at `0x0FE10000`
+> (see the main [README](../README.md)).
+
 ## Downloads (pre-built v2.4.2)
 
 - [`bootloader-uart-xmodem-2.4.2-combined.s37`](bootloader-uart-xmodem-2.4.2-combined.s37) — Stage 1 + Stage 2 combined (J-Link, full install)

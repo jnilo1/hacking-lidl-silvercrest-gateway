@@ -44,19 +44,13 @@ RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 BOARD="${BOARD:-lidl}"
 KERNEL="${KERNEL:-6.18}"
 
-BOOTLOADER_IMG="${RTL_DIR}/31-Bootloader/boot.bin"
+# The bootloader is board-specific (DRAM bring-up) — resolved from the same
+# per-board pre-built layout as the kernel (discussion #140).
+BOOTLOADER_IMG="$(resolve_boot_image "$BOARD")" || exit 1
 KERNEL_IMG="$(resolve_kernel_image "$BOARD" "$KERNEL")" || exit 1
 ROOTFS_IMG="${RTL_DIR}/33-Rootfs/rootfs.bin"
 USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
-
-# The full flash bundles 31-Bootloader/boot.bin, which is board-specific (DRAM
-# config). For a non-default board it must have been built for the SAME board or
-# the gateway can brick — we cannot read the board from the binary, so warn.
-if [ "$BOARD" != "lidl" ]; then
-    echo "Warning: BOARD=${BOARD} — make sure 31-Bootloader/boot.bin was built with" >&2
-    echo "  'BOARD=${BOARD} ./build_bootloader.sh'; a mismatched bootloader bricks the gateway (DRAM)." >&2
-fi
 
 OUTPUT="${SCRIPT_DIR}/fullflash.bin"
 BOOT_IP="${BOOT_IP:-192.168.1.6}"

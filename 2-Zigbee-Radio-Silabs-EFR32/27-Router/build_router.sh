@@ -22,7 +22,7 @@
 #   firmware/z3-router-<EmberVersion>-<BAUD>.gbl  (ready to flash via UART)
 #   firmware/z3-router-<EmberVersion>-<BAUD>.s37  (for J-Link/SWD flashing)
 #
-# J. Nilo - January 2026; baud parameter added April 2026
+# J. Nilo - January 2026; baud parameter added April 2026; BOARD= support July 2026 (#143)
 
 set -e
 
@@ -38,8 +38,26 @@ PROJECT_NAME="z3-router"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
+
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
 
 # Default baud — Router CLI is text-based, 115200 is plenty.
 DEFAULT_BAUD=115200
@@ -82,6 +100,7 @@ esac
 
 echo "========================================="
 echo "  Zigbee 3.0 Router Firmware Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  Baud:   ${BAUD}"
 echo "========================================="
@@ -180,7 +199,18 @@ cp "${PATCHES_DIR}/${PROJECT_NAME}.slcp" .
 cp "${PATCHES_DIR}/main.c" .
 cp "${PATCHES_DIR}/app.c" .
 cp -r "${PATCHES_DIR}/config" .
-echo "  - Copied project files from patches"
+# Point the project's device component at the selected board's MCU. The slcp
+# pins the lidl part; leaving it on another board pulls a second device family's
+# sources (duplicate-symbol link error). For lidl TARGET_DEVICE is the same
+# string, so the slcp is byte-identical.
+sed -i "s/EFR32MG1B232F256GM48/${TARGET_DEVICE}/g" ${PROJECT_NAME}.slcp
+# Point the slcp's flow-control config item at the board's flow type too, so the
+# project file matches the VCOM header that apply_uart_config writes below (the
+# header is what the firmware compiles against; see build_ncp.sh, #130). lidl
+# resolves back to the same hw token, so the slcp stays byte-identical.
+ROUTER_FLOW_TOK="$(flow_control_token usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware)" || exit 1
+sed -i -E "s|(SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE, value: )[A-Za-z0-9]+|\1${ROUTER_FLOW_TOK}|" ${PROJECT_NAME}.slcp
+echo "  - Copied project files from patches (device=${TARGET_DEVICE}, flow=${BOARD_UART_FLOW})"
 
 # =========================================
 # Generate project with slc
@@ -200,7 +230,11 @@ cp "${PATCHES_DIR}"/zap-*.h autogen/
 cp "${PATCHES_DIR}"/zap-*.c autogen/ 2>/dev/null || true
 # Substitute the requested baud into the UART config header
 sed -i "s|^#define SL_IOSTREAM_USART_VCOM_BAUDRATE.*|#define SL_IOSTREAM_USART_VCOM_BAUDRATE              ${BAUD}|" config/sl_iostream_usart_vcom_config.h
-echo "  - Copied UART (baud=${BAUD}), PTI, and ZAP files from patches"
+# Apply the selected board's UART routing — a no-op (byte-identical header)
+# for the lidl reference, the override path for ported boards.
+apply_uart_config config/sl_iostream_usart_vcom_config.h \
+    SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware
+echo "  - Copied UART (baud=${BAUD}, board=${BOARD}, flow=${BOARD_UART_FLOW}), PTI, and ZAP files from patches"
 
 echo "  Patching Makefile..."
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))
@@ -241,7 +275,7 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/${PROJECT_NAME}"
-OUT_BASE="${PROJECT_NAME}-${EMBERZNET_VERSION}-${BAUD}"
+OUT_BASE="${PROJECT_NAME}-${EMBERZNET_VERSION}-${BAUD}${BOARD_SUFFIX}"
 
 # Only remove the specific files we're about to rewrite — preserve other baud
 # variants in firmware/ (the matrix lives here side-by-side).

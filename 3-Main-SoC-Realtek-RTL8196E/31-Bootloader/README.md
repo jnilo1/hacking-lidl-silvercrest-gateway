@@ -40,13 +40,16 @@ BOARD=<board> ./build_bootloader.sh    # build for another board (boards/<board>
 ```
 
 Outputs:
-- `boot.bin` — flash image (stays in download mode after boot-code flash)
+- `boot-img/<board>/boot.bin` — flash image (stays in download mode after
+  boot-code flash). One pre-built image per board is committed; the build
+  writes only into the slot of the selected `BOARD`, so building for one
+  board never touches another board's binary.
 - `btcode/build/test.bin` — RAM-test image (test without flashing)
 
 Per-board constants (DRAM size and DDR bring-up values, boothold page
 placement) live under `boards/` — see `boards/README.md` for the
-contract and how to add a board. The default `lidl` build reproduces the
-committed `boot.bin` bit-for-bit.
+contract and how to add a board. The build is reproducible: it regenerates
+the committed `boot-img/<board>/boot.bin` bit-for-bit.
 
 ## Flashing
 
@@ -73,13 +76,19 @@ Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt a
 ### Step 2 — Send the bootloader via TFTP
 
 ```bash
-./flash_bootloader.sh          # checks ARP reachability, then uploads
+./flash_bootloader.sh                        # Lidl (default board)
+BOARD=<board> ./flash_bootloader.sh          # another board's pre-built image
 ```
+
+The script checks ARP reachability, then uploads the pre-built
+`boot-img/<board>/boot.bin` matching `BOARD` (default `lidl`). The
+bootloader carries the board's DRAM bring-up — flashing another board's
+image bricks the gateway, so double-check `BOARD` here.
 
 Or manually:
 
 ```bash
-tftp -m binary 192.168.1.6 -c put boot.bin
+tftp -m binary 192.168.1.6 -c put boot-img/lidl/boot.bin
 ```
 
 The bootloader auto-detects the image type and flashes it. After flashing, reboot manually:

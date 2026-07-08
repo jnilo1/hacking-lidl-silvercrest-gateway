@@ -27,7 +27,7 @@
 #include "rtl8196e_regs.h"
 
 #define RTL8196E_DRV_NAME "rtl8196e-eth"
-#define RTL8196E_DRV_VERSION "2.19"
+#define RTL8196E_DRV_VERSION "2.21"
 
 #define RTL8196E_TX_DESC      128
 #define RTL8196E_RX_DESC      128
@@ -46,17 +46,18 @@
 #define RTL8196E_TX_RECLAIM_MS 4
 
 /*
- * ETHDRV-015 (issue #99): the switch RX engine and the driver rx_idx cursor can
- * desync (e.g. a TRXRDY cycle that rewinds the switch RX pointer without
- * resyncing rx_idx). The switch then asserts PKTHDR_DESC_RUNOUT continuously and
- * the ISR -> NAPI-poll -> re-enable handshake spins doing zero work — a
- * self-sustaining interrupt storm that pins the CPU until the watchdog reboots.
- * The vendor SDK recovers via a periodic stuck-detector that re-inits the switch
- * core (rtl_check_swCore_tx_hang -> rtl865x_reinitSwitchCore); our from-scratch
- * driver dropped that safety net. Two complementary detectors restore it:
+ * Switch-core RX-runout recovery. The switch RX engine and the driver rx_idx
+ * cursor can desync (e.g. a TRXRDY cycle that rewinds the switch RX pointer
+ * without resyncing rx_idx). The switch then asserts PKTHDR_DESC_RUNOUT
+ * continuously and the ISR -> NAPI-poll -> re-enable handshake spins doing zero
+ * work — a self-sustaining interrupt storm that pins the CPU until the watchdog
+ * reboots. The vendor SDK recovers via a periodic stuck-detector that re-inits
+ * the switch core (rtl_check_swCore_tx_hang -> rtl865x_reinitSwitchCore); this
+ * from-scratch driver restores an equivalent safety net with two complementary
+ * detectors:
  *   - poll-side: RTL8196E_RUNOUT_RESYNC_THRESH consecutive zero-work polls taken
  *     while PKTHDR_DESC_RUNOUT is asserted trigger a full ring resync from poll
- *     context (breaks the storm in a few microseconds — the primary fix);
+ *     context (breaks the storm in a few microseconds — the primary path);
  *   - periodic: every RTL8196E_SWCORE_CHECK_MS a watchdog timer checks for
  *     PKTHDR_DESC_RUNOUT staying asserted across RTL8196E_SWCORE_HANG_THRESH
  *     checks and kicks a poll, covering a non-CPU-pinning stall where NAPI is
@@ -67,7 +68,7 @@
 #define RTL8196E_SWCORE_HANG_THRESH   3
 
 /*
- * ETHDRV-016 (issue #99 bench prototype) escalation thresholds.
+ * Switch-core deep-reset escalation thresholds.
  * RTL8196E_DEEP_RESET_THRESH: consecutive shallow ring resyncs that fail to
  * recover (no productive poll in between) before escalating to a full
  * switch-core deep reset.
@@ -80,34 +81,26 @@
 #define RTL8196E_TX_HANG_THRESH       3
 
 /*
- * issue #99 (rc4): consecutive budget-saturating polls that delivered ZERO
- * packets before escalating to a switch-core deep reset. A drop-dominated RX
- * flood (intrinsic switch desync or runt storm) saturates `processed` while
- * `delivered` stays 0 — the RUNOUT-independent signature of the field
- * soft-lockup. Bench-tuned; a real workload delivers something within a few
- * polls so the run never accumulates.
+ * Switch-core PHY-interface watchdog: consecutive 1 s checks finding the
+ * switch-core per-port EnablePHYIf bit cleared on an administratively-up port
+ * before forcing a deep reset. Mirrors the vendor one_sec_timer() PHY-interface
+ * recovery branch (rtl_nic.c, the "(PCRP & EnablePHYIf) == 0" path that runs
+ * rtl865x_reinitSwitchCore). >1 so the brief clear-then-reenable window of a
+ * deep reset cannot self-trigger.
+ */
+#define RTL8196E_PHYIF_LOST_THRESH    3
+
+/*
+ * Consecutive budget-saturating polls that delivered ZERO packets before
+ * escalating to a switch-core deep reset. A drop-dominated RX flood (intrinsic
+ * switch desync or runt storm) saturates `processed` while `delivered` stays
+ * 0 — a RUNOUT-independent soft-lockup signature. Bench-tuned; a real workload
+ * delivers something within a few polls so the run never accumulates.
  */
 static unsigned int rtl8196e_rx_stall_thresh = 32;
 module_param(rtl8196e_rx_stall_thresh, uint, 0644);
 MODULE_PARM_DESC(rtl8196e_rx_stall_thresh,
-		 "issue#99 rc4: consecutive zero-delivery budget-saturating polls before a switch-core deep reset (0 disables)");
-
-#ifdef CONFIG_RTL8196E_ETH_DEBUG
-/*
- * issue #99 fault injection (debug builds only — CONFIG_RTL8196E_ETH_DEBUG,
- * never shipped). When non-zero, rtl8196e_poll presents the wrapper with a
- * budget-saturating, zero-delivery poll for this many invocations (decrementing
- * each time), deterministically driving the stall detector to its switch-core
- * deep-reset escalation regardless of live traffic dynamics. This is the
- * detector/recovery counterpart to rtl8196e_force_dropflood (which exercises
- * the bounded loop itself). Set via
- * /sys/module/rtl8196e_eth/parameters/rtl8196e_force_stall.
- */
-static unsigned int rtl8196e_force_stall;
-module_param(rtl8196e_force_stall, uint, 0644);
-MODULE_PARM_DESC(rtl8196e_force_stall,
-		 "issue#99 DEBUG: present N budget-saturating zero-delivery polls to fire the stall detector (0=off). Never enable in production.");
-#endif
+		 "consecutive zero-delivery budget-saturating polls before a switch-core deep reset (0 disables)");
 
 static unsigned int link_poll_ms;
 module_param(link_poll_ms, uint, 0644);
@@ -128,24 +121,59 @@ struct rtl8196e_priv {
 	struct timer_list swcore_check_timer;
 	u32 rx_runout_zero;	/* consecutive zero-work polls under RUNOUT */
 	u32 swcore_runout_seen;	/* consecutive periodic checks with RUNOUT asserted */
-	u32 rx_runout_resync;	/* #99 storm resyncs performed (ethtool) */
+	u32 rx_runout_resync;	/* storm resyncs performed (ethtool) */
 	u32 rx_runout_kick;	/* periodic-watchdog NAPI kicks (ethtool) */
 	/*
-	 * ETHDRV-016 (issue #99 bench prototype): deep switch-core reset
-	 * escalation. The in-poll ring resync above is shallow (it resyncs the
-	 * RX/TX ring pointers only); if it fires repeatedly without clearing the
-	 * storm, or the TX-done watchdog sees the switch core wedged, escalate to
-	 * a full FullAndSemiReset (SIRR FULL_RST + switch-core clock cycle, the
-	 * vendor rtl865x_reinitSwitchCore depth) from process context.
+	 * Deep switch-core reset escalation. The in-poll ring resync above is
+	 * shallow (it resyncs the RX/TX ring pointers only); if it fires
+	 * repeatedly without clearing the storm, or the TX-done watchdog sees the
+	 * switch core wedged, escalate to a full FullAndSemiReset (SIRR FULL_RST +
+	 * switch-core clock cycle, the vendor rtl865x_reinitSwitchCore depth) from
+	 * process context.
 	 */
 	struct work_struct swcore_reset_work;
 	u32 rx_runout_resync_run;	/* consecutive resyncs that did not recover */
 	u32 swcore_deep_reset;		/* full switch-core deep resets performed */
 	u32 tx_hang_last_idx;		/* last TX-done index seen stuck */
 	u32 tx_hang_cnt;		/* consecutive checks stuck at the same idx */
-	/* issue #99 (rc4): RUNOUT-independent drop-flood stall detector + counters. */
+	/* RUNOUT-independent drop-flood stall detector + counters. */
 	u32 rx_stall_run;	/* consecutive budget-saturating zero-delivery polls */
 	u32 poll_budget_hit;	/* polls that saturated the budget (ethtool) */
+	/*
+	 * issue #99 record-v8 activity taps. The first fully-instrumented
+	 * field crash showed every recovery counter at zero — the open
+	 * question moved from "which recovery fired" to "was eth even active
+	 * during the storm". Counters + last-activity jiffies stamps answer
+	 * that in one subtraction against the panic-time jiffies; the
+	 * per-jiffy ISR burst high-water is the witness an eth-line hardirq
+	 * storm cannot dodge; the tx-reclaim kick pair counts the only
+	 * uncounted NAPI-SCHED-without-masking window. Plain u32 stores on
+	 * paths already dominated by MMIO.
+	 */
+	u32 isr_cnt;		/* ISR invocations */
+	u32 isr_last_j;		/* jiffies at last ISR entry */
+	u32 isr_burst_j;	/* jiffy the current burst window belongs to */
+	u32 isr_burst;		/* ISR entries within the current jiffy */
+	u32 isr_burst_max;	/* high-water of isr_burst */
+	u32 poll_cnt;		/* NAPI poll invocations */
+	u32 poll_last_j;	/* jiffies at last poll entry */
+	u32 poll_delivered;	/* packets delivered by the poll (sum, wraps) */
+	u32 kick_txreclaim;	/* tx-reclaim timer napi_schedule kicks */
+	u32 kick_txreclaim_j;	/* jiffies at last tx-reclaim kick */
+	/* Switch-core PHY-interface watchdog. */
+	u32 phyif_lost_cnt;	/* consecutive checks with EnablePHYIf read back clear */
+	/* xmit_stopped hint observability (see rtl8196e_start_xmit/_poll). */
+	u32 tx_xoff_seen_xmit;	/* start_xmit found the TX queue stopped after submit */
+	u32 tx_xoff_seen_poll;	/* NAPI poll found the TX queue stopped after reclaim */
+	/*
+	 * TX skbs reclaimed in start_xmit context, parked here for the NAPI
+	 * poll to free through napi_consume_skb() with a real budget instead
+	 * of dev_consume_skb_any() inline. Softirq-serialized on this UP
+	 * core (xmit runs BH-disabled; poll and the reclaim timer are
+	 * softirq), so the lockless __skb queue ops are safe — same argument
+	 * as the driver's bare counters.
+	 */
+	struct sk_buff_head tx_defer_list;
 	u16 vlan_id;
 	u16 portmask;
 	int phy_port;
@@ -157,7 +185,7 @@ struct rtl8196e_priv {
 };
 
 /*
- * Single-instance back-pointer for the panic-time #99 snapshot. There is one
+ * Single-instance back-pointer for the panic-time recovery snapshot. There is one
  * eth port on this SoC; set after register_netdev() succeeds in probe and
  * cleared in remove. Read unlocked from the watchdog panic notifier
  * (rtl8196e_eth_panic_snapshot) — safe on this UP platform: a plain pointer
@@ -166,7 +194,7 @@ struct rtl8196e_priv {
 static struct rtl8196e_priv *rtl8196e_panic_priv;
 
 /*
- * Capture the issue #99 recovery fingerprint from a known-good priv. Shared by
+ * Capture the switch-core recovery fingerprint from a known-good priv. Shared by
  * the watchdog panic snapshot (DRAM record v7) and rtl8196e_eth_diag_log() (the
  * kernel-log fingerprint emitted at each recovery action), so both carry
  * identical fields. Panic/softirq-safe: plain counter reads, the same MMIO
@@ -207,10 +235,26 @@ static void __rtl8196e_eth_capture(struct rtl8196e_priv *priv,
 	out->mbuf_no_shadow = diag.rx_mbuf_no_shadow;
 	out->skew           = diag.rx_pkthdr_mbuf_skew;
 	out->bad_len        = diag.rx_bad_len;
+	/*
+	 * v8: activity taps + NAPI state + ring bases. The bases are stored in
+	 * the same (KSEG1) address form the switch registers hold, so
+	 * cpurpdcr0 − rx_ph_base decodes straight to a byte offset / index.
+	 */
+	out->isr_cnt          = priv->isr_cnt;
+	out->isr_last_j       = priv->isr_last_j;
+	out->isr_burst_max    = priv->isr_burst_max;
+	out->poll_cnt         = priv->poll_cnt;
+	out->poll_last_j      = priv->poll_last_j;
+	out->poll_delivered   = priv->poll_delivered;
+	out->kick_txreclaim   = priv->kick_txreclaim;
+	out->kick_txreclaim_j = priv->kick_txreclaim_j;
+	out->napi_state       = (u32)READ_ONCE(priv->napi.state);
+	out->rx_ph_base       = (u32)(uintptr_t)rtl8196e_ring_rx_pkthdr_base(priv->ring);
+	out->rx_mb_base       = (u32)(uintptr_t)rtl8196e_ring_rx_mbuf_base(priv->ring);
 }
 
 /*
- * Panic-time snapshot of the issue #99 recovery state. Called from the rtl819x
+ * Panic-time snapshot of the switch-core recovery state. Called from the rtl819x
  * watchdog panic notifier to populate record v7 — the fallback capture for the
  * case the box hangs anyway and the watchdog reboots it. Panic context: no
  * locks, only plain reads and MMIO. Declared in the shared header (the watchdog
@@ -227,8 +271,31 @@ bool rtl8196e_eth_panic_snapshot(struct rtl8196e_eth_panic *out)
 }
 
 /*
+ * 1 Hz flight-recorder sample for the watchdog's storm-proof hrtimer
+ * (record v8). Deliberately much lighter than the full capture: two MMIO
+ * loads plus word reads, no ring-diag copy — it runs every second for the
+ * life of the box, in hardirq context. Same __weak linkage as the panic
+ * snapshot.
+ */
+bool rtl8196e_eth_flight_sample(struct rtl8196e_eth_flight *out)
+{
+	struct rtl8196e_priv *priv = rtl8196e_panic_priv;
+
+	if (!priv || !priv->ndev || !netif_running(priv->ndev) || !priv->ring)
+		return false;
+	out->iisr           = rtl8196e_readl(CPUIISR);
+	out->iimr           = rtl8196e_readl(CPUIIMR);
+	out->isr_cnt        = priv->isr_cnt;
+	out->poll_cnt       = priv->poll_cnt;
+	out->poll_delivered = priv->poll_delivered;
+	out->rx_packets     = (u32)priv->ndev->stats.rx_packets;
+	out->napi_state     = (u32)READ_ONCE(priv->napi.state);
+	return true;
+}
+
+/*
  * Emit the same fingerprint to the kernel log at a recovery action. With the
- * rc4 bounded poll the box self-heals (deep reset / resync) without panicking,
+ * bounded poll the box self-heals (deep reset / resync) without panicking,
  * so the DRAM panic record is not written in the common case — this log line is
  * the capture for that case (it survives because there is no reboot). @cause
  * names the recovery site. Rate-limited by its call sites (each fires only at a
@@ -242,7 +309,7 @@ static void rtl8196e_eth_diag_log(struct rtl8196e_priv *priv, const char *cause)
 		return;
 	__rtl8196e_eth_capture(priv, &e);
 	netdev_warn(priv->ndev,
-		    "issue#99 fingerprint [%s]: iisr=0x%x iimr=0x%x pollhit=%u stallrun=%u deepreset=%u resync=%u kick=%u rxidx=%u rxdesc=0x%x rpdcr0=0x%x rmdcr0=0x%x p6dcr0=0x%x txprod=%u txcons=%u txfree=%u | A: wildph=%u wildmb=%u noshadow=%u skew=%u  B: badlen=%u | rxpkts=%u txpkts=%u\n",
+		    "eth recovery fingerprint [%s]: iisr=0x%x iimr=0x%x pollhit=%u stallrun=%u deepreset=%u resync=%u kick=%u rxidx=%u rxdesc=0x%x rpdcr0=0x%x rmdcr0=0x%x p6dcr0=0x%x txprod=%u txcons=%u txfree=%u | A: wildph=%u wildmb=%u noshadow=%u skew=%u  B: badlen=%u | rxpkts=%u txpkts=%u\n",
 		    cause, e.iisr, e.iimr, e.poll_budget_hit, e.rx_stall_run,
 		    e.swcore_deep_reset, e.resync, e.kick, e.rx_idx, e.rx_desc,
 		    e.cpurpdcr0, e.cpurmdcr0, e.p6_dcr0, e.tx_prod, e.tx_cons,
@@ -314,12 +381,22 @@ static void rtl8196e_tx_reclaim_timer_fn(struct timer_list *t)
 {
 	struct rtl8196e_priv *priv = timer_container_of(priv, t, tx_reclaim_timer);
 
-	if (netif_running(priv->ndev))
+	if (netif_running(priv->ndev)) {
+		/*
+		 * record-v8 tap: this is the one napi_schedule that sets
+		 * NAPI_STATE_SCHED without masking CPUIIMR first (the ISR
+		 * masks before scheduling; the runout kick below is counted by
+		 * rx_runout_kick). Count it so a field capture can tell
+		 * whether the SCHED+unmasked window was even open.
+		 */
+		priv->kick_txreclaim++;
+		priv->kick_txreclaim_j = (u32)jiffies;
 		napi_schedule(&priv->napi);
+	}
 }
 
 /*
- * Periodic switch-core watchdog (ETHDRV-015, belt-and-suspenders for #99).
+ * Periodic switch-core watchdog (belt-and-suspenders for the RX-runout storm).
  * If PKTHDR_DESC_RUNOUT stays asserted across RTL8196E_SWCORE_HANG_THRESH
  * consecutive checks, the NAPI path is not clearing it — kick a poll so the
  * poll-side detector runs the resync. During the CPU-pinned storm the poll
@@ -346,8 +423,8 @@ static void rtl8196e_swcore_check_timer_fn(struct timer_list *t)
 	}
 
 	/*
-	 * ETHDRV-016 (issue #99, Lead 2): TX-done hang watchdog, mirroring the
-	 * vendor rtl_check_swCore_tx_hang. If the TX-done descriptor stays
+	 * TX-done hang watchdog, mirroring the vendor
+	 * rtl_check_swCore_tx_hang. If the TX-done descriptor stays
 	 * SWCORE_OWNED at the same index across RTL8196E_TX_HANG_THRESH checks
 	 * with the link up, the switch core is wedged on TX — a stall the
 	 * RX-runout detectors cannot see — so escalate to a deep reset. The
@@ -376,6 +453,34 @@ static void rtl8196e_swcore_check_timer_fn(struct timer_list *t)
 		priv->tx_hang_cnt = 0;
 	}
 
+	/*
+	 * Switch-core PHY-interface watchdog, mirroring the vendor
+	 * one_sec_timer() EnablePHYIf branch (rtl_nic.c ->
+	 * rtl865x_reinitSwitchCore). For an administratively-up port the switch's
+	 * per-port EnablePHYIf bit must stay set; the switch core can silently
+	 * clear it on an internal fault, severing the MAC<->PHY interface with
+	 * neither a RUNOUT nor a TX-done hang -- a stall both detectors above are
+	 * blind to. EnablePHYIf is set at port init and is independent of cable
+	 * link state (a carrier loss leaves it set), so no carrier guard is
+	 * needed; netif_running() is already enforced at the top of this timer.
+	 * Require RTL8196E_PHYIF_LOST_THRESH consecutive clear reads so the brief
+	 * clear-then-reenable window of our own deep reset cannot self-trigger,
+	 * then escalate to the same FullAndSemiReset the vendor reaches.
+	 */
+	if (priv->phy_port >= 0 &&
+	    !(rtl8196e_readl(PCRP0 + (priv->phy_port << 2)) & EnablePHYIf)) {
+		if (++priv->phyif_lost_cnt >= RTL8196E_PHYIF_LOST_THRESH) {
+			priv->phyif_lost_cnt = 0;
+			netdev_warn(priv->ndev,
+				    "switch-core PHY interface lost on port %d\n",
+				    priv->phy_port);
+			rtl8196e_eth_diag_log(priv, "phyif-lost");
+			schedule_work(&priv->swcore_reset_work);
+		}
+	} else {
+		priv->phyif_lost_cnt = 0;
+	}
+
 	mod_timer(&priv->swcore_check_timer,
 		  jiffies + msecs_to_jiffies(RTL8196E_SWCORE_CHECK_MS));
 }
@@ -383,7 +488,7 @@ static void rtl8196e_swcore_check_timer_fn(struct timer_list *t)
 /*
  * Reprogram the volatile per-open switch state and start the core: ring
  * bases, PHY, VLAN/NETIF/L2 entries, then rtl8196e_hw_start(). Shared by
- * open() and the #99 deep-reset worker (ETHDRV-016). Does NOT touch NAPI,
+ * open() and the deep-reset worker. Does NOT touch NAPI,
  * the eth IRQ mask, or the TX queue — the caller frames those. Returns 0,
  * or a negative errno from PHY/VLAN/NETIF setup (L2-entry failures fall
  * back to trap mode and are not fatal, matching open()'s original flow).
@@ -478,6 +583,7 @@ static int rtl8196e_open(struct net_device *ndev)
 
 	priv->rx_runout_zero = 0;
 	priv->swcore_runout_seen = 0;
+	priv->phyif_lost_cnt = 0;
 	mod_timer(&priv->swcore_check_timer,
 		  jiffies + msecs_to_jiffies(RTL8196E_SWCORE_CHECK_MS));
 
@@ -491,13 +597,13 @@ static int rtl8196e_stop(struct net_device *ndev)
 
 	netif_stop_queue(ndev);
 	/*
-	 * Make sure no #99 deep-reset worker (ETHDRV-016) is mid-flight before
+	 * Make sure no deep-reset worker is mid-flight before
 	 * we tear down: it touches NAPI, the rings and the queue. The worker
 	 * does not take rtnl, so cancel_work_sync() here cannot deadlock.
 	 */
 	cancel_work_sync(&priv->swcore_reset_work);
 	/*
-	 * NAPI first (ETHDRV-009): napi_disable() waits out an in-flight
+	 * NAPI first: napi_disable() waits out an in-flight
 	 * poll, so its napi_complete_done() branch can no longer re-arm
 	 * CPUIIMR after we mask below. An RX IRQ landing in the short
 	 * window before the mask is acked by the ISR and dropped
@@ -523,6 +629,8 @@ static int rtl8196e_stop(struct net_device *ndev)
 		rtl8196e_ring_tx_reset(priv->ring);
 		rtl8196e_ring_rx_reset(priv->ring);
 	}
+	/* NAPI is quiesced — nothing will drain the defer list until open(). */
+	skb_queue_purge(&priv->tx_defer_list);
 	netdev_reset_queue(ndev);
 
 	timer_delete_sync(&priv->link_timer);
@@ -582,7 +690,8 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 	 */
 	{
 		unsigned int rpkts = 0, rbytes = 0;
-		rtl8196e_ring_tx_reclaim(priv->ring, &rpkts, &rbytes, 0);
+		rtl8196e_ring_tx_reclaim(priv->ring, &rpkts, &rbytes, 0,
+					 &priv->tx_defer_list);
 		if (rpkts)
 			netdev_completed_queue(ndev, rpkts, rbytes);
 	}
@@ -599,7 +708,8 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 
 		if (net_ratelimit())
 			netdev_warn(ndev, "xmit submit failed (%d), reclaiming\n", ret);
-		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
+		rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0,
+					 &priv->tx_defer_list);
 		if (pkts)
 			netdev_completed_queue(ndev, pkts, bytes);
 		ret = rtl8196e_ring_tx_submit(priv->ring, skb, skb->data, skb->len,
@@ -631,8 +741,10 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
 	 * BQL byte-limit XOFF from netdev_sent_queue() — arm the software
 	 * reclaim timer so a no-RX stall cannot wait for the 10 s watchdog.
 	 */
-	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(ndev, 0))))
+	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(ndev, 0)))) {
+		priv->tx_xoff_seen_xmit++;
 		rtl8196e_arm_tx_reclaim(priv);
+	}
 
 	return NETDEV_TX_OK;
 }
@@ -644,9 +756,9 @@ static __iram netdev_tx_t rtl8196e_start_xmit(struct sk_buff *skb, struct net_de
  * (TRXRDY) back to descriptor 0, so the RX ring MUST be resynced in lockstep:
  * rebuilding only TX leaves rx_idx desynced from the switch's RX pointer, the
  * switch then sees no usable descriptors and asserts PKTHDR_DESC_RUNOUT
- * continuously — the self-sustaining #99 storm. Shared recovery body used by the
- * TX watchdog (rtl8196e_tx_timeout) and the poll-side RUNOUT-storm detector
- * (ETHDRV-015). The caller owns NAPI quiescing and the IRQ mask/enable framing;
+ * continuously — the self-sustaining interrupt storm. Shared recovery body used
+ * by the TX watchdog (rtl8196e_tx_timeout) and the poll-side RUNOUT-storm
+ * detector. The caller owns NAPI quiescing and the IRQ mask/enable framing;
  * this routine touches only the rings and the switch engine and leaves the eth
  * IRQ in the (masked) state the caller set.
  */
@@ -655,7 +767,7 @@ static void rtl8196e_hw_ring_resync(struct rtl8196e_priv *priv)
 	unsigned int pkts = 0, bytes = 0;
 
 	rtl8196e_hw_stop(&priv->hw);
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0, NULL);
 	rtl8196e_ring_tx_reset(priv->ring);
 	rtl8196e_ring_rx_reset(priv->ring);
 	/* Rings rebuilt from scratch — restart BQL accounting with them. */
@@ -688,7 +800,7 @@ static void rtl8196e_tx_timeout(struct net_device *ndev, unsigned int txqueue)
 }
 
 /*
- * ETHDRV-016 (issue #99 bench prototype): deep switch-core reset, run from a
+ * Deep switch-core reset, run from a
  * workqueue because rtl8196e_hw_swcore_reset() sleeps ~650 ms (clock cycle +
  * FULL_RST) — illegal in the NAPI poll / timer softirq contexts that trigger
  * it. This is the depth of the vendor rtl865x_reinitSwitchCore: a full
@@ -715,7 +827,7 @@ static void rtl8196e_swcore_reset_work_fn(struct work_struct *work)
 	rtl8196e_hw_disable_irqs(&priv->hw);
 	rtl8196e_hw_stop(&priv->hw);
 
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, 0, NULL);
 	rtl8196e_ring_tx_reset(priv->ring);
 	rtl8196e_ring_rx_reset(priv->ring);
 	netdev_reset_queue(ndev);
@@ -734,6 +846,7 @@ static void rtl8196e_swcore_reset_work_fn(struct work_struct *work)
 	priv->rx_runout_resync_run = 0;
 	priv->tx_hang_cnt = 0;
 	priv->rx_stall_run = 0;
+	priv->phyif_lost_cnt = 0;
 
 	netdev_warn(ndev, "switch core reset done (#%u)\n", priv->swcore_deep_reset);
 }
@@ -752,12 +865,29 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	 */
 	int work_done;
 
+	/* record-v8 activity taps — see the ISR-side comment. */
+	priv->poll_cnt++;
+	priv->poll_last_j = (u32)jiffies;
+
 	work_done = rtl8196e_ring_rx_poll(priv->ring, budget, napi, priv->ndev,
 					  &delivered);
+	priv->poll_delivered += (u32)delivered;
 
-	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, budget);
+	rtl8196e_ring_tx_reclaim(priv->ring, &pkts, &bytes, budget, NULL);
 	if (pkts)
 		netdev_completed_queue(priv->ndev, pkts, bytes);
+
+	/*
+	 * Free the skbs start_xmit's reclaim parked on the defer list —
+	 * here they get the real-budget napi_consume_skb() path instead of
+	 * the dev_consume_skb_any() they would have taken inline in xmit.
+	 */
+	if (!skb_queue_empty(&priv->tx_defer_list)) {
+		struct sk_buff *dskb;
+
+		while ((dskb = __skb_dequeue(&priv->tx_defer_list)))
+			napi_consume_skb(dskb, budget);
+	}
 
 	/* Flush any deferred kick_tx pulses before going idle. */
 	rtl8196e_ring_kick_drain(priv->ring);
@@ -775,11 +905,13 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	 * the software timer going. Once the queue is woken / un-frozen,
 	 * netif_xmit_stopped() is false and the timer lapses.
 	 */
-	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(priv->ndev, 0))))
+	if (unlikely(netif_xmit_stopped(netdev_get_tx_queue(priv->ndev, 0)))) {
+		priv->tx_xoff_seen_poll++;
 		rtl8196e_arm_tx_reclaim(priv);
+	}
 
 	/*
-	 * ETHDRV-015 (issue #99): a poll that did zero RX work while
+	 * A poll that did zero RX work while
 	 * PKTHDR_DESC_RUNOUT is (re)asserted means the switch RX pointer and
 	 * rx_idx have desynced — the ISR/poll/re-enable handshake would spin
 	 * forever (a CPU-pinning interrupt storm). The poll is the one context
@@ -790,7 +922,7 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	 * short-circuits), so the normal RX path pays nothing.
 	 */
 	/*
-	 * ETHDRV-016 (issue #99, Lead 3 — vendor parity): the vendor swNic
+	 * Vendor parity: the vendor swNic
 	 * receive path W1Cs PKTHDR/MBUF_DESC_RUNOUT as it refills descriptors,
 	 * so a transient runout self-clears as the driver makes progress. Our
 	 * napi_complete tail already W1Cs runout when the poll completes
@@ -805,29 +937,15 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 	/*
 	 * budget==0 (netpoll) must not be mistaken for saturation. A poll that
 	 * filled the whole budget gets the RUNOUT W1C (vendor-parity clear-on-
-	 * progress) AND drives the issue #99 (rc4) drop-flood stall detector: a
-	 * saturating poll that delivered NOTHING is the field signature of the
-	 * soft-lockup (the bounded loop in rtl8196e_ring_rx_poll now lets it
-	 * return instead of pinning the CPU). After RTL8196E_RX_STALL_THRESH such
-	 * polls in a row — independent of PKTHDR_DESC_RUNOUT, CLEAR in the field
-	 * captures — escalate to the switch-core deep reset. Any productive poll
+	 * progress) AND drives the drop-flood stall detector: a saturating poll
+	 * that delivered NOTHING is the signature of the soft-lockup (the bounded
+	 * loop in rtl8196e_ring_rx_poll now lets it return instead of pinning the
+	 * CPU). After RTL8196E_RX_STALL_THRESH such polls in a row — independent of
+	 * PKTHDR_DESC_RUNOUT — escalate to the switch-core deep reset. Any
+	 * productive poll
 	 * resets the run; the non-saturating common case touches rx_stall_run
 	 * only when it is actually non-zero, so the hot path adds no store.
 	 */
-#ifdef CONFIG_RTL8196E_ETH_DEBUG
-	/*
-	 * issue #99 fault injection: simulate a budget-saturating zero-delivery
-	 * poll so the detector below escalates deterministically (no live flood
-	 * needed). The real rx_poll above already returned (empty ring → cheap),
-	 * so overriding here only drives the detector/complete logic.
-	 */
-	if (unlikely(rtl8196e_force_stall)) {
-		rtl8196e_force_stall--;
-		work_done = budget;
-		delivered = 0;
-	}
-#endif
-
 	if (budget && work_done == budget) {
 		priv->poll_budget_hit++;
 		rtl8196e_writel(PKTHDR_DESC_RUNOUT_IP_ALL | MBUF_DESC_RUNOUT_IP_ALL, CPUIISR);
@@ -856,7 +974,7 @@ static __iram int rtl8196e_poll(struct napi_struct *napi, int budget)
 			priv->rx_runout_resync++;
 			priv->rx_runout_zero = 0;
 			/*
-			 * ETHDRV-016 (Lead 1): a ring resync that keeps firing
+			 * A ring resync that keeps firing
 			 * without a productive poll in between means the storm is
 			 * not a mere ring-pointer desync the shallow resync can
 			 * fix — escalate to a full switch-core deep reset (from
@@ -894,7 +1012,27 @@ static __iram irqreturn_t rtl8196e_isr(int irq, void *dev_id)
 	struct rtl8196e_priv *priv = netdev_priv(ndev);
 	u32 status;
 	u32 mask;
+	u32 now_j;
 	bool link;
+
+	/*
+	 * record-v8 activity taps: invocation count, last-entry stamp, and the
+	 * per-jiffy burst high-water. A legitimate ISR rate is bounded by NAPI
+	 * masking after the first RX IRQ (well under one entry per jiffy under
+	 * load); a level-line storm re-entering per eret would drive
+	 * isr_burst_max to the thousands — a witness it cannot dodge. Word
+	 * stores only, next to the two MMIO reads below.
+	 */
+	now_j = (u32)jiffies;
+	priv->isr_cnt++;
+	priv->isr_last_j = now_j;
+	if (priv->isr_burst_j == now_j) {
+		if (++priv->isr_burst > priv->isr_burst_max)
+			priv->isr_burst_max = priv->isr_burst;
+	} else {
+		priv->isr_burst_j = now_j;
+		priv->isr_burst = 1;
+	}
 
 	status = rtl8196e_readl(CPUIISR);
 	mask = rtl8196e_readl(CPUIIMR);
@@ -936,7 +1074,7 @@ static int rtl8196e_set_mac_address(struct net_device *ndev, void *p)
 }
 
 /*
- * Same F2 pattern for the MTU (ETHDRV-012): the NETIF table holds the
+ * Same F2 pattern for the MTU: the NETIF table holds the
  * open-time value, so a live change would update ndev->mtu without the
  * hardware following — a silent inconsistency. Refuse while UP; the
  * core has already clamped new_mtu to [min_mtu, max_mtu], and the next
@@ -1016,7 +1154,7 @@ static int rtl8196e_get_link_ksettings(struct net_device *ndev,
 	return 0;
 }
 
-#define RTL8196E_ETHTOOL_STATS_COUNT 26
+#define RTL8196E_ETHTOOL_STATS_COUNT 35
 
 /* ethtool: return the number of driver-specific statistics. */
 static int rtl8196e_get_sset_count(struct net_device *ndev, int sset)
@@ -1052,16 +1190,28 @@ static void rtl8196e_get_strings(struct net_device *ndev, u32 sset, u8 *data)
 		"rtl8196e_tx_bad_pkthdr",
 		"rtl8196e_tx_bad_mbuf",
 		"rtl8196e_rx_mbuf_no_shadow",
-		/* ETHDRV-015 (#99) recovery counters — stay 0 unless a storm hit. */
+		/* Switch-core recovery counters — stay 0 unless a storm hit. */
 		"rtl8196e_rx_runout_resync",
 		"rtl8196e_rx_runout_kick",
-		/* ETHDRV-016 (#99) deep switch-core resets — stay 0 unless escalated. */
+		/* Deep switch-core resets — stay 0 unless escalated. */
 		"rtl8196e_swcore_deep_reset",
-		/* issue #99 probe: RX pkthdr/mbuf index skew (saturation-only). */
+		/* RX pkthdr/mbuf index skew probe (saturation-only). */
 		"rtl8196e_rx_pkthdr_mbuf_skew",
-		/* issue #99 (rc4): drop-flood stall detector observability. */
+		/* Drop-flood stall detector observability. */
 		"rtl8196e_poll_budget_hit",
 		"rtl8196e_rx_stall_run",
+		/* xmit_stopped hint observability (likely/unlikely measurement). */
+		"rtl8196e_tx_xoff_seen_xmit",
+		"rtl8196e_tx_xoff_seen_poll",
+		/* Deferred TX skb frees (xmit-context reclaim -> poll drain). */
+		"rtl8196e_tx_defer_queued",
+		"rtl8196e_tx_defer_direct",
+		/* record-v8 activity taps (issue #99 storm forensics). */
+		"rtl8196e_isr_cnt",
+		"rtl8196e_isr_burst_max",
+		"rtl8196e_poll_cnt",
+		"rtl8196e_poll_delivered",
+		"rtl8196e_kick_txreclaim",
 	};
 
 	(void)ndev;
@@ -1110,6 +1260,15 @@ static void rtl8196e_get_ethtool_stats(struct net_device *ndev,
 	data[23] = diag.rx_pkthdr_mbuf_skew;
 	data[24] = priv->poll_budget_hit;
 	data[25] = priv->rx_stall_run;
+	data[26] = priv->tx_xoff_seen_xmit;
+	data[27] = priv->tx_xoff_seen_poll;
+	data[28] = diag.tx_defer_queued;
+	data[29] = diag.tx_defer_direct;
+	data[30] = priv->isr_cnt;
+	data[31] = priv->isr_burst_max;
+	data[32] = priv->poll_cnt;
+	data[33] = priv->poll_delivered;
+	data[34] = priv->kick_txreclaim;
 }
 
 static const struct ethtool_ops rtl8196e_ethtool_ops = {
@@ -1275,6 +1434,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	timer_setup(&priv->tx_reclaim_timer, rtl8196e_tx_reclaim_timer_fn, 0);
 	timer_setup(&priv->swcore_check_timer, rtl8196e_swcore_check_timer_fn, 0);
 	INIT_WORK(&priv->swcore_reset_work, rtl8196e_swcore_reset_work_fn);
+	skb_queue_head_init(&priv->tx_defer_list);
 
 	/* NAPI deferral tuning: on this slow CPU (Lexra RLX4181 @ 380 MHz),
 	 * the driver drains the RX ring faster than packets arrive (~3 pkt/poll).
@@ -1365,7 +1525,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 		goto err_ring;
 
 	/*
-	 * Quiesce before unmasking the line (ETHDRV-010): the bootloader
+	 * Quiesce before unmasking the line: the bootloader
 	 * uses this NIC for TFTP and is not guaranteed to leave CPUIIMR
 	 * masked or CPUIISR clean, so the ISR could otherwise run against
 	 * a not-yet-registered netdev (a latched LINK_CHANGE_IP would
@@ -1383,7 +1543,7 @@ static int rtl8196e_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_irq;
 
-	/* Publish for the watchdog panic-record #99 snapshot (record v5). */
+	/* Publish for the watchdog panic-record snapshot. */
 	rtl8196e_panic_priv = priv;
 
 	dev_info(&pdev->dev,

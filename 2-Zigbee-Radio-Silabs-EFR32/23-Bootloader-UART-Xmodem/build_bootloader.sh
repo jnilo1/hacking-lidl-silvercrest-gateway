@@ -17,8 +17,9 @@
 #   firmware/bootloader-uart-xmodem-X.Y.Z.gbl          (for XMODEM upload)
 #   firmware/bootloader-uart-xmodem-X.Y.Z.s37          (main stage with CRC, matches .gbl content)
 #   firmware/bootloader-uart-xmodem-X.Y.Z-combined.s37 (first_stage + main-crc, for J-Link)
+#   Non-lidl BOARD= builds carry a -<board> suffix before the extension.
 #
-# J. Nilo - December 2025
+# J. Nilo - December 2025; BOARD= support July 2026 (#143)
 
 set -e
 
@@ -31,8 +32,29 @@ PATCHES_DIR="${SCRIPT_DIR}/patches"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md. The
+# bootloader consumes only the routing subset (apply_uart_routing): its flow
+# control is a separate numeric knob kept at 0 for every board — the Xmodem
+# path always runs with host-side flow control off.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
+
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
 
 # Handle clean command
 if [ "${1:-}" = "clean" ]; then
@@ -44,6 +66,7 @@ fi
 
 echo "========================================="
 echo "  Bootloader-UART-Xmodem Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "========================================="
 echo ""
@@ -159,14 +182,23 @@ cd "${BUILD_DIR}"
 # Copy project files from patches
 cp "${PATCHES_DIR}/bootloader-uart-xmodem.slcp" .
 cp "${PATCHES_DIR}/bootloader-uart-xmodem.slpb" .
-echo "  - Copied project files from patches"
+# Point the project's device component at the selected board's MCU (the slcp
+# pins the lidl part; see build_ncp.sh, #130). For lidl TARGET_DEVICE is the
+# same string, so the slcp is byte-identical.
+sed -i "s/EFR32MG1B232F256GM48/${TARGET_DEVICE}/g" bootloader-uart-xmodem.slcp
+echo "  - Copied project files from patches (device=${TARGET_DEVICE})"
 
 # =========================================
 # Generate project with slc
 # =========================================
 echo ""
 echo "[2/5] Generating project with slc..."
-slc generate bootloader-uart-xmodem.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DEVICE} --force 2>&1 | tail -3
+# --toolchain gcc pins the first-stage template selection: without it slc's
+# toolchain resolution is ambiguous and can copy the IAR-built first_stage.s37
+# into autogen/ instead of the GCC one (observed 2026-07-08; the two are
+# different Silabs binaries for the same chip). Only the -combined.s37 embeds
+# the first stage — the .gbl (stage 2) is unaffected either way.
+slc generate bootloader-uart-xmodem.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DEVICE} --toolchain gcc --force 2>&1 | tail -3
 
 # =========================================
 # Copy config files and patch Makefile
@@ -174,7 +206,11 @@ slc generate bootloader-uart-xmodem.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DE
 echo ""
 echo "[3/5] Applying configuration..."
 cp "${PATCHES_DIR}/btl_uart_driver_cfg.h" config/
-echo "  - Copied UART config from patches"
+# Apply the selected board's UART routing (USART instance + TX/RX only — this
+# header has no CTS/RTS or flow-control-type defines). A no-op (byte-identical
+# header) for the lidl reference, the override path for ported boards.
+apply_uart_routing config/btl_uart_driver_cfg.h SL_SERIAL_UART
+echo "  - Copied UART config from patches (board=${BOARD})"
 
 echo "  Patching Makefile..."
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))
@@ -217,7 +253,7 @@ echo "[5/5] Post-build: Generating output files..."
 mkdir -p artifact
 mkdir -p "${OUTPUT_DIR}"
 
-OUTPUT_NAME="bootloader-uart-xmodem-${BTL_VERSION}"
+OUTPUT_NAME="bootloader-uart-xmodem-${BTL_VERSION}${BOARD_SUFFIX}"
 SRC_OUT="build/debug/bootloader-uart-xmodem.out"
 
 if [ ! -f "${SRC_OUT}" ]; then
@@ -254,7 +290,10 @@ commander gbl create "artifact/bootloader-uart-xmodem.gbl" \
 # =========================================
 echo ""
 echo "  Copying artifacts to firmware/..."
-rm -f "${OUTPUT_DIR}"/*.s37 "${OUTPUT_DIR}"/*.gbl "${OUTPUT_DIR}"/*.hex "${OUTPUT_DIR}"/*.bin 2>/dev/null
+# Only remove the files we're about to rewrite — other boards' artefacts
+# live side-by-side in firmware/.
+rm -f "${OUTPUT_DIR}/${OUTPUT_NAME}".{s37,gbl,hex,bin} \
+      "${OUTPUT_DIR}/${OUTPUT_NAME}-combined.s37" 2>/dev/null
 
 # GBL for XMODEM upload
 cp "artifact/bootloader-uart-xmodem.gbl" "${OUTPUT_DIR}/${OUTPUT_NAME}.gbl"

@@ -12,6 +12,7 @@
 # Usage:
 #   ./build_ot_rcp.sh                  # Build firmware at default baud (460800)
 #   ./build_ot_rcp.sh 230400           # Build at non-default baud
+#   UART_DRIVER=iostream ./build_ot_rcp.sh   # force the UART backend
 #   ./build_ot_rcp.sh clean            # Clean build directory
 #   ./build_ot_rcp.sh --help           # Show this help
 #
@@ -21,8 +22,11 @@
 # Output:
 #   firmware/ot-rcp-<BAUD>.gbl  (ready to flash via UART/Xmodem)
 #   firmware/ot-rcp-<BAUD>.s37  (for J-Link/SWD flashing)
+#   A forced (non-default) UART_DRIVER adds a -<driver> suffix; non-lidl
+#   BOARD= builds add a -<board> suffix.
 #
-# J. Nilo - January 2026; baud parameter added April 2026
+# J. Nilo - January 2026; baud parameter added April 2026;
+#           iostream backend selector July 2026 (#142)
 
 set -e
 
@@ -56,6 +60,34 @@ PROJECT_NAME="ot-rcp"
 # Non-default boards get a filename suffix so their artefacts don't overwrite
 # the lidl reference firmware (which keeps its historical name).
 [ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
+
+# UART driver backend. The Gecko SDK's OT platform abstraction has two,
+# selected purely by project component (ot_platform_abstraction_core.slcc):
+#   uartdrv  — DMA-first: near-zero CPU per byte, but Silabs' own docs call
+#              its XON/XOFF support "partial only" (reaction quantised by
+#              DMA-chunk cadence — analysis in discussion #134).
+#   iostream — IRQ per byte: the NCP's driver, with COMPLETE software flow
+#              control (watermark-driven XOFF/XON emission + inbound honor
+#              in sl_iostream_uart.c; binary-safe with LF->CRLF conversion
+#              off in our header).
+# Auto-selected from the board's flow mode: hw|none -> uartdrv (historical
+# default, lidl byte-for-byte unchanged), sw -> iostream (the only backend
+# that actually flow-controls a board without RTS/CTS — #142). Override
+# with UART_DRIVER=uartdrv|iostream for experiments; a forced non-default
+# choice is suffixed into the artefact filename so it can never shadow the
+# canonical build (and flash_efr32.sh's exact globs never resolve it).
+case "${BOARD_UART_FLOW}" in
+    sw) UART_DRIVER_AUTO=iostream ;;
+    *)  UART_DRIVER_AUTO=uartdrv  ;;
+esac
+UART_DRIVER="${UART_DRIVER:-$UART_DRIVER_AUTO}"
+case "${UART_DRIVER}" in
+    uartdrv|iostream) ;;
+    *)  echo "Error: UART_DRIVER='${UART_DRIVER}' (expected uartdrv or iostream)" >&2
+        exit 1 ;;
+esac
+DRIVER_SUFFIX=""
+[ "${UART_DRIVER}" != "${UART_DRIVER_AUTO}" ] && DRIVER_SUFFIX="-${UART_DRIVER}"
 
 # Default baud — historical OT-RCP default and tested ceiling.
 DEFAULT_BAUD=460800
@@ -103,6 +135,7 @@ echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  Protocol: Thread 1.3 / Matter"
 echo "  Baud:   ${BAUD}"
+echo "  UART:   ${UART_DRIVER} driver, flow=${BOARD_UART_FLOW}${DRIVER_SUFFIX:+ (forced)}"
 echo "========================================="
 echo ""
 
@@ -188,7 +221,23 @@ cp "${PATCHES_DIR}/main.c" .           # Patched with RTL8196E boot delay
 cp "${SDK_SAMPLE_DIR}/app.c" .
 cp "${SDK_SAMPLE_DIR}/app.h" .
 cp "${SDK_PLATFORM_DIR}/reset_util.h" .
-echo "  - Copied slcp, main.c from patches (RTL8196E delay)"
+if [ "${UART_DRIVER}" = "iostream" ]; then
+    # Swap the UART backend: an iostream_usart instance makes the OT platform
+    # abstraction compile iostream_uart.c instead of uartdrv_uart.c. The slcp
+    # config entries are renamed/re-pointed in lockstep so the project file
+    # matches the header applied in [3/4] (which is what the firmware actually
+    # compiles against). For a uartdrv build the slcp is untouched.
+    IOSTREAM_FLOW_TOK="$(flow_control_token usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware)" || exit 1
+    sed -i -e 's/- id: uartdrv_usart/- id: iostream_usart/' \
+           -e 's/SL_UARTDRV_USART_VCOM_BAUDRATE/SL_IOSTREAM_USART_VCOM_BAUDRATE/' \
+           -e 's/name: SL_UARTDRV_USART_VCOM_FLOW_CONTROL_TYPE/name: SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE/' \
+           -e "s/value: uartdrvFlowControlHw/value: ${IOSTREAM_FLOW_TOK}/" \
+           -e 's/condition: \[uartdrv_usart\]/condition: [iostream_usart]/' \
+           ${PROJECT_NAME}.slcp
+    echo "  - Copied slcp (UART backend swapped to iostream_usart), main.c from patches (RTL8196E delay)"
+else
+    echo "  - Copied slcp, main.c from patches (RTL8196E delay)"
+fi
 echo "  - Copied app.c, app.h, reset_util.h from SDK"
 
 # =========================================
@@ -204,10 +253,18 @@ slc generate ${PROJECT_NAME}.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DEVICE} -
 echo ""
 echo "[3/4] Applying configuration..."
 
-# Copy UARTDRV config; the reference pins (PA0/PA1/PA4/PA5) come from the
-# patches header, then the selected board's routing is applied over them
-# (a no-op for the lidl reference, the override path for ported boards).
-if [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
+# Copy the UART config for the selected backend; the reference pins
+# (PA0/PA1/PA4/PA5) come from the patches header, then the selected board's
+# routing is applied over them (a no-op for the lidl reference, the override
+# path for ported boards).
+if [ "${UART_DRIVER}" = "iostream" ]; then
+    # Same reference header as the NCP — LF->CRLF conversion off (binary-safe).
+    cp "${PATCHES_DIR}/sl_iostream_usart_vcom_config.h" config/
+    sed -i "s|^#define SL_IOSTREAM_USART_VCOM_BAUDRATE.*|#define SL_IOSTREAM_USART_VCOM_BAUDRATE              ${BAUD}|" config/sl_iostream_usart_vcom_config.h
+    apply_uart_config config/sl_iostream_usart_vcom_config.h \
+        SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware
+    echo "  - Copied IOSTREAM config (baud=${BAUD}, board=${BOARD}, ${BOARD_UART_PERIPHERAL}, flow=${BOARD_UART_FLOW})"
+elif [ -f "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" ]; then
     cp "${PATCHES_DIR}/sl_uartdrv_usart_vcom_config.h" config/
     # Substitute the requested baud into the UARTDRV config header
     sed -i "s|^#define SL_UARTDRV_USART_VCOM_BAUDRATE.*|#define SL_UARTDRV_USART_VCOM_BAUDRATE        ${BAUD}|" config/sl_uartdrv_usart_vcom_config.h
@@ -272,7 +329,7 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/${PROJECT_NAME}"
-OUT_BASE="${PROJECT_NAME}-${BAUD}${BOARD_SUFFIX}"
+OUT_BASE="${PROJECT_NAME}-${BAUD}${DRIVER_SUFFIX}${BOARD_SUFFIX}"
 
 if [ -f "${SRC_BASE}.s37" ]; then
     # Only remove the specific files we're about to rewrite — preserve other

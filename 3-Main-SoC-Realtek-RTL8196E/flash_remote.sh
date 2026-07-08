@@ -29,7 +29,8 @@
 #                  (sudo apt install sshpass).
 #   NET_MODE     - "static" or "dhcp" (skip network prompt, userdata only)
 #   RADIO_MODE   - "zigbee" or "thread" (skip radio prompt, userdata only)
-#   BOARD        - "lidl" (default) or "sengled-e39-g8c" (kernel component)
+#   BOARD        - "lidl" (default) or "sengled-e39-g8c" (kernel and
+#                  bootloader components — both have per-board pre-builts)
 #   KERNEL       - "6.18" (default) or "7.1" (kernel component)
 #   CONFIRM      - Set to "y" to skip confirmation prompts (same as -y)
 #
@@ -58,8 +59,9 @@ BOOT_IP_FLAG=""
 # Optional kernel-image override, forwarded to flash_kernel.sh --image (e.g.
 # --image kernel-img/lidl/kernel-7.1.img). Honored for the kernel component only.
 IMAGE_OVERRIDE=""
-# BOARD/KERNEL pick the pre-built kernel image (kernel component only),
-# forwarded to flash_kernel.sh. Defaults reproduce the Lidl 6.18 path.
+# BOARD/KERNEL pick the pre-built kernel image (kernel component) and BOARD
+# the pre-built bootloader (bootloader component), forwarded to the flash
+# scripts. Defaults reproduce the Lidl 6.18 path.
 # FORCE overrides the board-mismatch guard.
 BOARD="${BOARD:-lidl}"
 KERNEL="${KERNEL:-6.18}"
@@ -80,8 +82,8 @@ usage() {
     echo "  -y, --yes        Non-interactive mode (skip all prompts)"
     echo "  --boot-ip <IP|host>  Bootloader-mode / TFTP server IP (overrides BOOT_IP"
     echo "                   env; default: 192.168.1.6). A hostname is resolved host-side."
-    echo "  --board <name>   Board image (kernel component; default lidl; also"
-    echo "                   sengled-e39-g8c). Overrides the BOARD env var."
+    echo "  --board <name>   Board image (kernel and bootloader components; default"
+    echo "                   lidl; also sengled-e39-g8c). Overrides the BOARD env var."
     echo "  --kernel <line>  Kernel line (kernel component; default 6.18; also 7.1)."
     echo "                   Overrides the KERNEL env var."
     echo "  --image <file>   Explicit kernel image (kernel component; overrides"
@@ -172,8 +174,12 @@ fi
 
 # Validate BOARD/KERNEL early (kernel component, no explicit --image) so a typo
 # fails before we touch the gateway. flash_kernel.sh resolves the real image.
+# For the bootloader component, also require the per-board pre-built boot.bin
+# up-front — flash_bootloader.sh resolves the same path from BOARD.
 if [ "$COMPONENT" = "kernel" ] && [ -z "$IMAGE_OVERRIDE" ]; then
     kernel_image_validate "$BOARD" "$KERNEL" || exit 1
+elif [ "$COMPONENT" = "bootloader" ]; then
+    resolve_boot_image "$BOARD" >/dev/null || exit 1
 fi
 
 # --- helpers ------------------------------------------------------------------
@@ -218,7 +224,8 @@ check_board_match() {
     fi
     echo "Error: board mismatch — selected BOARD='$want', but the gateway reports:" >&2
     echo "         model = \"$model\"" >&2
-    echo "  Flashing a kernel built for a different board will not boot correctly." >&2
+    echo "  A kernel built for a different board will not boot correctly; a" >&2
+    echo "  mismatched bootloader bricks the gateway (per-board DRAM bring-up)." >&2
     echo "  Re-run with the matching BOARD=, or pass --force to override." >&2
     return 1
 }
@@ -287,9 +294,13 @@ if ! ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" "command -v devmem" >/dev/null 2>&
     exit 1
 fi
 
-# Board-mismatch guard (kernel component, no explicit --image). --force skips it.
-if [ "$COMPONENT" = "kernel" ] && [ -z "$IMAGE_OVERRIDE" ] && [ "$FORCE" != "1" ]; then
-    check_board_match "$BOARD" || exit 1
+# Board-mismatch guard (kernel component with no explicit --image, and the
+# bootloader component — a mismatched bootloader bricks). --force skips it.
+if [ "$FORCE" != "1" ]; then
+    if { [ "$COMPONENT" = "kernel" ] && [ -z "$IMAGE_OVERRIDE" ]; } \
+       || [ "$COMPONENT" = "bootloader" ]; then
+        check_board_match "$BOARD" || exit 1
+    fi
 fi
 
 # --- step 3: preserve config before reboot (userdata only) ------------------
@@ -404,9 +415,12 @@ fi
 # Forward the kernel selection to flash_kernel.sh. An explicit --image wins over
 # BOARD/KERNEL (flash_kernel.sh resolves the image from the exported BOARD/KERNEL
 # when no --image is given). Only the kernel script understands --image; warn
-# (don't fail) for the others.
+# (don't fail) for the others. flash_bootloader.sh resolves its per-board
+# boot.bin from the exported BOARD the same way.
 if [ "$COMPONENT" = "kernel" ]; then
     export BOARD KERNEL
+elif [ "$COMPONENT" = "bootloader" ]; then
+    export BOARD
 fi
 FLASH_ARGS=("$BOOT_IP")
 if [ -n "$IMAGE_OVERRIDE" ]; then

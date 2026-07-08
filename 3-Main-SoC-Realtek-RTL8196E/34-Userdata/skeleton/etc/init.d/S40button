@@ -13,31 +13,26 @@
 #
 
 S40_BIN=/usr/sbin/s40button
-PIDFILE=/var/run/S40button.pid
 LOGTAG=S40button
 
+. "$(dirname "$0")/supervise.func"
+
 start() {
-    if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-        echo "  button: already running (pid $(cat "$PIDFILE"))"
-        return 0
-    fi
     if [ ! -x "$S40_BIN" ]; then
         echo "  button: WARNING $S40_BIN not found or not executable" >&2
         logger -t "$LOGTAG" "missing binary $S40_BIN, not starting"
         return 1
     fi
-    "$S40_BIN" &
-    echo $! > "$PIDFILE"
-    echo "  button: daemon started (pid $!)"
+    if sup_start s40button "$S40_BIN"; then
+        echo "  button: daemon started (supervised)"
+    else
+        echo "  button: already running"
+    fi
 }
 
 stop() {
-    if [ -f "$PIDFILE" ]; then
-        pid=$(cat "$PIDFILE")
-        kill "$pid" 2>/dev/null
-        rm -f "$PIDFILE"
-        echo "  button: stopped (pid $pid)"
-    fi
+    sup_stop s40button
+    echo "  button: stopped"
 }
 
 case "$1" in

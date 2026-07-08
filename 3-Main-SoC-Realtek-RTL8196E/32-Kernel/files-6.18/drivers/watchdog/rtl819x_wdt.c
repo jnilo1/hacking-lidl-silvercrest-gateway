@@ -23,6 +23,7 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/kernel_stat.h>
+#include <linux/kmsg_dump.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 #include <linux/moduleparam.h>
@@ -32,18 +33,24 @@
 #include <linux/of_reserved_mem.h>
 #include <linux/panic_notifier.h>
 #include <linux/platform_device.h>
+#include <linux/preempt.h>
 #include <linux/rtl8196e_eth_panic.h>
+#include <linux/rtl819x_intc_stats.h>
+#include <linux/sched.h>
+#include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/timekeeping.h>
 #include <linux/timer.h>
 #include <linux/watchdog.h>
 
+#include <asm/addrspace.h>
 #include <asm/irq_regs.h>
 #include <asm/mach-realtek/realtek_mem.h>
+#include <asm/mipsregs.h>
 #include <asm/ptrace.h>
 
 #define DRIVER_NAME		"rtl819x-wdt"
-#define DRV_VERSION		"1.10"
+#define DRV_VERSION		"1.11"
 
 /*
  * WDTCNR bit layout (sysc + 0x311C) — verified against the
@@ -62,15 +69,16 @@
  *   [16:0]  reserved
  *
  * OVSEL[3:0] determines the overflow tick count:
- *   0000: 2^15  0001: 2^16  0010: 2^17  0011: 2^18  (SDK default)
+ *   0000: 2^15  0001: 2^16  0010: 2^17  0011: 2^18  (2.6.30-BSP default)
  *   0100: 2^19  0101: 2^20  0110: 2^21  0111: 2^22
- *   1000: 2^23  1001: 2^24  (max bucket)
+ *   1000: 2^23  1001: 2^24  (max bucket; 3.10-BSP default)
  *
  * The watchdog tick is derived from CDBR (sysc + 0x3118), shared with
  * Timer0/Timer1: tick = system_clock / DivFactor. As of v3.5.0, the
  * `timer-rtl819x` driver runs from a 25 kHz `slowclk` DT node so
  * DivFactor=8000 and OVSEL=1001 overflows in ~671 s — see the
- * "WDT-005 closure" section of AUDIT.md and the slowclk node in
+ * audit notes (incl. the vendor-lineage section: the 3.10 SDK BSP
+ * itself runs 1 MHz with a 16.8 s window) and the slowclk node in
  * arch/mips/boot/dts/realtek/rtl819x.dtsi.
  */
 #define WDTE_SHIFT		24
@@ -123,7 +131,7 @@
 /*
  * Panic record — a compact post-mortem left in DRAM that survives the
  * watchdog reset, so a gateway that auto-recovers from a soft-lockup hang
- * (WDT-008) can tell the operator *why* on the next boot, instead of losing
+ * can tell the operator *why* on the next boot, instead of losing
  * the soft-lockup report to the volatile ramfs /var/log.
  *
  * Storage reuses the reserved-memory `no-map` page already carved out for
@@ -156,7 +164,7 @@
  *                            boot). Read via the NMI-safe fast accessor
  *                            ktime_get_boot_fast_ns(): the ordinary seqcount
  *                            accessors can spin forever if the panic
- *                            interrupted a timekeeping writer (WDT-011), and
+ *                            interrupted a timekeeping writer, and
  *                            this read sits ahead of the chip-arm writes.
  *                            Matches /proc/uptime to the second.
  *   +0x0C  u32   fn_addr     running timer callback addr, or 0 (resolved to
@@ -169,13 +177,13 @@
  *                            watchdog hrtimer firing off the local timer IRQ,
  *                            still nested in that IRQ when the notifier runs, so
  *                            get_irq_regs()->cp0_epc IS the stuck PC. This names
- *                            the #99 culprit that fn_addr cannot: the storm sits
+ *                            the culprit that fn_addr cannot: the storm sits
  *                            *between* timer callbacks, where running_timer is
  *                            already cleared to NULL. Resolved via %pS at next
  *                            boot, like fn_addr — never in the atomic path.
  *   +0xF4  u32   ra          return address ($31) of the interrupted context,
  *                            or 0. The epc often lands on a tiny leaf helper
- *                            (issue #99's stuck PC is arch_local_irq_enable+0x14,
+ *                            (the observed stuck PC is arch_local_irq_enable+0x14,
  *                            whose caller handle_softirqs is the frame that
  *                            actually names the storm), so ra is the more
  *                            informative of the pair. Resolved via %pS too.
@@ -188,7 +196,7 @@
  *   +0x100 u32   n_tfns      number of timer-wheel candidate fns that follow
  *   +0x104 u32[] tfns        .function of timers queued in the wheel near
  *                            expiry (timer_collect_pending_fns()). When the
- *                            softirq mask says TIMER, the self-rearming #99
+ *                            softirq mask says TIMER, the self-rearming
  *                            culprit is among these; the one recurring across
  *                            captures is it. Resolved via %pS at next boot.
  *   +0x120 u32   n_hfns      number of hrtimer candidate fns that follow
@@ -202,14 +210,14 @@
  *                            and never catches up — a processing death
  *                            spiral; ~0 => the storming vector is re-raised
  *                            over a wheel that is keeping up. The
- *                            discriminator #99 captures were missing.
+ *                            discriminator earlier record versions were missing.
  *                            0xFFFFFFFF = sentinel "walk did not complete".
  *   +0x140 u32   npend       total timers queued in the wheel at panic.
  *   +0x144 u32[] sirqcnt     per-softirq cumulative run counts on this (sole)
  *                            CPU at panic (kstat_softirqs_cpu), indexed by the
  *                            softirq enum (HI..RCU, WDT_REC_NR_SIRQ entries).
  *                            Read against uptime they give the *average* TIMER
- *                            vs NET_RX softirq rate. The #99 storm has
+ *                            vs NET_RX softirq rate. The storm has
  *                            TIMER|NET_RX co-pending but the timer wheel is only
  *                            a victim (overdue saturated, pending normal =
  *                            frozen, not flooded), so the timer lists cannot say
@@ -229,11 +237,11 @@
  *                            the storm. softnet_data is a normal per-CPU export,
  *                            so unlike the timer collectors this needs no kernel
  *                            patch. Resolved via %pS at next boot.
- *   +0x190 u32   eth_flags   1 if the eth #99 snapshot below is valid (the
+ *   +0x190 u32   eth_flags   1 if the eth recovery snapshot below is valid (the
  *                            interface was up at panic), else 0. v5.
  *   +0x194 u32   eth_resync  rtl8196e rx_runout_resync at panic — poll-side
- *                            full resyncs performed. The decisive #99 datum:
- *                            >0 means the rc2 poll detector fired and the storm
+ *                            full resyncs performed. The decisive datum:
+ *                            >0 means the poll detector fired and the storm
  *                            continued anyway (resync insufficient); ==0 means
  *                            it never fired (the detection gate is wrong).
  *   +0x198 u32   eth_kick    rx_runout_kick — periodic swcore-watchdog NAPI
@@ -268,8 +276,8 @@
  *   +0x1D0 u32   eth_txpkts  dev tx_packets (low 32) — forward-progress gauge. (v6)
  *
  * The candidate lists are cold-path only (read in the panic notifier), so
- * normal operation pays nothing — unlike the storm-2/3 hot-path rings that
- * risked perturbing the very timing they measured.
+ * normal operation pays nothing — unlike the earlier hot-path probe rings
+ * that risked perturbing the very timing they measured.
  *
  * Record version history:
  *   v1 (firmware v3.7.0)  magic..reason
@@ -281,21 +289,48 @@
  *   v4 (firmware v3.8.4)  + per-softirq run counts@+0x144, total hardirq
  *                           count@+0x16C, NAPI poll-list fns@+0x170/+0x174 —
  *                           names the NET_RX side the timer lists cannot
- *   v5 (firmware v4.0.0)  + rtl8196e eth #99 snapshot@+0x190..+0x1AC
+ *   v5 (firmware v4.0.0)  + rtl8196e eth recovery snapshot@+0x190..+0x1AC
  *                           (resync/kick/zero/seen counters + live CPUIISR/
  *                           CPUIIMR + rx_idx), pulled via the __weak
  *                           rtl8196e_eth_panic_snapshot() — disambiguates
- *                           "rc2 resync fired but failed" from "never fired"
- *                           after the field recurrence of #99 on v4.0.0-rc2.
+ *                           "resync fired but failed" from "never fired"
+ *                           after a field recurrence of the storm.
  *   v6 (firmware v4.0.0)  + switch-core/TX/ring-progress state@+0x1B0..+0x1D0
  *                           (rx_desc@rx_idx, tx_prod/cons/free, tx_desc@tx_cons,
  *                           CPUICR, SIRR, rx/tx_packets) — tells an RX-runout
  *                           storm from a broader switch-core or TX-done stall
  *                           (the vendor stuck-detector watched TX-done).
  */
-#define WDT_REC_SIZE		0x280U
+#define WDT_REC_SIZE		0x280U	/* v7 core record (offsets unchanged) */
 #define WDT_REC_MAGIC		0x50414E43U	/* "PANC" */
-#define WDT_REC_VERSION		7U
+/*
+ * Record v8 (2026-07-08) — the justification the v7 freeze note demanded:
+ * the first fully-instrumented field crash (issue #99, v4.0.0-rc4, frtz13
+ * uptime 676476 s) showed every v7 eth detector counter at ZERO — the record
+ * proved the previous root-cause theory wrong but could not name the actual
+ * storming interrupt line. v8 turns the final-frame snapshot into a film:
+ *   - v8 scalar block @+0x200..+0x2FF: jiffies, CP0 Cause/Status, GIMR/GISR,
+ *     preempt_count, current->comm, a raw UART1 8250 register snapshot
+ *     (IER/IIR/LSR/MSR/MCR — the prime storm suspect line), INTC dispatch
+ *     stats (incl. the empty-pending count no other counter sees), per-line
+ *     last-seen jiffies, and the eth activity taps (counters + last-activity
+ *     stamps + NAPI state + RX ring bases).
+ *   - flight recorder @+0x280..+0x767: the newest 31 one-second samples of
+ *     per-line interrupt/softirq/NAPI deltas, sampled by a storm-proof
+ *     HRTIMER_MODE_REL_HARD timer (the same context the softlockup detector
+ *     provably keeps running from during the field hang).
+ *   - printk tail @+0x768..+0xFEF: the last ~2 KB of the kernel log at
+ *     panic — contains the softlockup report (incl. the compiled-in
+ *     INTR_STORM per-IRQ utilization table) and the backtrace that headless
+ *     field units could never show us. Strictly best-effort: length marker
+ *     written last, pre-cleared, so a failed dump can't corrupt the decode.
+ * The v7 core record (offsets 0x000..0x1FF) is byte-compatible.
+ * Page top 0xFF0..0xFFF belongs to boothold — never written here.
+ */
+#define WDT_MAP_SIZE		0x1000U	/* v8 maps the whole reserved page */
+#define WDT_PAGE_GUARD		0xFF0U	/* first byte we must NOT touch (boothold) */
+#define WDT_REC_VERSION		8U
+#define WDT_REC_VERSION_V7	7U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V6	6U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V5	5U	/* still decoded: one-boot leftover after upgrade */
 #define WDT_REC_VERSION_V4	4U	/* still decoded: one-boot leftover after upgrade */
@@ -322,7 +357,7 @@
 #define WDT_REC_OFF_HARDIRQ	0x16C		/* u32 total hardirq count */
 #define WDT_REC_OFF_NNAPI	0x170		/* u32 NAPI poll-fn count */
 #define WDT_REC_OFF_NAPIFNS	0x174		/* WDT_REC_NR_FNS u32 (..0x18B) */
-/* v5: rtl8196e eth #99 snapshot (..0x1AF, clear of boothold@0xFF4) */
+/* v5: rtl8196e eth recovery snapshot (..0x1AF, clear of boothold@0xFF4) */
 #define WDT_REC_OFF_ETH_FLAGS	0x190		/* u32 1 if snapshot valid (eth up) */
 #define WDT_REC_OFF_ETH_RESYNC	0x194		/* u32 rx_runout_resync */
 #define WDT_REC_OFF_ETH_KICK	0x198		/* u32 rx_runout_kick */
@@ -354,6 +389,107 @@
 #define WDT_REC_OFF_ETH_BADLEN		0x1F8	/* u32 diag rx_bad_len         (B) */
 #define WDT_REC_OFF_ETH_P6DCR0		0x1FC	/* u32 live P6_DCR0 (CPU-port desc counter) */
 #define WDT_REC_STAT_UNSET	0xFFFFFFFFU	/* sentinel: stats walk did not complete */
+
+/* ---- v8 scalar block @0x200..0x2FF (see the v8 rationale above) ---- */
+#define WDT_REC_OFF_V8_JIFFIES	0x200	/* u32 jiffies at panic (anchor for the stamps) */
+#define WDT_REC_OFF_V8_CAUSE	0x204	/* u32 CP0 Cause — which IPs are pending */
+#define WDT_REC_OFF_V8_STATUS	0x208	/* u32 CP0 Status — which IPs are enabled, IE bit */
+#define WDT_REC_OFF_V8_GIMR	0x20C	/* u32 INTC global mask */
+#define WDT_REC_OFF_V8_GISR	0x210	/* u32 INTC global status */
+#define WDT_REC_OFF_V8_PREEMPT	0x214	/* u32 preempt_count() — hardirq/softirq nesting */
+#define WDT_REC_OFF_V8_COMM	0x218	/* char[16] current->comm (interrupted task) */
+#define WDT_REC_OFF_V8_U1_IER	0x228	/* u32 raw UART1 IER (value in bits 31:24) */
+#define WDT_REC_OFF_V8_U1_IIR	0x22C	/* u32 raw UART1 IIR */
+#define WDT_REC_OFF_V8_U1_LSR	0x230	/* u32 raw UART1 LSR */
+#define WDT_REC_OFF_V8_U1_MSR	0x234	/* u32 raw UART1 MSR */
+#define WDT_REC_OFF_V8_U1_MCR	0x238	/* u32 raw UART1 MCR */
+#define WDT_REC_OFF_V8_INTC_ENT	0x23C	/* u32 INTC chained-handler entries */
+#define WDT_REC_OFF_V8_INTC_EMP	0x240	/* u32 INTC entries with empty pending */
+#define WDT_REC_OFF_V8_LS_TC0	0x244	/* u32 last-seen jiffies, GISR bit 8 (TC0) */
+#define WDT_REC_OFF_V8_LS_UART0	0x248	/* u32 last-seen jiffies, GISR bit 12 (UART0) */
+#define WDT_REC_OFF_V8_LS_UART1	0x24C	/* u32 last-seen jiffies, GISR bit 13 (UART1) */
+#define WDT_REC_OFF_V8_LS_ETH	0x250	/* u32 last-seen jiffies, GISR bit 15 (switch) */
+#define WDT_REC_OFF_V8_E_ISRCNT	0x254	/* u32 eth ISR invocations */
+#define WDT_REC_OFF_V8_E_ISRJ	0x258	/* u32 jiffies at last eth ISR */
+#define WDT_REC_OFF_V8_E_BURST	0x25C	/* u32 eth ISR per-jiffy burst high-water */
+#define WDT_REC_OFF_V8_E_POLLC	0x260	/* u32 NAPI poll invocations */
+#define WDT_REC_OFF_V8_E_POLLJ	0x264	/* u32 jiffies at last NAPI poll */
+#define WDT_REC_OFF_V8_E_DLV	0x268	/* u32 packets delivered by the poll (sum) */
+#define WDT_REC_OFF_V8_E_KICKT	0x26C	/* u32 tx-reclaim timer napi_schedule kicks */
+#define WDT_REC_OFF_V8_E_KICKJ	0x270	/* u32 jiffies at last tx-reclaim kick */
+#define WDT_REC_OFF_V8_E_NAPI	0x274	/* u32 live napi->state bits */
+#define WDT_REC_OFF_V8_E_PHBASE	0x278	/* u32 rx_pkthdr_ring base (KSEG1, vs cpurpdcr0) */
+#define WDT_REC_OFF_V8_E_MBBASE	0x27C	/* u32 rx_mbuf_ring base (KSEG1, vs cpurmdcr0) */
+
+/* ---- v8 flight-recorder copy @0x280..0x767 ---- */
+#define WDT_FLT_OFF_MAGIC	0x280	/* u32 "FLT1", written LAST (torn-read guard) */
+#define WDT_FLT_OFF_NS		0x284	/* u32 samples copied */
+#define WDT_FLT_OFF_SSIZE	0x288	/* u32 sizeof(struct rtl819x_wdt_flt_sample) */
+#define WDT_FLT_OFF_PERIOD	0x28C	/* u32 sampling period, ms */
+#define WDT_FLT_OFF_SAMPLES	0x290	/* samples, oldest first */
+#define WDT_FLT_MAGIC		0x464C5431U	/* "FLT1" */
+#define WDT_FLT_NS_RAM		64	/* RAM ring depth (~64 s of history) */
+#define WDT_FLT_NS_REC		31	/* newest samples copied to DRAM at panic */
+#define WDT_FLT_PERIOD_MS	1000
+
+/*
+ * ---- v8 printk tail @0x768..0xFEF (strictly best-effort) ----
+ * Sized against the softlockup report's print order (kernel/watchdog.c):
+ * BUG line → report_cpu_status() (the INTR_STORM per-IRQ table) → modules →
+ * show_regs (regs+stack, the ~1.5 KB bulk) → panic banner. The capture keeps
+ * the NEWEST bytes, so on overflow the oldest lines clip first — 2180 bytes
+ * leaves ~600 B of headroom above the show_regs+banner bulk so the BUG line
+ * and the per-IRQ table survive. (Bench-measured: a quiet boot's whole log
+ * is ~2 KB, ending exactly at the panic banner.)
+ */
+#define WDT_TAIL_OFF_LEN	0x768	/* u32 text length, 0 = no/failed capture */
+#define WDT_TAIL_OFF_TXT	0x76C
+#define WDT_TAIL_MAX		(WDT_PAGE_GUARD - WDT_TAIL_OFF_TXT)	/* 2180 bytes */
+
+/*
+ * Platform-constant MMIO the v8 capture reads directly via KSEG1 (uncached,
+ * always mapped on MIPS32 — safe in the atomic panic path, no ioremap
+ * needed). Same SoC on every supported board (lidl, sengled-e39-g8c).
+ * UART1 is "serial@2100" (reg-shift 2, register value in bits 31:24); the
+ * INTC is "intc@3000" (GIMR @+0, GISR @+4). See rtl819x.dtsi.
+ */
+#define WDT_V8_GIMR	((void __iomem *)CKSEG1ADDR(0x18003000))
+#define WDT_V8_GISR	((void __iomem *)CKSEG1ADDR(0x18003004))
+#define WDT_V8_UART1(r)	((void __iomem *)CKSEG1ADDR(0x18002100 + ((r) << 2)))
+
+/*
+ * One 1 Hz flight-recorder sample: u16 saturating deltas of the interrupt/
+ * softirq/NAPI counters, plus the raw eth IISR/IIMR and NAPI state. 40 bytes
+ * — 31 samples + header fit in 0x280..0x767 with room to spare.
+ * d_jiffies proves the sampling cadence (≈ HZ between samples; a gap says
+ * the sampler itself was stalled, which is diagnostic in its own right).
+ */
+struct rtl819x_wdt_flt_sample {
+	u32 iisr;		/* live CPUIISR (0 if eth down) */
+	u32 iimr;		/* live CPUIIMR */
+	u16 d_jiffies;		/* jiffies delta since previous sample */
+	u16 d_hardirq;		/* total hardirqs (kstat sum) */
+	u16 d_tc0;		/* INTC dispatches, GISR bit 8 */
+	u16 d_uart0;		/* INTC dispatches, GISR bit 12 */
+	u16 d_uart1;		/* INTC dispatches, GISR bit 13 */
+	u16 d_eth_line;		/* INTC dispatches, GISR bit 15 */
+	u16 d_net_rx;		/* NET_RX softirq runs */
+	u16 d_timer_sirq;	/* TIMER softirq runs */
+	u16 d_eth_isr;		/* eth ISR invocations */
+	u16 d_poll;		/* NAPI poll invocations */
+	u16 d_delivered;	/* packets delivered by the poll */
+	u16 d_rxpkts;		/* dev rx_packets */
+	u16 d_intc;		/* INTC chained-handler entries */
+	u16 d_intc_empty;	/* INTC entries with empty pending */
+	u16 napi_state;		/* napi->state low bits */
+	u16 pad;
+};
+
+static_assert(sizeof(struct rtl819x_wdt_flt_sample) == 40);
+static_assert(WDT_FLT_OFF_SAMPLES + WDT_FLT_NS_REC * sizeof(struct rtl819x_wdt_flt_sample)
+	      <= WDT_TAIL_OFF_LEN, "flight-recorder copy overruns the printk-tail window");
+static_assert(WDT_TAIL_OFF_TXT + WDT_TAIL_MAX <= WDT_PAGE_GUARD,
+	      "printk tail overruns the boothold page-top flags");
 
 static_assert(NR_SOFTIRQS <= WDT_REC_NR_SIRQ,
 	      "panic-record per-softirq array too small for NR_SOFTIRQS");
@@ -413,7 +549,7 @@ static int rtl819x_wdt_ping(struct watchdog_device *wdd)
 	 * auto-clears. Deliberately NOT a read-modify-write: the RMW used
 	 * through v1.5 paid an uncached MMIO read per kick and, worse,
 	 * read WDIND back and wrote it back set — W1C-erasing the one
-	 * reset-cause bit WDT-001 is still hoping to observe. Side
+	 * reset-cause bit we are still hoping to observe. Side
 	 * effect: a chip adopted with a non-max OVSEL is normalized to
 	 * the max bucket on the first kick — exactly what .start would
 	 * have done anyway.
@@ -462,7 +598,7 @@ static int rtl819x_wdt_restart(struct watchdog_device *wdd,
 /*
  * Collect the .poll function of each NAPI instance scheduled on this CPU's
  * softnet_data.poll_list — the NET_RX analog of timer_collect_pending_fns().
- * When the #99 storm has NET_RX pending, the perpetually-scheduled napi names
+ * When the RX storm has NET_RX pending, the perpetually-scheduled napi names
  * the driver feeding it (the rtl8196e eth poll). Local to the driver: unlike
  * the timer wheel (static timer_bases in kernel/time/timer.c, reached via a
  * patch), softnet_data is a normal per-CPU export, so no kernel patch is
@@ -483,7 +619,7 @@ static int rtl819x_wdt_collect_napi_fns(void **out, int max)
 }
 
 /*
- * Panic notifier — close the soft-lockup blind spot (WDT-008).
+ * Panic notifier — close the soft-lockup blind spot.
  *
  * On RTL8196E (UP, PREEMPT_NONE, single CPU) the watchdog-framework
  * hrtimer that keeps WDOG_HW_RUNNING devices kicked fires from softirq
@@ -512,10 +648,10 @@ static int rtl819x_wdt_collect_napi_fns(void **out, int max)
  * the panic notifier chain. If a higher-priority crash-dump notifier
  * ever wedged on a console flush or a cross-call, our chip-arming
  * write would never land and recovery would fall back to the slower
- * CONFIG_PANIC_TIMEOUT path WDT-008 was meant to bypass. NOTIFY_DONE
+ * CONFIG_PANIC_TIMEOUT path this notifier was meant to bypass. NOTIFY_DONE
  * lets subsequent notifiers continue to run within the ~1.31 s grace
  * window before the chip overflows — crashlog dumpers still get a
- * turn. See WDT-009 in AUDIT.md.
+ * turn. See the audit notes.
  *
  * Atomic notifier: callback runs in atomic context, must not sleep. The
  * chip-arming write and the panic-record writes below are all plain MMIO /
@@ -524,13 +660,120 @@ static int rtl819x_wdt_collect_napi_fns(void **out, int max)
  * the next boot, so no kallsyms lookup happens in this atomic path.
  */
 /*
- * Weak default for the eth #99 snapshot (record v5). The rtl8196e-eth driver
+ * Weak default for the eth recovery snapshot (record v5). The rtl8196e-eth driver
  * provides the strong override; this returns false when that driver is not
  * built in, so the notifier records eth_flags=0 instead of failing to link.
  */
 __weak bool rtl8196e_eth_panic_snapshot(struct rtl8196e_eth_panic *out)
 {
 	return false;
+}
+
+/* Weak default for the 1 Hz eth flight sample (record v8) — same linkage. */
+__weak bool rtl8196e_eth_flight_sample(struct rtl8196e_eth_flight *out)
+{
+	return false;
+}
+
+/*
+ * v8 flight recorder. A 1 Hz HRTIMER_MODE_REL_HARD timer samples interrupt/
+ * softirq/NAPI counter deltas into a RAM ring; the panic notifier copies the
+ * newest WDT_FLT_NS_REC samples into the reserved DRAM page. The hard-hrtimer
+ * context is the one context proven to keep running during the field storm
+ * (the softlockup detector itself runs there and both detected the hang and
+ * measured the frozen wheel mid-storm). Wheel timers are explicitly the
+ * wrong tool: the captured hang froze the wheel for 20.8 s.
+ *
+ * Single instance (one watchdog on this SoC) — file-scope state, written
+ * only from the (sole) CPU's hardirq context; the panic notifier reads it
+ * from the same CPU, so no locking is needed on this UP platform.
+ */
+static struct rtl819x_wdt_flt_sample rtl819x_wdt_flt_ring[WDT_FLT_NS_RAM];
+static unsigned int rtl819x_wdt_flt_head;	/* next write index */
+static struct hrtimer rtl819x_wdt_flt_timer;
+static struct {
+	u32 jiffies, hardirq, tc0, uart0, uart1, eth_line;
+	u32 net_rx, timer_sirq, eth_isr, poll, delivered, rxpkts;
+	u32 intc, intc_empty;
+} rtl819x_wdt_flt_prev;
+
+/* Saturating u16 delta against the stored previous value. */
+static u16 rtl819x_wdt_flt_d(u32 cur, u32 *prev)
+{
+	u32 d = cur - *prev;
+
+	*prev = cur;
+	return d > 0xFFFFU ? 0xFFFFU : (u16)d;
+}
+
+static enum hrtimer_restart rtl819x_wdt_flt_fn(struct hrtimer *t)
+{
+	struct rtl819x_wdt_flt_sample *s =
+		&rtl819x_wdt_flt_ring[rtl819x_wdt_flt_head];
+	struct rtl8196e_eth_flight ef = {};
+	int cpu = smp_processor_id();
+
+	rtl8196e_eth_flight_sample(&ef);	/* leaves zeros if eth is down */
+
+	s->iisr        = ef.iisr;
+	s->iimr        = ef.iimr;
+	s->d_jiffies   = rtl819x_wdt_flt_d((u32)jiffies, &rtl819x_wdt_flt_prev.jiffies);
+	s->d_hardirq   = rtl819x_wdt_flt_d((u32)kstat_cpu_irqs_sum(cpu),
+					   &rtl819x_wdt_flt_prev.hardirq);
+	s->d_tc0       = rtl819x_wdt_flt_d(rtl819x_intc_stats.count[8],
+					   &rtl819x_wdt_flt_prev.tc0);
+	s->d_uart0     = rtl819x_wdt_flt_d(rtl819x_intc_stats.count[12],
+					   &rtl819x_wdt_flt_prev.uart0);
+	s->d_uart1     = rtl819x_wdt_flt_d(rtl819x_intc_stats.count[13],
+					   &rtl819x_wdt_flt_prev.uart1);
+	s->d_eth_line  = rtl819x_wdt_flt_d(rtl819x_intc_stats.count[15],
+					   &rtl819x_wdt_flt_prev.eth_line);
+	s->d_net_rx    = rtl819x_wdt_flt_d((u32)kstat_softirqs_cpu(NET_RX_SOFTIRQ, cpu),
+					   &rtl819x_wdt_flt_prev.net_rx);
+	s->d_timer_sirq = rtl819x_wdt_flt_d((u32)kstat_softirqs_cpu(TIMER_SOFTIRQ, cpu),
+					   &rtl819x_wdt_flt_prev.timer_sirq);
+	s->d_eth_isr   = rtl819x_wdt_flt_d(ef.isr_cnt, &rtl819x_wdt_flt_prev.eth_isr);
+	s->d_poll      = rtl819x_wdt_flt_d(ef.poll_cnt, &rtl819x_wdt_flt_prev.poll);
+	s->d_delivered = rtl819x_wdt_flt_d(ef.poll_delivered,
+					   &rtl819x_wdt_flt_prev.delivered);
+	s->d_rxpkts    = rtl819x_wdt_flt_d(ef.rx_packets, &rtl819x_wdt_flt_prev.rxpkts);
+	s->d_intc      = rtl819x_wdt_flt_d(rtl819x_intc_stats.entries,
+					   &rtl819x_wdt_flt_prev.intc);
+	s->d_intc_empty = rtl819x_wdt_flt_d(rtl819x_intc_stats.empty,
+					   &rtl819x_wdt_flt_prev.intc_empty);
+	s->napi_state  = (u16)ef.napi_state;
+	s->pad         = 0;
+
+	rtl819x_wdt_flt_head = (rtl819x_wdt_flt_head + 1) % WDT_FLT_NS_RAM;
+
+	hrtimer_forward_now(t, ms_to_ktime(WDT_FLT_PERIOD_MS));
+	return HRTIMER_RESTART;
+}
+
+/*
+ * Copy the newest WDT_FLT_NS_REC samples to the DRAM window, oldest first.
+ * Deterministic fixed-size copy (no walk) — called from the committed part
+ * of the panic notifier, before the chip is armed. Magic written last so a
+ * torn copy decodes as "no flight data" rather than garbage.
+ */
+static void rtl819x_wdt_flt_dump(struct rtl819x_wdt *wdt)
+{
+	unsigned int idx = (rtl819x_wdt_flt_head + WDT_FLT_NS_RAM - WDT_FLT_NS_REC)
+			   % WDT_FLT_NS_RAM;
+	unsigned int i;
+
+	for (i = 0; i < WDT_FLT_NS_REC; i++) {
+		memcpy_toio(wdt->rec + WDT_FLT_OFF_SAMPLES +
+			    i * sizeof(struct rtl819x_wdt_flt_sample),
+			    &rtl819x_wdt_flt_ring[idx],
+			    sizeof(struct rtl819x_wdt_flt_sample));
+		idx = (idx + 1) % WDT_FLT_NS_RAM;
+	}
+	writel(WDT_FLT_NS_REC, wdt->rec + WDT_FLT_OFF_NS);
+	writel(sizeof(struct rtl819x_wdt_flt_sample), wdt->rec + WDT_FLT_OFF_SSIZE);
+	writel(WDT_FLT_PERIOD_MS, wdt->rec + WDT_FLT_OFF_PERIOD);
+	wmb();
+	writel(WDT_FLT_MAGIC, wdt->rec + WDT_FLT_OFF_MAGIC);
 }
 
 static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
@@ -550,7 +793,7 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 	 *            panic is raised by the watchdog hrtimer off the local timer
 	 *            IRQ, and we are still nested in that IRQ here, so these
 	 *            resolve the stuck location even when the storm sits between
-	 *            callbacks (fn_addr == NULL — the #99 case). ra names the
+	 *            callbacks (fn_addr == NULL — the soft-lockup case). ra names the
 	 *            real frame when epc lands on a leaf helper. NULL irq_regs
 	 *            (e.g. a process-context sysrq panic) stores 0.
 	 *   softirq  local_softirq_pending() — which softirq vector is storming
@@ -589,7 +832,7 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		 * (CONFIG_PANIC_ON_OOPS promotes an oops in that window to a
 		 * panic). This read runs BEFORE the chip-arm writes, so an
 		 * unbounded wait here would cost the record AND the fast
-		 * reset (WDT-011). div_u64: cold path, Lexra soft-divide
+		 * reset. div_u64: cold path, Lexra soft-divide
 		 * cost irrelevant.
 		 */
 		writel((u32)div_u64(ktime_get_boot_fast_ns(), NSEC_PER_SEC),
@@ -623,12 +866,12 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 		}
 		writel(0, wdt->rec + WDT_REC_OFF_NNAPI);	/* until the walk below */
 		/*
-		 * v5: rtl8196e eth #99 snapshot. Plain counter reads + two MMIO
+		 * v5: rtl8196e eth recovery snapshot. Plain counter reads + two MMIO
 		 * loads (the same the NAPI poll does) — no list walk, no locks —
 		 * so it belongs in the committed core record before magic. The
 		 * producer is __weak: a kernel without the eth driver leaves the
 		 * symbol NULL and we just record eth_flags=0. resync>0 here means
-		 * the rc2 poll resync fired and the box stormed anyway; resync==0
+		 * the poll resync fired and the box stormed anyway; resync==0
 		 * means it never fired, and eth_iisr names the storming source.
 		 */
 		{
@@ -670,7 +913,66 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 			} else {
 				writel(0, wdt->rec + WDT_REC_OFF_ETH_FLAGS);
 			}
+			/*
+			 * v8 eth activity taps — valid only when the snapshot
+			 * above succeeded; zeroed otherwise so the decode
+			 * reads unambiguously.
+			 */
+			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS)) {
+				writel(eth.isr_cnt,          wdt->rec + WDT_REC_OFF_V8_E_ISRCNT);
+				writel(eth.isr_last_j,       wdt->rec + WDT_REC_OFF_V8_E_ISRJ);
+				writel(eth.isr_burst_max,    wdt->rec + WDT_REC_OFF_V8_E_BURST);
+				writel(eth.poll_cnt,         wdt->rec + WDT_REC_OFF_V8_E_POLLC);
+				writel(eth.poll_last_j,      wdt->rec + WDT_REC_OFF_V8_E_POLLJ);
+				writel(eth.poll_delivered,   wdt->rec + WDT_REC_OFF_V8_E_DLV);
+				writel(eth.kick_txreclaim,   wdt->rec + WDT_REC_OFF_V8_E_KICKT);
+				writel(eth.kick_txreclaim_j, wdt->rec + WDT_REC_OFF_V8_E_KICKJ);
+				writel(eth.napi_state,       wdt->rec + WDT_REC_OFF_V8_E_NAPI);
+				writel(eth.rx_ph_base,       wdt->rec + WDT_REC_OFF_V8_E_PHBASE);
+				writel(eth.rx_mb_base,       wdt->rec + WDT_REC_OFF_V8_E_MBBASE);
+			} else {
+				unsigned int off;
+
+				for (off = WDT_REC_OFF_V8_E_ISRCNT;
+				     off <= WDT_REC_OFF_V8_E_MBBASE; off += 4)
+					writel(0, wdt->rec + off);
+			}
 		}
+		/*
+		 * v8 scalar block: system-level context the eth snapshot cannot
+		 * carry. All plain reads / KSEG1 MMIO loads — committed class.
+		 * The jiffies anchor turns every *_last_j / last_seen_j stamp
+		 * into "seconds before the panic" with one subtraction.
+		 */
+		writel((u32)jiffies,        wdt->rec + WDT_REC_OFF_V8_JIFFIES);
+		writel(read_c0_cause(),     wdt->rec + WDT_REC_OFF_V8_CAUSE);
+		writel(read_c0_status(),    wdt->rec + WDT_REC_OFF_V8_STATUS);
+		writel(readl(WDT_V8_GIMR),  wdt->rec + WDT_REC_OFF_V8_GIMR);
+		writel(readl(WDT_V8_GISR),  wdt->rec + WDT_REC_OFF_V8_GISR);
+		writel((u32)preempt_count(), wdt->rec + WDT_REC_OFF_V8_PREEMPT);
+		memcpy_toio(wdt->rec + WDT_REC_OFF_V8_COMM, current->comm,
+			    sizeof(current->comm) < 16 ? sizeof(current->comm) : 16);
+		/*
+		 * Raw UART1 8250 snapshot (prime storm-suspect line). Reads
+		 * are side-effect-benign here except IIR (a read can clear a
+		 * THRI source) — irrelevant post-mortem, the box is about to
+		 * reset. Value sits in bits 31:24 (reg-shift 2 platform).
+		 */
+		writel(readl(WDT_V8_UART1(1)), wdt->rec + WDT_REC_OFF_V8_U1_IER);
+		writel(readl(WDT_V8_UART1(2)), wdt->rec + WDT_REC_OFF_V8_U1_IIR);
+		writel(readl(WDT_V8_UART1(5)), wdt->rec + WDT_REC_OFF_V8_U1_LSR);
+		writel(readl(WDT_V8_UART1(6)), wdt->rec + WDT_REC_OFF_V8_U1_MSR);
+		writel(readl(WDT_V8_UART1(4)), wdt->rec + WDT_REC_OFF_V8_U1_MCR);
+		writel(rtl819x_intc_stats.entries, wdt->rec + WDT_REC_OFF_V8_INTC_ENT);
+		writel(rtl819x_intc_stats.empty,   wdt->rec + WDT_REC_OFF_V8_INTC_EMP);
+		writel(rtl819x_intc_stats.last_seen_j[8],  wdt->rec + WDT_REC_OFF_V8_LS_TC0);
+		writel(rtl819x_intc_stats.last_seen_j[12], wdt->rec + WDT_REC_OFF_V8_LS_UART0);
+		writel(rtl819x_intc_stats.last_seen_j[13], wdt->rec + WDT_REC_OFF_V8_LS_UART1);
+		writel(rtl819x_intc_stats.last_seen_j[15], wdt->rec + WDT_REC_OFF_V8_LS_ETH);
+		/* Flight-recorder copy: deterministic, so still committed class. */
+		rtl819x_wdt_flt_dump(wdt);
+		/* Pre-clear the printk-tail marker: the capture below is best-effort. */
+		writel(0, wdt->rec + WDT_TAIL_OFF_LEN);
 		memset_io(wdt->rec + WDT_REC_OFF_REASON, 0, WDT_REC_REASON_MAX);
 		memcpy_toio(wdt->rec + WDT_REC_OFF_REASON, reason, n);
 		wmb();
@@ -733,6 +1035,33 @@ static int rtl819x_wdt_panic_notify(struct notifier_block *nb,
 			       wdt->rec + WDT_REC_OFF_NAPIFNS + i * 4);
 		wmb();
 		writel((u32)nn, wdt->rec + WDT_REC_OFF_NNAPI);
+
+		/*
+		 * v8 printk tail — LAST of the best-effort captures, inside
+		 * the ~1.31 s grace window. By this point the log already
+		 * holds the softlockup report (utilization block + the
+		 * INTR_STORM per-IRQ table when hardirqs ate the CPU), the
+		 * backtrace, and the panic banner — everything a serial
+		 * console would have shown. kmsg_dump_get_buffer() is the
+		 * crash-dumper API: lockless printk ringbuffer readers, fills
+		 * the buffer with the NEWEST messages that fit. The length
+		 * marker at +0x800 was pre-cleared in the committed section
+		 * and is written last: a stall or failure here leaves len=0
+		 * and costs nothing but this bonus capture.
+		 */
+		{
+			static char tail[WDT_TAIL_MAX];
+			struct kmsg_dump_iter iter;
+			size_t len = 0;
+
+			kmsg_dump_rewind(&iter);
+			if (kmsg_dump_get_buffer(&iter, true, tail, sizeof(tail),
+						 &len) && len) {
+				memcpy_toio(wdt->rec + WDT_TAIL_OFF_TXT, tail, len);
+				wmb();
+				writel((u32)len, wdt->rec + WDT_TAIL_OFF_LEN);
+			}
+		}
 	}
 
 	return NOTIFY_DONE;
@@ -788,6 +1117,112 @@ static void rtl819x_wdt_fns_decode(struct rtl819x_wdt *wdt, u32 off_n,
 	}
 	if (!pos)
 		scnprintf(buf, len, "none");
+}
+
+/*
+ * Decode the v8 additions: scalar block, flight-recorder table, printk tail.
+ * Emitted as separate prefixed lines (not appended to the main record line,
+ * which already brushes LOG_LINE_MAX): S26panicrec captures the whole
+ * "rtl819x-wdt" block. Process context (probe) — kmalloc and long loops OK.
+ */
+static void rtl819x_wdt_report_v8(struct rtl819x_wdt *wdt)
+{
+	struct device *dev = wdt->wdd.parent;
+	char comm[17];
+	u32 pj = readl(wdt->rec + WDT_REC_OFF_V8_JIFFIES);
+
+	memcpy_fromio(comm, wdt->rec + WDT_REC_OFF_V8_COMM, 16);
+	comm[16] = '\0';
+
+	dev_info(dev,
+		 "v8: jiffies=%u cause=0x%08x status=0x%08x gimr=0x%08x gisr=0x%08x preempt=0x%x comm=\"%s\"\n",
+		 pj,
+		 readl(wdt->rec + WDT_REC_OFF_V8_CAUSE),
+		 readl(wdt->rec + WDT_REC_OFF_V8_STATUS),
+		 readl(wdt->rec + WDT_REC_OFF_V8_GIMR),
+		 readl(wdt->rec + WDT_REC_OFF_V8_GISR),
+		 readl(wdt->rec + WDT_REC_OFF_V8_PREEMPT),
+		 comm);
+	dev_info(dev,
+		 "v8: uart1[ier=0x%02x iir=0x%02x lsr=0x%02x msr=0x%02x mcr=0x%02x] intc=%u empty=%u last_seen(j ago): tc0=%u uart0=%u uart1=%u eth=%u\n",
+		 readl(wdt->rec + WDT_REC_OFF_V8_U1_IER) >> 24,
+		 readl(wdt->rec + WDT_REC_OFF_V8_U1_IIR) >> 24,
+		 readl(wdt->rec + WDT_REC_OFF_V8_U1_LSR) >> 24,
+		 readl(wdt->rec + WDT_REC_OFF_V8_U1_MSR) >> 24,
+		 readl(wdt->rec + WDT_REC_OFF_V8_U1_MCR) >> 24,
+		 readl(wdt->rec + WDT_REC_OFF_V8_INTC_ENT),
+		 readl(wdt->rec + WDT_REC_OFF_V8_INTC_EMP),
+		 pj - readl(wdt->rec + WDT_REC_OFF_V8_LS_TC0),
+		 pj - readl(wdt->rec + WDT_REC_OFF_V8_LS_UART0),
+		 pj - readl(wdt->rec + WDT_REC_OFF_V8_LS_UART1),
+		 pj - readl(wdt->rec + WDT_REC_OFF_V8_LS_ETH));
+	if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS))
+		dev_info(dev,
+			 "v8: eth[isr=%u last %uj ago, burstmax=%u/j poll=%u last %uj ago, dlv=%u kicktxr=%u last %uj ago, napi=0x%x phbase=0x%08x mbbase=0x%08x]\n",
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_ISRCNT),
+			 pj - readl(wdt->rec + WDT_REC_OFF_V8_E_ISRJ),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_BURST),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_POLLC),
+			 pj - readl(wdt->rec + WDT_REC_OFF_V8_E_POLLJ),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_DLV),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_KICKT),
+			 pj - readl(wdt->rec + WDT_REC_OFF_V8_E_KICKJ),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_NAPI),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_PHBASE),
+			 readl(wdt->rec + WDT_REC_OFF_V8_E_MBBASE));
+
+	/* Flight-recorder table: one line per sample, oldest first. */
+	if (readl(wdt->rec + WDT_FLT_OFF_MAGIC) == WDT_FLT_MAGIC &&
+	    readl(wdt->rec + WDT_FLT_OFF_SSIZE) == sizeof(struct rtl819x_wdt_flt_sample)) {
+		u32 ns = readl(wdt->rec + WDT_FLT_OFF_NS);
+		u32 i;
+
+		if (ns > WDT_FLT_NS_REC)
+			ns = WDT_FLT_NS_REC;
+		dev_info(dev, "flight| %u samples, period %ums, newest last:\n",
+			 ns, readl(wdt->rec + WDT_FLT_OFF_PERIOD));
+		for (i = 0; i < ns; i++) {
+			struct rtl819x_wdt_flt_sample s;
+
+			memcpy_fromio(&s, wdt->rec + WDT_FLT_OFF_SAMPLES +
+				      i * sizeof(s), sizeof(s));
+			dev_info(dev,
+				 "flight|%3d: iisr=0x%x iimr=0x%x dj=%u hi=%u tc0=%u u0=%u u1=%u eth=%u netrx=%u tsirq=%u eisr=%u poll=%u dlv=%u rxp=%u intc=%u emp=%u napi=0x%x\n",
+				 (int)i - (int)ns + 1, s.iisr, s.iimr, s.d_jiffies,
+				 s.d_hardirq, s.d_tc0, s.d_uart0, s.d_uart1,
+				 s.d_eth_line, s.d_net_rx, s.d_timer_sirq,
+				 s.d_eth_isr, s.d_poll, s.d_delivered, s.d_rxpkts,
+				 s.d_intc, s.d_intc_empty, s.napi_state);
+		}
+	}
+
+	/* printk tail: re-emit line by line under a greppable prefix. */
+	{
+		u32 len = readl(wdt->rec + WDT_TAIL_OFF_LEN);
+
+		if (len && len <= WDT_TAIL_MAX) {
+			char *buf = kmalloc(len + 1, GFP_KERNEL);
+
+			if (buf) {
+				char *p, *nl;
+
+				memcpy_fromio(buf, wdt->rec + WDT_TAIL_OFF_TXT, len);
+				buf[len] = '\0';
+				dev_info(dev, "panic-log| --- last %u bytes of the panicking boot's kernel log ---\n",
+					 len);
+				for (p = buf; *p; p = nl) {
+					nl = strchr(p, '\n');
+					if (nl)
+						*nl++ = '\0';
+					else
+						nl = p + strlen(p);
+					if (*p)
+						dev_info(dev, "panic-log| %s\n", p);
+				}
+				kfree(buf);
+			}
+		}
+	}
 }
 
 /*
@@ -863,7 +1298,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 				  readl(wdt->rec + WDT_REC_OFF_HARDIRQ), napi);
 		}
 		v5stat[0] = '\0';
-		if (ver >= WDT_REC_VERSION_V5) {	/* eth #99 snapshot */
+		if (ver >= WDT_REC_VERSION_V5) {	/* eth recovery snapshot */
 			if (readl(wdt->rec + WDT_REC_OFF_ETH_FLAGS)) {
 				size_t p = scnprintf(v5stat, sizeof(v5stat),
 					  " eth=[up=1 resync=%u kick=%u",
@@ -891,7 +1326,7 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 					  readl(wdt->rec + WDT_REC_OFF_ETH_SIRR),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_RXPKTS),
 					  readl(wdt->rec + WDT_REC_OFF_ETH_TXPKTS));
-				if (ver >= WDT_REC_VERSION)	/* v7: bounded-poll detector + A/B + switch desync */
+				if (ver >= WDT_REC_VERSION_V7)	/* v7: bounded-poll detector + A/B + switch desync */
 					p += scnprintf(v5stat + p, sizeof(v5stat) - p,
 					  " pollhit=%u stallrun=%u deepreset=%u rpdcr0=0x%x rmdcr0=0x%x p6dcr0=0x%x A:wildph=%u wildmb=%u noshadow=%u skew=%u B:badlen=%u",
 					  readl(wdt->rec + WDT_REC_OFF_ETH_POLLHIT),
@@ -911,10 +1346,10 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 			}
 		}
 		/*
-		 * v5stat (the eth #99 snapshot) is placed right after the softirq
+		 * v5stat (the eth recovery snapshot) is placed right after the softirq
 		 * mask — ahead of the long timers[]/hrtimers[]/softirqs[] blocks —
-		 * so that on a fully-populated #99 record approaching LOG_LINE_MAX
-		 * (WDT-013, §3.4) the decisive eth fields survive even if the tail
+		 * so that on a fully-populated record approaching LOG_LINE_MAX
+		 * the decisive eth fields survive even if the tail
 		 * (reason, then the candidate lists) is truncated.
 		 */
 		dev_info(dev,
@@ -922,6 +1357,8 @@ static void rtl819x_wdt_report_panic_record(struct rtl819x_wdt *wdt)
 			 up, (void *)(uintptr_t)epc, (void *)(uintptr_t)ra,
 			 (void *)(uintptr_t)fna, sirqmask, sirq, v5stat, tfns, hfns,
 			 wstat, v4stat, reason);
+		if (ver >= WDT_REC_VERSION)
+			rtl819x_wdt_report_v8(wdt);
 	} else {
 		dev_info(dev, "previous boot ended in panic (unknown record v%u)\n",
 			 ver);
@@ -962,7 +1399,7 @@ static const struct watchdog_ops rtl819x_wdt_ops = {
  * Debug aid kept behind dev_dbg: dump sysc[0x3100..0x3120] at probe so
  * we can correlate cold-boot vs watchdog-fired vs software-reboot
  * register values across runs and refine the reset-cause decoder if
- * a future SoC rev populates WDIND reliably (see WDT-001). Not emitted
+ * a future SoC rev populates WDIND reliably. Not emitted
  * on a normal boot; enable with `dyndbg="file rtl819x_wdt.c +p"` on
  * the kernel cmdline or via /sys/kernel/debug/dynamic_debug/control.
  *
@@ -1023,7 +1460,7 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	 * (W1C) by writing 1 to it. Per empirical observation on
 	 * RTL8196E rev. 0xb08, WDIND can read as 0 even after a
 	 * watchdog-triggered reboot — we still log what we see and let
-	 * future bringup data refine WDT-001 in AUDIT.md.
+	 * future bringup data refine the reset-cause decoder.
 	 */
 	raw = readl(wdt->base);
 	dev_info(dev, "last reset: %s (WDTCNR=0x%08x)\n",
@@ -1069,14 +1506,32 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 		rmem = of_reserved_mem_lookup(np);
 		of_node_put(np);
 	}
-	if (rmem && rmem->size >= WDT_REC_SIZE) {
-		wdt->rec = devm_ioremap(dev, rmem->base, WDT_REC_SIZE);
+	if (rmem && rmem->size >= WDT_MAP_SIZE) {
+		/*
+		 * v8 maps the whole 4 KB page (record + flight recorder +
+		 * printk tail). Writes stay below WDT_PAGE_GUARD — the page
+		 * top belongs to boothold (enforced by the static_asserts at
+		 * the layout block).
+		 */
+		wdt->rec = devm_ioremap(dev, rmem->base, WDT_MAP_SIZE);
 		if (!wdt->rec)
 			dev_warn(dev, "panic record region map failed; post-mortem disabled\n");
 	} else {
 		dev_warn(dev, "no usable memory-region reservation; post-mortem disabled\n");
 	}
 	rtl819x_wdt_report_panic_record(wdt);
+
+	/*
+	 * Start the v8 flight recorder. HRTIMER_MODE_REL_HARD: fires from the
+	 * timer hardirq — the context the softlockup detector demonstrably
+	 * kept running from during the captured field hang. Started
+	 * unconditionally (the sampler is a few dozen word ops per second);
+	 * without a mapped record page its history simply never gets dumped.
+	 */
+	hrtimer_setup(&rtl819x_wdt_flt_timer, rtl819x_wdt_flt_fn,
+		      CLOCK_MONOTONIC, HRTIMER_MODE_REL_HARD);
+	hrtimer_start(&rtl819x_wdt_flt_timer, ms_to_ktime(WDT_FLT_PERIOD_MS),
+		      HRTIMER_MODE_REL_HARD);
 
 	rtl819x_wdt_dump_bringup(wdt);
 
@@ -1087,10 +1542,10 @@ static int rtl819x_wdt_probe(struct platform_device *pdev)
 	}
 
 	/*
-	 * Soft-lockup -> panic -> HW reset path (WDT-008). See the
+	 * Soft-lockup -> panic -> HW reset path. See the
 	 * rtl819x_wdt_panic_notify() comment block for the full rationale.
 	 * Priority pinned to INT_MAX so we run at the head of the panic
-	 * notifier chain — see WDT-009 in AUDIT.md.
+	 * notifier chain — see the audit notes.
 	 */
 	wdt->panic_nb.notifier_call = rtl819x_wdt_panic_notify;
 	wdt->panic_nb.priority	    = INT_MAX;

@@ -134,7 +134,7 @@ standalone.
 
 | Partition | Flash offset | Source | Header handling |
 |-----------|-------------|--------|-----------------|
-| boot+cfg | 0x000000 | `31-Bootloader/boot.bin` | Strip cvimg header |
+| boot+cfg | 0x000000 | `31-Bootloader/boot-img/<board>/boot.bin` (default `lidl`) | Strip cvimg header |
 | kernel | 0x020000 | `32-Kernel/kernel-img/<board>/kernel-<line>.img` (default `lidl`/`6.18`) | Keep cs6c header |
 | rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
 | userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |

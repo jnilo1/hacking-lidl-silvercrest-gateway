@@ -18,7 +18,7 @@ boards/
 ```bash
 # Build
 ./build_efr32.sh ncp                 # BOARD=lidl (default)
-BOARD=sengled-e39-g8c ./build_efr32.sh ncp ot-rcp
+BOARD=sengled-e39-g8c ./build_efr32.sh ncp ot-rcp router
 BOARD=lidl ./24-NCP-UART-HW/build_ncp.sh   # per-firmware scripts honour BOARD too
 
 # Flash (repo root) — same BOARD= selector
@@ -34,10 +34,15 @@ gateway, **guards on `/proc/device-tree/model`**: it refuses to push a board's
 radio firmware to a different board (`lidl`→"Lidl", `sengled-e39-g8c`→"Sengled"),
 which also catches forgetting `BOARD=` on a non-lidl box. `--force` overrides.
 
-Scope today: **NCP** and **OT-RCP** are board-parameterised (build *and* flash).
-RCP, Router and the Gecko bootloader remain lidl-only — skipped for non-lidl
-boards on the build side, and refused with a clear message on the flash side —
-until their builds learn `BOARD=`.
+Scope today: **every firmware build is board-parameterised** (build *and*
+flash) — NCP and OT-RCP since #130, the Z3 Router, the Gecko bootloader and
+RCP since #143. Two flow-control specifics: the bootloader consumes only the
+routing subset of `board.env` (`apply_uart_routing` — its flow control is a
+separate numeric knob kept at 0 for every board, because the Xmodem path
+always runs flow-off), and CPC (RCP) supports only RTS/CTS or none, so a
+`BOARD_UART_FLOW=sw` board is built with flow control **none** — recorded as
+such in `radio.conf` at flash time, so the in-kernel bridge (the chip's flow
+partner; cpcd connects to it over TCP) arms to match.
 
 ## What `board.env` defines
 
@@ -47,7 +52,7 @@ until their builds learn `BOARD=`.
 | `BOARD_TARGET_DEVICE` | Exact MCU OPN passed to `slc generate --with` |
 | `BOARD_UART_PERIPHERAL` / `_NO` | USART instance feeding the RTL8196E (e.g. `USART0` / `0`) |
 | `BOARD_UART_TX` / `_RX` | `"<port-letter> <pin> <location>"` for each data line |
-| `BOARD_UART_FLOW` | `hw` (RTS/CTS handshake), `sw` (software XON/XOFF), or `none` |
+| `BOARD_UART_FLOW` | `hw` (RTS/CTS handshake), `sw` (software XON/XOFF), or `none`. Also recorded by `flash_efr32.sh` into `radio.conf` as `FIRMWARE_FLOW_CTRL` on every app flash (#141), so the host side follows automatically. For OT-RCP it additionally selects the UART backend: `sw` → `iostream_usart` (complete XON/XOFF), `hw`/`none` → `uartdrv_usart` (DMA — #142) |
 | `BOARD_UART_CTS` / `_RTS` | `"<port-letter> <pin> <location>"`; ignored when flow ≠ `hw` |
 
 The build copies the firmware's reference VCOM header from its `patches/` tree,
@@ -72,7 +77,17 @@ a patch — the generated init code keys off the same `_FLOW_CONTROL_TYPE` token
 > **NCP** image was flashed to a real G4 and validated end-to-end (Home Assistant
 > talks to the radio); a prebuilt G4 NCP `.gbl` is committed. **OT-RCP** builds
 > for the G4 but its Thread path hasn't been functionally tested there yet — build
-> it yourself and validate over SWD before trusting it.
+> it yourself and validate over SWD before trusting it. The **Z3 Router** likewise
+> builds for the G4 (MG13 target, software flow, #143) but has not been
+> hardware-validated there yet — same caveat, and no prebuilt is committed.
+> The **Gecko bootloader** also builds for the G4 (#143): correct xG13 first
+> stage and placement in the MG13's dedicated bootloader region at `0x0FE10000`
+> were verified against the SDK prebuilts, but it has **never run on a real
+> G4** — and a bad bootloader flash is an SWD-only recovery. A G4 flashed via
+> `flash_efr32.sh` already has a working bootloader; only replace it with a
+> debugger attached. **RCP** builds for the G4 too (#143, flow clamped to
+> none — CPC has no XON/XOFF; recorded as none in `radio.conf` so the bridge
+> matches), also not hardware-validated.
 
 ## Porting contract
 

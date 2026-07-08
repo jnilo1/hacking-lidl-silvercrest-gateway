@@ -8,6 +8,17 @@ in `zigbeed`, which lets us pair a Series 1 EFR32MG1B radio with a modern
 **EmberZNet 8.2.2** stack — the gateway then exposes **EZSP v18** to Z2M / ZHA,
 even though Silabs froze on-chip Series 1 support at EmberZNet 7.5.1.
 
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`, #143); e.g. `BOARD=sengled-e39-g8c ./build_rcp.sh` for the
+> Sengled Smart Hub G4 (MG13 target — builds, but not yet hardware-validated;
+> no prebuilt committed). CPC supports only RTS/CTS or no flow control, so a
+> `BOARD_UART_FLOW=sw` board is built with flow control **none**; the chip's
+> flow partner is the gateway's in-kernel UART bridge (cpcd connects to it
+> over TCP), and `flash_efr32.sh` records `FIRMWARE_FLOW_CTRL=none` for this
+> build so the bridge arms to match. Non-lidl artefacts carry a `-<board>`
+> filename suffix, resolved by `flash_efr32.sh` from the same `BOARD=`
+> selector — see [`../boards/README.md`](../boards/README.md).
+
 | Host stack | Exposes | When to use |
 |------------|---------|-------------|
 | `cpcd` + `zigbeed` **8.2.2** (recommended) | EZSP v18 | Default — modern stack, latest Z2M/ZHA features |
@@ -334,8 +345,8 @@ cd 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW && ./build_rcp.sh 230400
 # 2. Flash — radio.conf FIRMWARE_BAUD is updated automatically
 ./flash_efr32.sh -y rcp 230400
 
-# 3. Update UART_BAUDRATE in docker-compose-zigbee.yml (or cpcd.conf)
-#    so cpcd opens the TCP socket at the matching speed.
+# 3. Nothing to change host-side: cpcd talks TCP to the gateway's bridge,
+#    and the bridge arms the new baud from radio.conf on next boot.
 ```
 
 The baud must be a standard POSIX value (115200, 230400, 460800) — `cpcd`

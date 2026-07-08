@@ -32,7 +32,7 @@
 #include "8250.h"
 
 #define DRV_NAME    "rtl8196e-uart"
-#define DRV_VERSION "1.4"
+#define DRV_VERSION "1.5"
 
 /*
  * RTL8196E UART Flow Control Register
@@ -92,6 +92,7 @@ struct rtl8196e_uart_data {
 	bool supports_afe;
 	bool flow_active;
 	struct device *dev;
+	unsigned int stuck_iir_cnt;	/* stuck RX-timeout IIR recoveries (see handle_irq) */
 };
 
 /**
@@ -304,6 +305,59 @@ static void rtl8196e_uart_set_mctrl(struct uart_port *port, unsigned int mctrl)
 	serial8250_do_set_mctrl(port, mctrl);
 }
 
+/*
+ * Stuck RX-timeout IIR recovery — the root cause of the multi-day field
+ * soft-lockups (captured live by the panic-record flight recorder).
+ *
+ * Failure mode, captured on hardware: IIR reads 0xCC — FIFOs enabled,
+ * interrupt PENDING, ID = Character Timeout ("RX bytes have been waiting
+ * longer than the timeout") — while LSR reads 0x60 with Data Ready CLEAR
+ * ("RX FIFO empty"). The two registers contradict each other and the state
+ * is stable: the 8250 core gates its RX drain on LSR_DR, so it reads
+ * nothing, the timeout condition is never cleared, the handler returns
+ * IRQ_HANDLED, and the level-triggered line re-asserts after every eret.
+ * Each rotation costs ~700 µs of MMIO on this 200 MHz bus (~1360
+ * rotations/s = ~95 % of the CPU in hardirq): the timer wheel freezes, NAPI
+ * never runs, no schedule point is ever reached, and the softlockup
+ * detector panics the box after 20 s.
+ *
+ * The remedy is the classic 16550-clone workaround (mainline precedent:
+ * dw8250_handle_irq, "there are ways to get Designware-based UARTs into a
+ * state where they are asserting UART_IIR_RX_TIMEOUT but there is no actual
+ * data available ... If we don't do this then the 'RX TIMEOUT' interrupt
+ * will fire forever"): when the RX-timeout ID shows with an empty LSR, do
+ * one dummy RBR read — it flushes the phantom byte the FIFO timeout counter
+ * believes it holds and clears the latch. The warning line is the field
+ * confirmation signal: one occurrence = one averted storm.
+ */
+static int rtl8196e_uart_handle_irq(struct uart_port *port)
+{
+	struct uart_8250_port *up = up_to_u8250p(port);
+	struct rtl8196e_uart_data *data = port->private_data;
+	unsigned int iir = serial_port_in(port, UART_IIR);
+
+	guard(uart_port_lock_check_sysrq_irqsave)(port);
+
+	if ((iir & 0x3f) == UART_IIR_RX_TIMEOUT) {
+		u16 lsr = serial_lsr_in(up);
+
+		if (!(lsr & (UART_LSR_DR | UART_LSR_BI))) {
+			(void)serial_port_in(port, UART_RX);
+			if (data)
+				data->stuck_iir_cnt++;
+			dev_warn_ratelimited(port->dev,
+				"stuck RX-timeout IIR with empty RX FIFO - cleared by dummy read (iir=0x%02x lsr=0x%02x, occurrence #%u)\n",
+				iir, lsr, data ? data->stuck_iir_cnt : 0);
+		}
+	}
+
+	if (iir & UART_IIR_NO_INT)
+		return 0;
+
+	serial8250_handle_irq_locked(port, iir);
+	return 1;
+}
+
 /**
  * rtl8196e_uart_probe() - Probe and initialize RTL8196E UART
  * @pdev: Platform device
@@ -405,6 +459,12 @@ static int rtl8196e_uart_probe(struct platform_device *pdev)
 	/* Install custom modem-control programmer: keep RTS asserted under AFE so
 	 * serial_core's software throttle cannot wedge the EFR32 link (issue #109). */
 	uart.port.set_mctrl = rtl8196e_uart_set_mctrl;
+
+	/* Install the stuck-IIR interrupt handler (storm guard) — see the
+	 * rtl8196e_uart_handle_irq() comment block. The template field IS
+	 * copied by serial8250_register_8250_port() (8250_core.c checks
+	 * up->port.handle_irq explicitly), unlike .fcr (audit 8250RTL-006). */
+	uart.port.handle_irq = rtl8196e_uart_handle_irq;
 
 	/* Get IRQ from device tree */
 	ret = platform_get_irq(pdev, 0);

@@ -297,9 +297,9 @@ static int rtl8196e_l2_read_entry(u32 index, u32 *word0, u32 *word1)
  * under CM_PROTECT), re-init MEMCR, pulse FULL_RST via SIRR, restore the LED /
  * RX-queue mapping, clear the L2 table and pending interrupts. ~650 ms of
  * sleeps, so callers must be in process context. Run once at probe (inside
- * rtl8196e_hw_init, after pad muxing) and re-run on its own by the #99
- * deep-reset worker (ETHDRV-016) to recover a wedged switch core — the depth
- * of the vendor rtl865x_reinitSwitchCore that our from-scratch driver dropped.
+ * rtl8196e_hw_init, after pad muxing) and re-run on its own by the
+ * deep-reset worker to recover a wedged switch core — the depth
+ * of the vendor rtl865x_reinitSwitchCore.
  */
 void rtl8196e_hw_swcore_reset(struct rtl8196e_hw *hw)
 {
@@ -446,8 +446,8 @@ int rtl8196e_hw_init(struct rtl8196e_hw *hw)
 
 	/*
 	 * Switch-core silicon reset (clock cycle + MEMCR + FULL_RST + L2
-	 * clear, ~650 ms of sleeps). Factored out so the #99 deep-reset
-	 * worker (ETHDRV-016) can re-run it without re-touching the pad
+	 * clear, ~650 ms of sleeps). Factored out so the deep-reset
+	 * worker can re-run it without re-touching the pad
 	 * muxes above.
 	 */
 	rtl8196e_hw_swcore_reset(hw);

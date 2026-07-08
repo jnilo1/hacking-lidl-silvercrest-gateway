@@ -1,0 +1,66 @@
+# supervise.func — shared keepalive supervision helpers for the init scripts.
+#
+# Sourced (not executed) by the S* init scripts, so it carries no shebang and
+# no `S` prefix (the rcS runner globs S* and would otherwise try to run it).
+# It runs under busybox ash only for the brief life of the sourcing script —
+# never a long-lived loop — so it is not exposed to the issue #109 ash fault.
+# The supervisor it launches (keepalive) is C and never runs ash.
+#
+#   sup_start NAME CMD [ARG...]   run CMD under keepalive, tracked as NAME
+#   sup_stop  NAME                stop the supervisor + child for NAME cleanly
+#
+# NAME is both the keepalive syslog tag and the token matched against process
+# command lines by sup_stop, so it must appear in the child's command line
+# (it does: NAME is the binary's basename for every service here).
+#
+# J. Nilo - July 2026
+
+KEEPALIVE=/usr/sbin/keepalive
+
+# PIDs of every live process (keepalive supervisor or its child) whose command
+# line contains NAME. Matched by command line, not a pidfile, so a lost or
+# never-recorded PID cannot hide a survivor. Excludes the grep pipeline itself.
+sup_pids() {
+    ps w | grep -w -- "$1" | grep -v grep | awk '{print $1}'
+}
+
+# Launch CMD under keepalive as NAME. Idempotent: refuses to stack a second
+# supervised instance on top of one already running (a double start would
+# overwrite the pidfile, orphaning the first supervisor).
+sup_start() {
+    _sup_name=$1
+    shift
+    if [ -n "$(sup_pids "$_sup_name")" ]; then
+        return 1
+    fi
+    "$KEEPALIVE" -n "$_sup_name" "$@" &
+    echo $! > "/tmp/${_sup_name}.sup.pid"
+    return 0
+}
+
+# Stop the supervisor for NAME, then its child.
+#
+# Kill the supervisor FIRST via its tracked PID: keepalive forwards SIGTERM to
+# its child and exits without restarting, so killing the child directly would
+# only trigger a restart. Then re-signal any survivor (supervisor or child)
+# matched by command line every second rather than trusting the pidfile once —
+# a stale/lost/never-recorded PID used to leave a keepalive+child pair alive and
+# invisible, respawning minutes later with no trace. SIGKILL the last resort.
+sup_stop() {
+    _sup_name=$1
+    _sup_pidf="/tmp/${_sup_name}.sup.pid"
+
+    [ -f "$_sup_pidf" ] && kill "$(cat "$_sup_pidf")" 2>/dev/null
+    rm -f "$_sup_pidf"
+
+    _sup_i=0
+    while [ -n "$(sup_pids "$_sup_name")" ] && [ "$_sup_i" -lt 10 ]; do
+        kill $(sup_pids "$_sup_name") 2>/dev/null
+        sleep 1
+        _sup_i=$((_sup_i + 1))
+    done
+
+    _sup_rest="$(sup_pids "$_sup_name")"
+    [ -n "$_sup_rest" ] && kill -9 $_sup_rest 2>/dev/null
+    return 0
+}

@@ -20,24 +20,6 @@
 #include "rtl8196e_ring.h"
 #include "rtl8196e_regs.h"
 
-#ifdef CONFIG_RTL8196E_ETH_DEBUG
-/*
- * issue #99 fault injection (debug builds only — CONFIG_RTL8196E_ETH_DEBUG,
- * never shipped). When non-zero, rtl8196e_ring_rx_poll force-drops each
- * consumed RX descriptor and decrements this count, reproducing the field
- * drop-flood storm: every descriptor is processed, nothing is delivered. Used
- * to prove the bounded poll returns under saturation (no soft-lockup) and that
- * the zero-delivery stall detector escalates to a switch-core deep reset which
- * restores RX once the flood clears. Countdown so the burst auto-expires and RX
- * self-restores even if the operator's SSH session drops mid-test. Set via
- * /sys/module/rtl8196e_eth/parameters/rtl8196e_force_dropflood.
- */
-unsigned int rtl8196e_force_dropflood;
-module_param(rtl8196e_force_dropflood, uint, 0644);
-MODULE_PARM_DESC(rtl8196e_force_dropflood,
-		 "issue#99 DEBUG: force-drop the next N consumed RX descriptors (0=off). Never enable in production.");
-#endif
-
 /*
  * Compile-time guard on the descriptor ABI shared with the switch ASIC.
  * The hardware writes ph_len/ph_flags/ph_reason and reads m_data/m_extbuf
@@ -109,7 +91,7 @@ static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 		return NULL;
 	/*
 	 * Flush-and-discard the cached alias before the memory is ever
-	 * touched through KSEG1 (ETHDRV-008): the lines may still sit
+	 * touched through KSEG1: the lines may still sit
 	 * dirty in the write-back L1 from the allocation's previous
 	 * lifetime (kfree does not flush), and a later eviction would
 	 * write that stale data over ring entries maintained through the
@@ -123,7 +105,7 @@ static void *rtl8196e_alloc_uncached(size_t size, void **orig_out)
 }
 
 /* Extract the descriptor pointer from a raw ring entry (strip ownership and wrap bits). */
-static struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
+static __always_inline struct rtl_pktHdr *rtl8196e_desc_ptr(u32 entry)
 {
 	return (struct rtl_pktHdr *)(entry & ~(RTL8196E_DESC_OWNED_BIT | RTL8196E_DESC_WRAP));
 }
@@ -426,11 +408,27 @@ __iram int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 	return 0;
 }
 
-/* Walk the TX consumer ring, free completed SKBs, return the number of packets reclaimed. */
+/*
+ * Cap on the xmit-context deferred-free list. Bounds the skbs held between
+ * two NAPI polls (a poll always runs within RTL8196E_TX_RECLAIM_MS of a
+ * queue stop, and on every RX interrupt); past the cap the reclaim falls
+ * back to freeing directly, i.e. degrades to the pre-defer behaviour.
+ */
+#define RTL8196E_TX_DEFER_CAP 64
+
+/*
+ * Walk the TX consumer ring, free completed SKBs, return the number of
+ * packets reclaimed. When @defer is non-NULL (xmit context, napi_budget 0)
+ * completed skbs are queued there instead of freed inline — the NAPI poll
+ * drains them through napi_consume_skb() with a real budget. Descriptor
+ * slots are released by the cursor advance either way, so deferring the
+ * skb free never delays ring availability.
+ */
 __iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
-				    int napi_budget)
+				    int napi_budget,
+				    struct sk_buff_head *defer)
 {
 	unsigned int done_pkts = 0;
 	unsigned int done_bytes = 0;
@@ -467,7 +465,14 @@ __iram int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 		if (likely(skb)) {
 			done_pkts++;
 			done_bytes += skb->len;
-			napi_consume_skb(skb, napi_budget);
+			if (defer && skb_queue_len(defer) < RTL8196E_TX_DEFER_CAP) {
+				__skb_queue_tail(defer, skb);
+				ring->diag.tx_defer_queued++;
+			} else {
+				napi_consume_skb(skb, napi_budget);
+				if (defer)
+					ring->diag.tx_defer_direct++;
+			}
 			mb->skb = NULL;
 		} else {
 			ring->diag.tx_reclaim_no_skb++;
@@ -515,8 +520,8 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		 * Bound the poll by descriptors *processed*, not packets delivered.
 		 * Every drop path below re-arms and advances rx_idx without
 		 * delivering; counting only deliveries (the old work_done) let a
-		 * flood of droppable descriptors spin this poll forever — issue #99:
-		 * the poll never returns, CPU pinned in NET_RX softirq -> soft-lockup.
+		 * flood of droppable descriptors spin this poll forever: the poll
+		 * never returns, CPU pinned in NET_RX softirq -> soft-lockup.
 		 * The vendor RX DSR bounds by total iterations (rtl_nic.c:4068).
 		 */
 		processed++;
@@ -547,7 +552,7 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		mbuf_index = (unsigned int)(mb - ring->rx_mbuf_base);
 
 		/*
-		 * issue #99 probe: count how often the switch pairs pkthdr[rx_idx]
+		 * Switch-desync probe: count how often the switch pairs pkthdr[rx_idx]
 		 * with an mbuf whose ring index differs from rx_idx. The note below
 		 * says this skew appears only at/near RX saturation; the leading
 		 * hypothesis is that sustained skew is what eventually desyncs the
@@ -579,20 +584,6 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 			goto rearm_drop;
 		}
 
-#ifdef CONFIG_RTL8196E_ETH_DEBUG
-		/*
-		 * issue #99 fault injection: force this otherwise-deliverable
-		 * descriptor down the drop path so the poll saturates with zero
-		 * delivery, exactly like the field storm. ph/mb/mbuf_index/rxb
-		 * are all valid here, so rearm_drop re-arms through the normal
-		 * machinery. Decrement so the burst auto-expires.
-		 */
-		if (unlikely(rtl8196e_force_dropflood)) {
-			rtl8196e_force_dropflood--;
-			goto rearm_drop;
-		}
-#endif
-
 		len = ph->ph_len;
 		if (unlikely(len < ETH_ZLEN || len > ring->buf_size))
 			goto rearm_bad;
@@ -613,7 +604,7 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += len;
 		skb->protocol = eth_type_trans(skb, dev);
-		/* ETHDRV-003: blanket CHECKSUM_UNNECESSARY kept after a gated
+		/* Blanket CHECKSUM_UNNECESSARY kept after a gated
 		 * form (consult ph_flags & CSUM_TCPUDP_OK, fall back to
 		 * CHECKSUM_NONE) was tried in this release cycle and reverted:
 		 * the standard regression bench showed -22 Mbit/s TCP RX vs
@@ -623,8 +614,8 @@ __iram int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 		 * through software csum verify and saturated the single CPU.
 		 *
 		 * Characterisation (2026-05-03) confirmed bad UDP csums DO reach
-		 * userland under the blanket scheme — see AUDIT.md ETHDRV-003
-		 * section.  A robust fix needs per-frame instrumentation of
+		 * userland under the blanket scheme — see the driver audit notes.
+		 * A robust fix needs per-frame instrumentation of
 		 * ph_flags on real TCP/UDP RX traffic and a finer driver split
 		 * (e.g. only force CHECKSUM_NONE for UDP-IPv4 with bit clear)
 		 * before re-attempting.  Tracking lives in the audit log; the
@@ -744,8 +735,8 @@ __iram int rtl8196e_ring_tx_free_count(struct rtl8196e_ring *ring)
 }
 
 /*
- * Read-only ring snapshot for the panic-time #99 capture
- * (rtl8196e_eth_panic_snapshot, watchdog record v6). The ring internals are
+ * Read-only ring snapshot for the panic-time recovery capture
+ * (rtl8196e_eth_panic_snapshot). The ring internals are
  * private to this module; this hands the watchdog the cursors and the two
  * descriptor words that show whether HW handed buffers back:
  *   rx_desc = rx_pkthdr_ring[rx_idx] — if OWNED (SWCORE) the switch still owns
@@ -776,7 +767,7 @@ void rtl8196e_ring_panic_snapshot(struct rtl8196e_ring *ring,
 }
 
 /*
- * ETHDRV-016 (issue #99, Lead 2): TX-done hang probe for the periodic
+ * TX-done hang probe for the periodic
  * watchdog. Returns true (and sets *idx = tx_cons) when the TX ring has an
  * outstanding descriptor (tx_cons != tx_prod) that the switch core still owns
  * (SWCORE_OWNED) at tx_cons — i.e. TX-done is not advancing. Mirrors the

@@ -8,10 +8,12 @@ BOARD=lidl ./build_bootloader.sh        # default
 BOARD=<your-board> ./build_bootloader.sh
 ```
 
-`lidl` is the in-tree reference: building it reproduces the committed
-`boot.bin` bit-for-bit (`md5sum` must match — the bootloader build is
-deterministic, see `../CLAUDE.md` if you are a maintainer, or just trust
-the check below).
+The build installs its output into the board's own pre-built slot,
+`../boot-img/<board>/boot.bin` — one committed image per board, so
+building for one board never overwrites another board's binary. `lidl`
+is the in-tree reference: building it reproduces the committed
+`boot-img/lidl/boot.bin` bit-for-bit (`md5sum` must match — the
+bootloader build is deterministic; just trust the check below).
 
 ## What a board.h must define
 
@@ -51,5 +53,5 @@ working on that board.
 
 ```sh
 BOARD=lidl ./build_bootloader.sh
-md5sum boot.bin   # must equal the committed boot.bin
+md5sum boot-img/lidl/boot.bin   # must equal the committed image
 ```

@@ -4,6 +4,13 @@ Minimal Zigbee 3.0 Router (SoC) firmware for the EFR32MG1B232F256GM48 chip found
 
 This firmware transforms the gateway into an autonomous Zigbee router that extends your mesh network coverage.
 
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`, #143); e.g. `BOARD=sengled-e39-g8c ./build_router.sh` for the
+> Sengled Smart Hub G4 (MG13 target, software flow — builds, but not yet
+> hardware-validated; no prebuilt committed). Non-lidl artefacts carry a
+> `-<board>` filename suffix, and `flash_efr32.sh` resolves them from the same
+> `BOARD=` selector — see [`../boards/README.md`](../boards/README.md).
+
 ## Features
 
 - **Zigbee 3.0 Router** - Full mesh routing capabilities

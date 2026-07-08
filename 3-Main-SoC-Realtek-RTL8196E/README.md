@@ -59,6 +59,7 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 
 | Image | File | Size | Description |
 |-------|------|------|-------------|
+| Bootloader | [`31-Bootloader/boot-img/<board>/boot.bin`](./31-Bootloader/README.md) | ~22 KB | Boot code — per-board DRAM bring-up; one image per board shipped |
 | Kernel | [`32-Kernel/kernel-img/<board>/kernel-<line>.img`](./32-Kernel/README.md) | ~1.4 MB | Linux kernel — `<board>` ∈ {`lidl`, `sengled-e39-g8c`}, `<line>` ∈ {`6.18`, `7.1`}; four images shipped |
 | Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/README.md) | ~900 KB | Base system (BusyBox, Dropbear) — board/kernel-agnostic |
 | Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/README.md) | ~12 MB | Apps (nano, otbr-agent, boothold) — board/kernel-agnostic |
@@ -71,10 +72,11 @@ cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
 > `lidl`/`6.18` image unchanged.
 >
 > **Non-Lidl board safety:** a full install (`flash_install_rtl8196e.sh`) also flashes the
-> **bootloader**, whose DRAM config is board-specific — for `BOARD=sengled-e39-g8c` you must
-> first build the matching `31-Bootloader/boot.bin` (`BOARD=sengled-e39-g8c ./build_bootloader.sh`)
-> or the gateway can brick. The upgrade path verifies `/proc/device-tree/model` and refuses a
-> board mismatch unless `--force`.
+> **bootloader**, whose DRAM config is board-specific. Since discussion #140 the flash
+> tooling resolves the pre-built `31-Bootloader/boot-img/<board>/boot.bin` from `BOARD=`
+> automatically — the same selection mechanism as the kernel — so the image always matches
+> the selected board. The upgrade path additionally verifies `/proc/device-tree/model` and
+> refuses a board mismatch unless `--force`.
 
 ### Flashing
 
@@ -252,9 +254,9 @@ when they turn the STATUS LED on.
 #### 8. Radio / UART bridge (`/userdata/etc/radio.conf`)
 
 `flash_efr32.sh` keeps the chip-side identity (`FIRMWARE`,
-`FIRMWARE_VERSION`, `FIRMWARE_BAUD`) and the daemon-routing key (`MODE`)
-in sync with the firmware flashed on the EFR32, so most users never need
-to touch this file. Edit it manually only to:
+`FIRMWARE_VERSION`, `FIRMWARE_BAUD`, `FIRMWARE_FLOW_CTRL`) and the
+daemon-routing key (`MODE`) in sync with the firmware flashed on the
+EFR32, so most users never need to touch this file. Edit it manually only to:
 - change the bind address (`BRIDGE_BIND`)
 - switch an OT-RCP chip between Zigbee bridge mode (cases 1 & 2) and
   Thread mode (case 3) without reflashing — see
@@ -265,7 +267,7 @@ to touch this file. Edit it manually only to:
 | `FIRMWARE` | `ncp`, `rcp`, `otrcp`, `router` | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_VERSION` | e.g. `7.5.1` (NCP, Router only) | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_BAUD` | `115200`, `230400`, `460800`, `691200`, `892857` | `460800` | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
-| `FIRMWARE_FLOW_CTRL` | `none`, `sw`, `hw` | (absent ⇒ devicetree per-board default) | (manual) | `S50uart_bridge`, `S70otbr` |
+| `FIRMWARE_FLOW_CTRL` | `none`, `sw`, `hw` | (absent ⇒ devicetree per-board default) | `flash_efr32.sh` — app flashes (#141) | `S50uart_bridge`, `S70otbr` |
 | `BOOTLOADER_VERSION` | e.g. `2.4.2` | (absent) | `flash_efr32.sh` — every flash | docs / diagnostics |
 | `MODE` | `otbr` (or absent) | absent = Zigbee | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
 | `BRIDGE_BIND` | `0.0.0.0`, `127.0.0.1` | `0.0.0.0` | (manual) | `S50uart_bridge` |
@@ -283,14 +285,19 @@ can only be reached through an SSH tunnel — see
 [`drivers/net/rtl8196e-uart-bridge/SECURITY.md`](./32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/SECURITY.md)
 for the rationale and the tunnel recipe.
 
-`FIRMWARE_FLOW_CTRL` is **optional and rarely needed**: with it absent the
-flow-control mode comes from the board's devicetree (hardware flow control
-on the Lidl board, software on a board without RTS/CTS wiring such as the
-Sengled G4), so neither board needs the key. Set it only to select a mode
-that differs from the board default — e.g. `FIRMWARE_FLOW_CTRL=sw` when
-running an XON/XOFF firmware (NCP-UART-SW) on a board that wires RTS/CTS. A
-request for `hw` on a board that does not wire RTS/CTS is clamped to `sw`
-by the kernel, so it can never wedge the UART.
+`FIRMWARE_FLOW_CTRL` is written automatically by `flash_efr32.sh` on every
+application flash (#141): the value comes from the selected board's
+`boards/<board>/board.env` (`BOARD_UART_FLOW` — `hw` on the Lidl reference,
+`sw` on the Sengled G4, which has no RTS/CTS wiring), so the host side
+always matches the flow-control mode the firmware was built with. With the
+key absent (configs from before this change, never reflashed) the bridge
+falls back to the board's devicetree default, while `S70otbr` assumes `hw`
+— which is why the G4 previously needed the key added by hand for OT-RCP.
+A manual edit is still honoured until the next app flash resets it — only
+relevant when flashing an exotic image via `--firmware-file` whose flow
+mode differs from the board default. A request for `hw` on a board that
+does not wire RTS/CTS is clamped to `sw` by the kernel, so it can never
+wedge the UART.
 
 `FIRMWARE_BAUD` must match the baud the EFR32 firmware was built at.
 **`flash_efr32.sh` handles this automatically**: when you flash e.g.

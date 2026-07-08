@@ -80,18 +80,6 @@ if [ ! -f "${SCRIPT_DIR}/boards/${BOARD}/board.env" ]; then
 fi
 export BOARD
 
-# Only NCP and OT-RCP are board-parameterised today; the rest stay lidl-only
-# until their builds learn BOARD= (RCP/Router/bootloader).
-if [ "${BOARD}" != "lidl" ] && \
-   { [ $BUILD_BOOTLOADER -eq 1 ] || [ $BUILD_RCP -eq 1 ] || [ $BUILD_ROUTER -eq 1 ]; }; then
-    echo "NOTE: BOARD=${BOARD} currently supports only 'ncp' and 'ot-rcp';"
-    echo "      skipping bootloader/rcp/router (still lidl-only)."
-    echo ""
-    BUILD_BOOTLOADER=0
-    BUILD_RCP=0
-    BUILD_ROUTER=0
-fi
-
 echo "========================================="
 echo "  BUILDING EFR32 FIRMWARE"
 echo "========================================="

@@ -115,7 +115,7 @@ is the normal entry point. It reads these keys from
 ```
 FIRMWARE_BAUD=115200       # or 460800, 691200, 892857 — match the EFR32 firmware
 BRIDGE_BIND=0.0.0.0        # or 127.0.0.1 to force SSH-tunnel-only access
-FIRMWARE_FLOW_CTRL=hw      # optional: none|sw|hw, overrides the DT per-board default
+FIRMWARE_FLOW_CTRL=hw      # none|sw|hw, overrides the DT per-board default
 ```
 
 then writes the corresponding sysfs knobs and flips `enable=1`. When
@@ -125,10 +125,12 @@ the UART free for `otbr-agent`.
 All three keys are optional — missing `FIRMWARE_BAUD` defaults to 460800,
 missing `BRIDGE_BIND` defaults to 0.0.0.0 (unchanged from v3.0 behaviour),
 and a missing `FIRMWARE_FLOW_CTRL` leaves `flow_control` at its devicetree
-per-board default (so neither the Lidl nor the G4 board needs the key). It
-exists to select the flow-control mode when a radio firmware differs from
-the board default — e.g. an XON/XOFF NCP build — and is still subject to
-the hw-flow-control capability clamp.
+per-board default. Since #141, `flash_efr32.sh` writes `FIRMWARE_FLOW_CTRL`
+on every application flash from the selected board's `board.env`, so on a
+script-flashed gateway the key is present and matches the flow-control mode
+the firmware was built with. A hand-edited value (e.g. an XON/XOFF NCP
+build flashed via `--firmware-file`) is honoured until the next app flash
+resets it, and is always subject to the hw-flow-control capability clamp.
 
 `FIRMWARE_BAUD` is the chip-side baud written by `flash_efr32.sh` on
 every successful flash; both `S50uart_bridge` (Zigbee) and `S70otbr`

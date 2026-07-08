@@ -6,6 +6,196 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [Unreleased]
+
+## [4.0.0-rc5] - 2026-07-08
+
+_A **UART stuck-interrupt storm** with the exact issue #99 soft-lockup signature caught
+in the act on the bench and fixed (via the new **v8 diagnostic instrumentation**: flight
+recorder + panic-time kernel-log capture) — **field confirmation pending**; root-cause fix for
+the intermittent **RLX4181 TLB fault** (issue #109) behind the busybox
+`SIGSEGV`/`SIGILL`/`SIGBUS` crashes, switch-core **PHY-interface watchdog**, driver-comment
+cleanup, a **userdata supervision overhaul** (keepalive for every long-lived daemon +
+`otbr-monitor` ported from busybox-ash to a C daemon), an **`S70otbr` spinel
+flow-control fix** for boards without RTS/CTS (discussion #142), and **per-board
+pre-built bootloaders** closing the discussion #140 brick scenario, heading to the
+next release._
+
+### Kernel — issue #99: a UART1 stuck-IIR interrupt storm captured and fixed — field confirmation pending (rtl8196e-uart v1.4 → v1.5)
+
+- **The v8 instrumentation caught a soft-lockup in the act — on the bench, the day it
+  was built.** The reference unit crashed with the exact issue #99 macro-signature
+  while the flight recorder was running. The film of THAT crash is unambiguous: for the
+  final 21 s **UART1 (the EFR32 radio link) rotated at ~1360 interrupts/s = 100 % of
+  all interrupt-controller dispatches**, starving everything else to zero (timer wheel
+  frozen, NAPI never run — the ethernet "culprit" of the earlier theories an innocent
+  bystander in this capture). The UART registers at panic show a **contradictory,
+  frozen state**: IIR = 0xCC (interrupt pending, ID = RX character timeout, "bytes are
+  waiting in the FIFO") while LSR = 0x60 (Data Ready clear, "RX FIFO empty").
+- **Mechanism:** the 8250 core gates its RX drain on `LSR_DR`, so it reads nothing and
+  the timeout condition is never cleared; the level-triggered line re-asserts after
+  every interrupt return. Each rotation costs ~700 µs of MMIO on the 200 MHz bus
+  (~95 % of the CPU in hardirq): no schedule point is ever reached, the softlockup
+  detector fires at 20 s and the watchdog reboots the box.
+- **Fix:** a custom `port->handle_irq` in the UART1 glue driver — the classic
+  16550-clone workaround with a direct mainline precedent (`dw8250_handle_irq`: *"there
+  are ways to get [these] UARTs into a state where they are asserting
+  UART_IIR_RX_TIMEOUT but there is no actual data available … if we don't do this then
+  the 'RX TIMEOUT' interrupt will fire forever"*). On an RX-timeout ID with an empty
+  LSR, one dummy RBR read flushes the phantom byte and clears the latch. A rate-limited
+  `stuck RX-timeout IIR … occurrence #N` warning is the confirmation signal: one log
+  line = one averted storm, with unbroken uptime.
+- **Honest scope — this issue has been declared fixed twice before and the field
+  disagreed both times, so the claims are kept falsifiable.** Established: the bench
+  crash was this UART1 storm, measured at the registers. NOT yet established: (a) the
+  field crashes match on the macro-signature only — the v7 records structurally could
+  not see UART registers or per-line interrupt rates, so whether the reporting units
+  die of the same mechanism is unconfirmed until one of them logs the trace line (or a
+  v8 record decides otherwise); (b) the quirk has never been exercised against a live
+  storm (no false positives ≠ efficacy). Confirmation = the trace line with unbroken
+  uptime and no recurrence over several times the historical 3–8 day interval.
+- Validated so far: no false positives under normal spinel traffic nor across 10
+  otbr-agent restart cycles under a 60 Mbit/s UDP flood; ethernet throughput untouched
+  by construction (the change is confined to the UART1 interrupt path).
+- The rc4 bounded RX poll and all its detectors remain in place as hardening; the v8
+  record (below) stays as the permanent black box precisely in case this diagnosis is
+  wrong too.
+
+### Kernel — issue #99 reopened: v8 diagnostic instrumentation (wdt v1.11, eth v2.21, irqchip v1.1)
+
+- **The rc4 theory did not survive the field.** The first crash captured with the full
+  v7 record (uptime 7.83 d on v4.0.0-rc4) showed **every** rc4 detector counter at zero:
+  the bounded RX poll never saturated its budget once (`pollhit=0`), no stall run, no
+  deep reset, RUNOUT clear, TX idle — while the box still soft-locked ~21 s with
+  TIMER|NET_RX pending and a frozen timer wheel. The bounded poll remains (correct
+  hardening), but the field mechanism is elsewhere: the evidence points at an interrupt
+  storm on an **unidentified line**, with the ethernet state at panic consistent with an
+  innocent bystander (the normal `napi_defer_hard_irqs` masked window). The storming
+  source cannot be named from a final-frame snapshot — hence v8, which records the film:
+  - **Panic record v8** (`rtl819x_wdt` v1.10 → v1.11). The reserved 4 KB DRAM page is now
+    fully used: v7 core record (byte-compatible) + a v8 scalar block (CP0 Cause/Status,
+    GIMR/GISR, `preempt_count`, interrupted task comm, a raw **UART1 8250 register
+    snapshot** (IER/IIR/LSR/MSR/MCR), INTC dispatch stats, per-line last-seen jiffies,
+    eth activity stamps, RX ring base addresses that make the switch-pointer captures
+    decodable into ring indices).
+  - **1 Hz flight recorder.** A storm-proof `HRTIMER_MODE_REL_HARD` sampler (the same
+    context the softlockup detector provably kept running from during the field hang)
+    records per-second deltas of total hardirqs, per-INTC-line dispatches
+    (UART0/UART1/switch/TC0), NET_RX/TIMER softirq runs, eth ISR/poll/delivered/rx
+    counters, INTC entries and **empty-pending entries** (the signature of an INTC-level
+    storm no existing counter could see), plus live CPUIISR/CPUIIMR and NAPI state. The
+    newest 31 samples are copied into the DRAM page at panic — the 20 s hang window plus
+    a pre-onset baseline.
+  - **Panic-time kernel-log capture.** The last ~2.1 KB of the printk buffer are saved
+    into the DRAM page at panic (strictly best-effort, torn-safe length marker): it
+    contains the softlockup report — including the per-IRQ interrupt-storm utilization
+    table the kernel already compiles in (`SOFTLOCKUP_DETECTOR_INTR_STORM`) — and the
+    backtrace that headless field units could never show. Decoded and re-emitted at the
+    next boot under `flight|` / `panic-log|` prefixes; `S26panicrec` now persists the
+    whole multi-line block to `/userdata/panic/history`.
+  - **eth v2.20 → v2.21**: ISR/poll invocation counters with last-activity jiffies
+    stamps, a per-jiffy ISR burst high-water (an eth-line hardirq storm cannot hide from
+    it), a counter on the tx-reclaim timer's NAPI kick (the one `napi_schedule` that sets
+    `SCHED` without masking), all exposed via `ethtool -S` and the v8 record.
+  - **irqchip v1.0 → v1.1**: INTC dispatch statistics (entries, empty-pending, per-line
+    counts and last-seen jiffies) feeding the recorder and the record.
+  - Bench-validated end-to-end on the reference unit: sysrq-c panic → next boot decodes
+    the v8 scalars, the 31-row flight table (exact 1 s cadence) and the log tail ending
+    at the panic banner; live counters advance at the expected idle rates.
+
+### Kernel — MIPS TLB flush (RLX4181)
+
+- **Root-cause fix for the intermittent RLX4181 `SIGSEGV`/`SIGILL`/`SIGBUS` faults
+  (issue #109).** Under fork/exec pressure a user process would intermittently read the
+  *wrong physical frame* for a correctly-mapped virtual address — a plain load returned a
+  stale pointer its own page table never pointed to — corrupting a register mid-sequence
+  and crashing (busybox-ash, the fork/exec-heaviest process, was the most exposed).
+  The cause was in `local_flush_tlb_all()`: it began its invalidation sweep at a hardcoded
+  TLB index of **8**, inheriting the classic-R3000 assumption that the `Random` register
+  never allocates entries 0–7. The Lexra RLX4181 does **not** honour that convention — it
+  reserves entries through the `Wired` register, which is **0** on this core — so
+  `tlb_write_random` installs translations into slots 0–7 and the bulk flush left them
+  untouched. A stale mapping parked in a low slot survived every flush and, once the ASID
+  generation rolled over, spuriously matched and resolved a user address to the wrong
+  frame. The sweep now starts at `read_c0_wired()`, matching the vendor `arch/rlx` TLB
+  code. Confirmed by ~53 min of continuous fork/exec churn with **zero** faults, on a load
+  that crashed every prior build within 200–600 s. Applies to both kernel lines (6.18 and
+  7.1). This is the actual fix behind the earlier ash→C daemon rewrites, which were
+  mitigations that moved code off the exposed path rather than closing the bug.
+
+### rtl8196e-eth driver — v2.19 → v2.20
+
+- **Switch-core PHY-interface watchdog.** A periodic 1 s check reads the switch's
+  per-port `EnablePHYIf` bit; if it reads back **clear** on an administratively-up
+  port across three consecutive checks — the switch core silently severed the
+  MAC↔PHY interface, a stall with neither a `PKTHDR_DESC_RUNOUT` nor a TX-done
+  hang, invisible to the existing detectors — it escalates to the shared
+  `FullAndSemiReset` deep reset. Mirrors the vendor `one_sec_timer()`
+  `EnablePHYIf` recovery branch. Bench-validated: detection in ~3 s, full port
+  recovery in ~3.2 s, independent of the RUNOUT / stall detectors (they stay 0).
+
+### Cleanup
+
+- Genericized the eth + watchdog driver comments — dropped the project-internal
+  issue-tracker / audit-finding tags so the code reads standalone for reuse.
+- Removed the `CONFIG_RTL8196E_ETH_DEBUG` fault injectors (`force_dropflood` /
+  `force_stall`): bench validation scaffolding, never shipped in any image.
+
+### userdata — unified process supervision + `otbr-monitor` ported to C
+
+- **Unified keepalive supervision.** `s40button` and `linkwatch`, previously started
+  fire-and-forget, now run under the `keepalive` supervisor like `otbr-agent` /
+  `otbr-monitor`, so any long-lived daemon that crashes is restarted instead of staying
+  dead until the next reboot. A shared `etc/init.d/supervise.func` helper
+  (`sup_start` / `sup_stop`) — factored from the hardened `S70otbr` stop logic (kill the
+  supervisor before the child, then a command-line-matched poll-until-dead with a SIGKILL
+  fallback) — replaces the duplicated bookkeeping in `S40button`, `S10network` and
+  `S70otbr`.
+- **`otbr-monitor` rewritten in C** (`34-Userdata/otbr-monitor/`, v1.0). The OTBR
+  housekeeping loop (radio tuning, status LED, dataset sync, once-per-boot SRP recovery)
+  was the last long-lived busybox-ash loop in the system — the only process still exposed
+  to the intermittent RLX4181 `SIGSEGV`/`SIGILL`/`SIGBUS` fault that retired the s40button
+  and inline-monitor shell loops. It is now a foreground C daemon: it reads the REST API
+  over a plain TCP socket, tunes the radio and runs the SRP cycle via short-lived `ot-ctl`
+  execs, and copies the dataset in-process — no ash is spawned, and its resident set drops
+  from ~944 KB to ~288 KB. Behaviour-for-behaviour parity with the script; bench-validated
+  across a warm restart and a cold reboot (all services come up supervised, radio/LED/SRP
+  correct, no ash faults).
+
+### userdata — `S70otbr` no longer passes `uart-flow-control=false` (discussion #142)
+
+- **Flow-control was force-enabled on boards without RTS/CTS.** OpenThread's radio
+  URL parser treats `uart-flow-control` as a **presence flag** (`Url::HasParam()`
+  only checks that the name occurs in the query string, per its own usage text:
+  "Enable flow control, disabled by default"), so the `uart-flow-control=false`
+  that `S70otbr` emitted for `FIRMWARE_FLOW_CTRL=none|sw` still set `CRTSCTS` on
+  `/dev/ttyS1`. On a board that does not wire RTS/CTS (the Sengled G4), otbr-agent
+  then waited on a dead handshake and exited silently with code 1 before printing
+  anything — OT-RCP simply never came up (#142). Root-caused by @hlyi, from the
+  shipped rc3 image down to the exact `HasParam` line. `S70otbr` now **omits the
+  parameter entirely** for `none|sw` and keeps `&uart-flow-control=true` for `hw`
+  (or an absent key), so the Lidl path is byte-for-byte unchanged. The bug never
+  shipped in a GA release — it was introduced with the #134 flow-control split and
+  only ever affected the v4.0.0 release candidates on non-hw boards.
+
+### Flash tooling — per-board pre-built bootloaders (discussion #140)
+
+- **`boot.bin` is now shipped per board**, in `31-Bootloader/boot-img/<board>/boot.bin` —
+  the same layout and selection mechanism as the kernel images. All consumers
+  (`build_fullflash.sh`, `create_fullflash.sh`, `flash_install_rtl8196e.sh`,
+  `flash_remote.sh bootloader`, `flash_bootloader.sh`) resolve the binary from `BOARD=`
+  through the shared `lib/kernel_image.sh` helper, and `build_bootloader.sh` writes only
+  into the selected board's slot. This closes the discussion #140 brick scenario both
+  ways: a non-lidl full install can no longer bundle the Lidl DRAM bring-up (the old
+  single `boot.bin` + stderr warning), and a leftover non-lidl build can no longer land
+  on a Lidl gateway, since no shared mutable `boot.bin` exists any more. The Lidl image
+  is byte-for-byte the former `31-Bootloader/boot.bin` (V2.9, reproducible build); a
+  pre-built `sengled-e39-g8c` image is now committed alongside it. `flash_remote.sh
+  bootloader` additionally gained the `/proc/device-tree/model` board-mismatch guard
+  that previously covered only the kernel component.
+
+---
+
 ## [4.0.0-rc4] - 2026-06-30
 
 _Supersedes `v4.0.0-rc3`. Headline: **issue #99 — the real root cause, fixed.** Two field

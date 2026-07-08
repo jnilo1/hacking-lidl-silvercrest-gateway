@@ -19,6 +19,8 @@
 # J. Nilo - Nov 2025
 #
 
+. "$(dirname "$0")/supervise.func"
+
 # Convert dotted netmask (255.255.255.0) to CIDR prefix length (24)
 mask2cidr() {
     local n=0 oct
@@ -84,18 +86,14 @@ start)
         # re-DISCOVERs on its own once bound (#132). DHCP mode only: this is
         # the DHCP branch, so the static-IP path above never starts it.
         if [ -x /usr/sbin/linkwatch ]; then
-            linkwatch -i eth0 -p /var/run/udhcpc0.pid &
-            echo $! > /var/run/linkwatch.pid
+            sup_start linkwatch /usr/sbin/linkwatch -i eth0 -p /var/run/udhcpc0.pid
         fi
     fi
     ;;
 stop)
     echo "  network: stopped"
 
-    if [ -f /var/run/linkwatch.pid ]; then
-        kill "$(cat /var/run/linkwatch.pid)" 2>/dev/null
-        rm -f /var/run/linkwatch.pid
-    fi
+    sup_stop linkwatch
 
     if [ -f /var/run/udhcpc0.pid ]; then
         kill "$(cat /var/run/udhcpc0.pid)" 2>/dev/null

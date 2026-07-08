@@ -82,6 +82,7 @@ nav:
   - Build environment: 1-Build-Environment/README.md
   - Zigbee Radio (EFR32):
     - 2-Zigbee-Radio-Silabs-EFR32/README.md
+    - Per-board builds (BOARD=): 2-Zigbee-Radio-Silabs-EFR32/boards/README.md
     - EZSP Reference: 2-Zigbee-Radio-Silabs-EFR32/20-EZSP-Reference/README.md
     - Simplicity Studio: 2-Zigbee-Radio-Silabs-EFR32/21-Simplicity-Studio/README.md
     - Backup, Flash & Restore: 2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md

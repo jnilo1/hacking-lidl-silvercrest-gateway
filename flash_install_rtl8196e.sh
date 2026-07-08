@@ -207,8 +207,10 @@ if [ "${#missing_pkgs[@]}" -gt 0 ]; then
     exit 1
 fi
 
-# Fail fast on a bad BOARD/KERNEL before touching the gateway or building.
+# Fail fast on a bad BOARD/KERNEL, or a missing per-board pre-built bootloader,
+# before touching the gateway or building (build_fullflash.sh re-resolves both).
 kernel_image_validate "$BOARD" "$KERNEL" || exit 1
+resolve_boot_image "$BOARD" >/dev/null || exit 1
 
 # Resolve IFACE for BOOT_IP and require L2 reachability — the bootloader's TFTP
 # server only answers on the same L2 segment. Sets IFACE on success; exits with

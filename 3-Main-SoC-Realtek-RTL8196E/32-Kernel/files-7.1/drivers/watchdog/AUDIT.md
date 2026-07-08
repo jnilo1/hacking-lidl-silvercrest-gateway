@@ -332,3 +332,118 @@ v1.6** (panic-safe uptime read; canonical probe idiom; honest
 `max_hw_heartbeat_ms` contract; constant-write kick that preserves
 WDIND). Remaining open items are deliberate deferrals: WDT-001 (hardware),
 WDT-013 (accepted risk), WDT-014 (moot under WDT-001).
+
+## 6. Record v7 FROZEN; CDBR 250 kHz retune tried and REJECTED (2026-07-02)
+
+**Record v7 is frozen.** The v1→v7 record churn was the issue #99
+investigation; with the v4.0.0-rc4 bounded poll shipped (later shown to be
+hardening rather than the field fix — the fully-instrumented rc4 field
+crash zeroed every v7 detector and justified the record v8 extension, per
+the freeze rule below), the DRAM record's mission reverts to what it
+should permanently be: a generic crash black box for headless field units
+(reset-cause attribution + post-mortem forensics), not an evolving probe. The v7 layout is stable;
+any future extension requires a new record version and an explicit
+justification. The eth fingerprint block stays: it costs nothing at
+runtime (panic path only), is decoupled via the `__weak` snapshot
+default, and its forensic value is field-proven twice (frtz13's
+`timers=[none]` capture confirmed the v1.3 arm race; the rc3 field
+record's `iisr=0x320e` revised the #99 root cause).
+
+**CDBR 250 kHz retune — tried, bench-rejected the same day.** Motivation:
+the 25 kHz slowclk costs 40 µs sched_clock granularity and a 320 µs
+clockevent min_delta (occasional "hrtimer: interrupt took N ns"
+warnings); on paper the watchdog only needs f ≤ 2^24/60 s ≈ 280 kHz to
+keep the 60 s contract, so 250 kHz (DivFactor=800, window ~67.1 s,
+tick 4 µs) looked like a free 10× precision win. Implementation
+(`WDT_HW_WINDOW_MS` 67100, panic-arm moved OVSEL=0→3 to preserve the
+~1 s grace) built and passed the full idle battery: correct 250 kHz /
+4000 ns boot banners, box stable idle past the 67 s window with the
+feeder running, `killall -9 watchdog` → reset in 71 s, clean reboot OK.
+**Then the very first bench run killed it**: during the second
+sustained `iperf3 -R` TX rep, the box hard-reset mid-transfer with no
+panic record written — a raw hardware overflow. Reconstructed kick
+timeline: the feeder's kicks landed in the pre-bench idle gaps
+(last ~T+38-42) and then **never again during the saturating reps**
+(due ~T+68/72 inside rep 1, ~T+98/102 inside rep 2); the 67 s window
+expired at ~T+109, exactly when the reset was observed. The precise
+starvation mechanism (feeder wakeup delayed behind softirq pressure
+vs. scheduler starvation at ~99.5 % sys+sirq) was not isolated — the
+robust empirical fact is that a 30 s-period userspace feeder only
+gets its kick in during idle gaps, never inside a saturating rep.
+
+**The real sizing rule, learned the hard way:** the shared-CDBR
+frequency is NOT bounded by "watchdog ceiling > timeout contract". It
+is bounded by the longest CPU-saturating episode the box can
+legitimately face (bench stress reps run 300 s) plus the feeder
+period. 25 kHz / 671 s absorbs that class (~2 months of fleet soak
+including 17-minute bench suites confirm it); 67 s does not. An
+RT-priority feeder is not a proven fix (if the wakeup itself is what
+lags, priority does not help), and the watchdog core's own keepalive
+machinery sits on the same timer infrastructure. Reverted to 25 kHz;
+the precision cost stays, documented at the slowclk node. Anyone
+re-attempting this must first bound the feeder-kick tail under 300 s
+saturating reps — or move the kick into hardirq context gated by a
+health check (see vendor note below), which is a redesign, not a
+retune.
+
+**Vendor lineage (checked in the V3.4.7.3 SDK sources, 2026-07-02):**
+DivFactor=8000 (25 kHz) is the **linux-2.6.30-era** BSP value
+(`boards/rtl8196e/bsp/bspchip.h`). The **linux-3.10** BSP that the
+stock (Tuya-generation) firmware shipped with uses **DivFactor=200 →
+1 MHz tick** (`arch/rlx/soc-rtl8196e/bspchip.h`), watchdog armed at
+OVSEL=1001 → a **16.8 s window** (`timer.c`), rebooted via a bare
+`WDTCNR=0` write (OVSEL=0 ≈ 33 ms), and **kicked from userspace
+through a `rtl_gpio` char-dev write** (`drivers/char/rtl_gpio.c`:
+`WDTCNR |= 1<<23`), gated kernel-side by an `is_fault` flag set in
+`traps.c` so kicks stop after an oops. That geometry survives a
+Tuya-class workload — the stock box never saturates its CPU for 16 s —
+but would fail our saturating bench suite even faster than the 67 s
+window did. So neither of our two frequencies is "vendor parity":
+25 kHz is simply the value whose window our own validation bar
+(300 s saturating stress + field soak) has actually proven out.
+
+### Window vs. frequency — why 25 MHz→25 kHz was safe but 25 kHz→250 kHz was not
+
+A natural confusion, worth spelling out once: if 250 kHz trips the
+watchdog under load, why did the much bigger jump to 25 kHz never cause
+trouble? Because **the frequency is not the dangerous parameter — the
+watchdog window is, and it is its inverse**: window = 2^24 ticks / f
+(the OVSEL ceiling is fixed in hardware). Raising the frequency
+*shrinks* the window. The shared CDBR puts one knob in front of two
+masters with opposite preferences — timekeeping wants f as high as
+possible (fine resolution), the watchdog wants f as low as possible
+(long window = starvation tolerance) — and the hardware locks the two
+into an exact inverse trade: you cannot improve one without hurting the
+other by the same factor.
+
+| f | Clock resolution | WDT window (2^24/f) | State |
+|---|---|---|---|
+| 25 MHz (original) | 40 ns | 671 ms | watchdog **unarmable** → never in service (WDT-005) |
+| 250 kHz (rejected) | 4 µs | 67 s | armed, but window < feeder starvation under load → resets mid-bench |
+| 25 kHz (current) | 40 µs | 671 s | reliable — ~11× margin over the worst observed episode |
+
+The two transitions therefore moved *different things* through *different
+danger zones*:
+
+- **25 MHz → 25 kHz did not degrade a working watchdog — it created
+  one.** At 25 MHz there was no watchdog in service to break (671 ms is
+  unusable for any userspace feeder; S25watchdog shipped non-executable
+  to prevent boot loops). The move traded precision (40 ns → 40 µs, a
+  *benign* cost: coarse printk timestamps, hrtimer quantization,
+  occasional warnings — nothing crashes from a coarse clock) for a
+  watchdog with a window so large it silently absorbed a phenomenon
+  nobody had yet observed: feeder kicks never landing during
+  CPU-saturating episodes.
+- **25 kHz → 250 kHz shrank the window of a *live* watchdog below an
+  invisible threshold.** The 671 s window had been masking, with ~11×
+  margin, the fact that the feeder places zero kicks during a
+  saturating rep; at 67 s the first long episode fired the reset. A
+  faster feeder cadence would not help — the kicks do not land *at
+  all* during the episode — only a window longer than the entire
+  episode does.
+
+In one line: 25 kHz was never "problem-free" — its problem (precision)
+is the kind you can live with; 250 kHz's problem (spontaneous resets
+under legitimate load) is not. As long as the feeder is a userspace
+process, the knob is effectively pinned near the watchdog end of the
+trade.

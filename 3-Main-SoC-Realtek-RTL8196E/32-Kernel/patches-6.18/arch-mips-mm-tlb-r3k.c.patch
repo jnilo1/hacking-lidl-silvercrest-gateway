@@ -1,0 +1,22 @@
+--- a/arch/mips/mm/tlb-r3k.c
++++ b/arch/mips/mm/tlb-r3k.c
+@@ -60,7 +60,18 @@
+ 	printk("[tlball]");
+ #endif
+ 	local_irq_save(flags);
+-	local_flush_tlb_from(8);
++	/*
++	 * Begin the invalidation sweep at the hardware Wired boundary rather than
++	 * a fixed index. The classic R3000 convention that the Random register
++	 * never allocates the low 8 TLB entries does not hold on the Lexra
++	 * RLX4181: it reserves TLB entries solely through the Wired register, and
++	 * Wired is 0 on this core, so tlb_write_random can install a translation
++	 * into any slot, including 0-7. Sweeping from a fixed index above Wired
++	 * would leave those low entries untouched; a stale mapping left there is
++	 * never cleared by a full flush, and once the ASID generation rolls over
++	 * it can spuriously match and resolve a user address to the wrong frame.
++	 */
++	local_flush_tlb_from(read_c0_wired());
+ 	local_irq_restore(flags);
+ }
+ 

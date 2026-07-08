@@ -5,9 +5,14 @@
 #
 # Usage: ./flash_bootloader.sh [IP] [IMAGE]
 #   IP    - Target IP (default: 192.168.1.6)
-#   IMAGE - Image file (default: boot.bin)
+#   IMAGE - Image file (default: boot-img/$BOARD/boot.bin)
 #
 # Environment variables (optional overrides):
+#   BOARD          - "lidl" (default) or "sengled-e39-g8c" — selects the
+#                    pre-built boot-img/<board>/boot.bin (ignored when an
+#                    explicit IMAGE argument is given). The bootloader carries
+#                    the board's DRAM bring-up: flashing the wrong board's
+#                    binary bricks the gateway.
 #   CONFIRM        - Set to "y" to skip the "Proceed?" prompt
 #   TRIES          - ARP probe attempts (default: 10)
 #   PORT           - UDP port used to trigger ARP (default: 69)
@@ -18,6 +23,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
 . "$SCRIPT_DIR/../../lib/flash_tftp.sh"
+# Per-board pre-built image resolver (resolve_boot_image).
+. "$SCRIPT_DIR/../../lib/kernel_image.sh"
 
 # Check prerequisites
 tftp_usage="$(tftp --help 2>&1 || true)"
@@ -33,7 +40,13 @@ if ! command -v nc >/dev/null 2>&1; then
 fi
 
 TARGET_IP="${1:-192.168.1.6}"
-IMAGE="${2:-${SCRIPT_DIR}/boot.bin}"
+BOARD="${BOARD:-lidl}"
+if [ -n "${2:-}" ]; then
+    IMAGE="$2"
+else
+    # resolve_boot_image validates BOARD and that the pre-built exists.
+    IMAGE="$(resolve_boot_image "$BOARD")" || exit 1
+fi
 
 TRIES="${TRIES:-10}"
 PORT="${PORT:-69}"
@@ -118,7 +131,7 @@ if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
 fi
 
 echo ""
-echo "Flashing ${NAME} (${SIZE} bytes) to ${TARGET_IP}..."
+echo "Flashing ${IMAGE} (${SIZE} bytes) to ${TARGET_IP}..."
 echo ""
 if [ "${CONFIRM:-}" != "y" ]; then
     read -r -p "Proceed? [y/N] " confirm
@@ -136,7 +149,9 @@ notify_file=$(mktemp)
 nc_pid=$!
 sleep 0.2
 
-cd "$SCRIPT_DIR"
+# tftp put sends a name relative to the cwd — go where the image lives
+# (boot-img/<board>/ for resolved images, or wherever IMAGE points).
+cd "$(dirname "$IMAGE")"
 if ! tftp_put_safe "$TARGET_IP" "$NAME" 3 15 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
     echo "Error: transfer failed after retries." >&2

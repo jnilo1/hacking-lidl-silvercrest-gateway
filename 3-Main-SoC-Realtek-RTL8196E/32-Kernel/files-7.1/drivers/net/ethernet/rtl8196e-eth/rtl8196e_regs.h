@@ -80,7 +80,7 @@ static inline u32 rtl8196e_readl(u32 reg)
  * Switch-core descriptor diagnostics (vendor SDK V3.4.7.3
  * rtl865xc_asicregs.h, real values): SWCORECNR = SWCORE_BASE + 0x6000;
  * DESCDIAG_BASE = SWCORECNR + 0x100. Per-port descriptor counters follow,
- * port 6 = CPU port. Read-only; used by the issue #99 panic/recovery
+ * port 6 = CPU port. Read-only; used by the panic/recovery
  * fingerprint as a switch-side view of CPU-port descriptor progress to
  * cross-check against the driver's rx_idx (switch-vs-driver desync).
  */
@@ -167,7 +167,7 @@ static inline u32 rtl8196e_readl(u32 reg)
  *   bit 5 — EnL4ChkCal         (enable L4 csum recalculation on forward)
  *
  * Note: ALLOW_L3/L4_CHKSUM_ERR (bits 1-2) gate port-to-port forwarding,
- * NOT the trap-to-CPU path — confirmed empirically (audit V2 + ETHDRV-003
+ * NOT the trap-to-CPU path — confirmed empirically (driver audit
  * follow-up bench): clearing these bits does not stop bad-csum frames
  * from reaching the CPU rx ring. The CPU-port-side equivalent for L3/L4
  * does not exist; only AcceptL2Err is exposed at bit 3 and only for L2.

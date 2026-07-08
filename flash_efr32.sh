@@ -35,7 +35,9 @@
 #
 # J. Nilo - February 2026, kernel-bridge rewrite April 2026,
 #           FW × baud matrix + nrst_pulse pre-flash April 2026 (v3.1),
-#           CLI flags + ssh_gw wrapper April 2026 (v3.1)
+#           CLI flags + ssh_gw wrapper April 2026 (v3.1),
+#           FIRMWARE_FLOW_CTRL auto-record from board.env July 2026 (#141),
+#           Router board-parameterisation July 2026 (#143)
 
 set -euo pipefail
 
@@ -78,8 +80,8 @@ Options:
                      Flash this exact .gbl file instead of resolving by glob
   -y, --yes          Skip the "Flash?" confirmation prompt
       --board NAME   Board to flash for (default: lidl). A non-lidl board
-                     flashes its -<board>-suffixed NCP/OT-RCP firmware. Also
-                     settable via the BOARD env var (this flag wins).
+                     flashes its -<board>-suffixed firmware. Also settable
+                     via the BOARD env var (this flag wins).
       --force        Skip the board-match guard (flash even if the gateway's
                      devicetree model disagrees with the selected board)
       --no-reboot    Do not reboot the gateway after a successful flash
@@ -90,8 +92,8 @@ Environment variables:
   BOARD          Board to flash for (default: lidl; e.g. sengled-e39-g8c for
                  the Sengled Smart Hub G4). A Lidl user sets nothing. The
                  gateway's devicetree model is checked against this before
-                 flashing (override with --force). Only ncp and otrcp are
-                 board-parameterised; rcp/router/bootloader are lidl-only.
+                 flashing (override with --force). Every firmware is
+                 board-parameterised.
   SSH_PASSWORD   Root password for non-interactive password auth (CI / no
                  tty). When set, the first ssh call is fed via sshpass and
                  the ControlMaster takes over for the rest. Requires
@@ -283,10 +285,10 @@ FW_DIR="${SCRIPT_DIR}/2-Zigbee-Radio-Silabs-EFR32"
 # --- Board selection -------------------------------------------------------
 #
 # BOARD picks which board's firmware to flash (default lidl). A Lidl user sets
-# nothing. A non-lidl board flashes its `-<board>`-suffixed NCP/OT-RCP firmware,
-# built from boards/<board>/board.env (see 2-Zigbee-Radio-Silabs-EFR32/boards/
-# README.md). RCP/Router/Bootloader stay lidl-only. The --board flag wins over
-# the BOARD env var, which wins over the default.
+# nothing. A non-lidl board flashes its `-<board>`-suffixed firmware, built
+# from boards/<board>/board.env (see 2-Zigbee-Radio-Silabs-EFR32/boards/
+# README.md). Every firmware is board-parameterised (#143). The --board flag
+# wins over the BOARD env var, which wins over the default.
 BOARD="${board_arg:-${BOARD:-lidl}}"
 if [ ! -f "${FW_DIR}/boards/${BOARD}/board.env" ]; then
     echo "Error: unknown BOARD='${BOARD}'." >&2
@@ -295,6 +297,19 @@ if [ ! -f "${FW_DIR}/boards/${BOARD}/board.env" ]; then
 fi
 # Prefix for the example commands we echo back (empty for lidl).
 if [ "$BOARD" = "lidl" ]; then BOARD_PREFIX=""; else BOARD_PREFIX="BOARD=${BOARD} "; fi
+
+# Chip-side flow-control mode of this board's firmware builds (hw|sw|none),
+# from board.env. Recorded into radio.conf as FIRMWARE_FLOW_CTRL after an
+# app-slot flash (#141) so S50uart_bridge / S70otbr configure the host side
+# of the UART to match the chip, with nothing to edit manually.
+BOARD_FLOW=$(. "${FW_DIR}/boards/${BOARD}/board.env" && printf '%s\n' "${BOARD_UART_FLOW:-}")
+case "$BOARD_FLOW" in
+    hw|sw|none) ;;
+    *)
+        echo "Error: BOARD_UART_FLOW='${BOARD_FLOW}' in boards/${BOARD}/board.env — expected hw, sw or none." >&2
+        exit 1
+        ;;
+esac
 
 # --- Firmware × baud matrix ------------------------------------------------
 #
@@ -332,6 +347,8 @@ FW_BTL="${FW_DIR}/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-2.4.
 # evolution across firmware bumps.
 #
 # Pattern per firmware:
+#   1 (Bootloader) : pinned exact path for lidl; for a non-lidl board,
+#                    23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-*-<board>.gbl
 #   2 (NCP)    : 24-NCP-UART-HW/firmware/ncp-uart-hw-*-<BAUD>.gbl
 #   3 (RCP)    : 25-RCP-UART-HW/firmware/rcp-uart-802154-<BAUD>.gbl
 #   4 (OT-RCP) : 26-OT-RCP/firmware/ot-rcp-<BAUD>.gbl
@@ -344,25 +361,25 @@ resolve_firmware() {
     local pattern dir build_dir build_script bsuf=""
     local candidates candidate_count
 
-    # Per-board selection. Only NCP (2) and OT-RCP (4) are board-parameterised;
-    # their non-lidl artefacts carry a -<board> filename suffix in the same flat
-    # firmware/ dir. RCP/Router/Bootloader are lidl-only. An explicit
-    # --firmware-file bypasses all board logic (power-user escape hatch).
+    # Per-board selection: every firmware is board-parameterised; non-lidl
+    # artefacts carry a -<board> filename suffix in the same flat firmware/
+    # dir. An explicit --firmware-file bypasses all board logic (power-user
+    # escape hatch).
     if [ -z "$FIRMWARE_FILE" ] && [ "$BOARD" != "lidl" ]; then
-        case "$choice" in
-            2|4) bsuf="-${BOARD}" ;;
-            *) echo "Error: BOARD=${BOARD}: only 'ncp' and 'otrcp' are board-parameterised." >&2
-               echo "       rcp/router/bootloader are lidl-only — build/flash them with the" >&2
-               echo "       default lidl, or pass --firmware-file to flash an exact image." >&2
-               exit 1 ;;
-        esac
+        bsuf="-${BOARD}"
     fi
     case "$choice" in
-        1) FIRMWARE="${FIRMWARE_FILE:-$FW_BTL}"; FW_LABEL="Gecko Bootloader"; return 0 ;;
+        1)  # Gecko Bootloader — lidl keeps the pinned exact path (no baud in
+            # the filename to anchor a safe glob); non-lidl boards resolve
+            # their -<board>-suffixed build through the glob path below.
+            if [ -z "$bsuf" ]; then
+                FIRMWARE="${FIRMWARE_FILE:-$FW_BTL}"; FW_LABEL="Gecko Bootloader"; return 0
+            fi
+            build_dir="23-Bootloader-UART-Xmodem"; build_script="build_bootloader.sh"; pattern="bootloader-uart-xmodem-*${bsuf}.gbl"; FW_LABEL="Gecko Bootloader" ;;
         2) build_dir="24-NCP-UART-HW";  build_script="build_ncp.sh";    pattern="ncp-uart-hw-*-${baud}${bsuf}.gbl";   FW_LABEL="NCP-UART-HW @ ${baud} baud" ;;
-        3) build_dir="25-RCP-UART-HW";  build_script="build_rcp.sh";    pattern="rcp-uart-802154-${baud}.gbl"; FW_LABEL="RCP-UART-HW @ ${baud} baud" ;;
+        3) build_dir="25-RCP-UART-HW";  build_script="build_rcp.sh";    pattern="rcp-uart-802154-${baud}${bsuf}.gbl"; FW_LABEL="RCP-UART-HW @ ${baud} baud" ;;
         4) build_dir="26-OT-RCP";       build_script="build_ot_rcp.sh"; pattern="ot-rcp-${baud}${bsuf}.gbl";          FW_LABEL="OT-RCP @ ${baud} baud" ;;
-        5) build_dir="27-Router";       build_script="build_router.sh"; pattern="z3-router-*-${baud}.gbl";     FW_LABEL="Z3-Router @ ${baud} baud" ;;
+        5) build_dir="27-Router";       build_script="build_router.sh"; pattern="z3-router-*-${baud}${bsuf}.gbl";     FW_LABEL="Z3-Router @ ${baud} baud" ;;
         *) echo "Invalid firmware choice: $choice" >&2; exit 1 ;;
     esac
     if [ -n "$FIRMWARE_FILE" ]; then
@@ -384,7 +401,9 @@ resolve_firmware() {
     if [ -z "$FIRMWARE" ] || [ ! -f "$FIRMWARE" ]; then
         echo "Error: no GBL found matching $dir/$pattern" >&2
         echo "       Build with: cd 2-Zigbee-Radio-Silabs-EFR32/${build_dir} && ${BOARD_PREFIX}./${build_script} ${baud}" >&2
-        echo "       Or run: cd 2-Zigbee-Radio-Silabs-EFR32 && ${BOARD_PREFIX}./make-all-bauds.sh" >&2
+        # make-all-bauds.sh builds the committed lidl matrix only — don't
+        # suggest it for a non-lidl board (it is BOARD-unaware).
+        [ "$BOARD" = "lidl" ] && echo "       Or run: cd 2-Zigbee-Radio-Silabs-EFR32 && ./make-all-bauds.sh" >&2
         exit 1
     fi
     if [ "$candidate_count" -gt 1 ]; then
@@ -1214,6 +1233,13 @@ fi
 #   FIRMWARE_BAUD=<baud>     — the chip's UART baud, set at flash time. Single
 #                              source of truth: S50uart_bridge / S70otbr both
 #                              read this (working link forces both ends equal).
+#   FIRMWARE_FLOW_CTRL=<fc>  — the chip's flow-control mode (hw|sw|none), from
+#                              the selected board's board.env (BOARD_UART_FLOW,
+#                              #141). S50uart_bridge writes it to the bridge's
+#                              flow_control knob; S70otbr omits uart-flow-control
+#                              from the spinel URL for none|sw (presence flag,
+#                              #142). RCP flashes on a sw board record none —
+#                              the chip build is clamped to no flow (#143).
 #   BOOTLOADER_VERSION=<ver> — Gecko Bootloader Stage-2 version reported by
 #                              USF during the flash (e.g. '2.4.2'). Updated
 #                              on EVERY successful flash (USF transits the
@@ -1228,6 +1254,10 @@ fi
 #   3 (RCP)         → FIRMWARE=rcp + FIRMWARE_BAUD=<v>
 #   4 (OT-RCP)      → FIRMWARE=otrcp + FIRMWARE_BAUD=<v> + MODE=otbr
 #   5 (Router)      → FIRMWARE=router + FIRMWARE_VERSION=<v> + FIRMWARE_BAUD=<v>
+#   All app flashes (2-5) also record FIRMWARE_FLOW_CTRL=<board.env flow> —
+#   except RCP on a sw board, recorded as none: build_rcp.sh clamps the chip
+#   to no flow control (CPC has no XON/XOFF), and the key must describe what
+#   is actually on the chip so S50uart_bridge arms the bridge to match.
 #
 # Legacy host-side keys (BRIDGE_BAUD, OTBR_BAUD) are stripped on every flash
 # so old configs converge on the single FIRMWARE_BAUD truth.
@@ -1242,6 +1272,10 @@ case "$(basename "$FIRMWARE")" in
         FW_VERSION_DETECTED=
         ;;
 esac
+
+# Flow-control value recorded in radio.conf. Defaults to the board's flow
+# (chip truth for NCP/OT-RCP/Router builds); the RCP case overrides it below.
+RADIO_FLOW="$BOARD_FLOW"
 
 case "$fw_choice" in
     1)  # Bootloader-only flash — leave radio.conf alone
@@ -1264,6 +1298,11 @@ case "$fw_choice" in
         MODE_LINE=
         DAEMON_MSG="in-kernel UART bridge on TCP:8888 at ${fw_baud} baud"
         ORIG_BAUD="$fw_baud"
+        # build_rcp.sh clamps a sw board to NO flow control (CPC has no
+        # XON/XOFF, and its binary frames don't escape 0x11/0x13 — a bridge
+        # running sw against a CPC chip would eat in-frame bytes as flow
+        # control). Record the chip truth so the bridge arms to match.
+        [ "$BOARD_FLOW" = "sw" ] && RADIO_FLOW=none
         ;;
     2)  # NCP-UART-HW → Zigbee via in-kernel bridge at chosen baud
         FIRMWARE_NAME=ncp
@@ -1281,11 +1320,12 @@ case "$fw_choice" in
         ;;
 esac
 
-# Persist FIRMWARE / FIRMWARE_VERSION / FIRMWARE_BAUD / BOOTLOADER_VERSION /
-# MODE to /userdata/etc/radio.conf so init scripts arm at the right speed on
-# next boot AND a human / future script can tell what's on the chip (both app
-# slot AND Stage 2 bootloader) without probing. Legacy host-side keys
-# (BRIDGE_BAUD, OTBR_BAUD) are stripped here too so old configs converge.
+# Persist FIRMWARE / FIRMWARE_VERSION / FIRMWARE_BAUD / FIRMWARE_FLOW_CTRL /
+# BOOTLOADER_VERSION / MODE to /userdata/etc/radio.conf so init scripts arm at
+# the right speed on next boot AND a human / future script can tell what's on
+# the chip (both app slot AND Stage 2 bootloader) without probing. Legacy
+# host-side keys (BRIDGE_BAUD, OTBR_BAUD) are stripped here too so old
+# configs converge.
 # Skipped for bootloader-only flash where FIRMWARE_NAME is empty (that path
 # writes only BOOTLOADER_VERSION earlier and exits).
 if [ -n "$FIRMWARE_NAME" ]; then
@@ -1298,7 +1338,7 @@ if [ -n "$FIRMWARE_NAME" ]; then
         mkdir -p /userdata/etc
         touch /userdata/etc/radio.conf
         # Strip every key we own, then re-append in canonical order.
-        sed -i '/^FIRMWARE=/d;/^FIRMWARE_VERSION=/d;/^FIRMWARE_BAUD=/d;/^BOOTLOADER_VERSION=/d;/^MODE=/d;/^BRIDGE_BAUD=/d;/^OTBR_BAUD=/d' /userdata/etc/radio.conf
+        sed -i '/^FIRMWARE=/d;/^FIRMWARE_VERSION=/d;/^FIRMWARE_BAUD=/d;/^FIRMWARE_FLOW_CTRL=/d;/^BOOTLOADER_VERSION=/d;/^MODE=/d;/^BRIDGE_BAUD=/d;/^OTBR_BAUD=/d' /userdata/etc/radio.conf
         # Use 'if' (not '[ -n x ] && echo') for the optional keys: a false
         # short-circuit on the LAST line would make the whole brace group —
         # and thus this SSH command — exit non-zero, which the caller misreads
@@ -1308,6 +1348,7 @@ if [ -n "$FIRMWARE_NAME" ]; then
             echo 'FIRMWARE=${FIRMWARE_NAME}'
             if [ -n '${FIRMWARE_VER}' ]; then echo 'FIRMWARE_VERSION=${FIRMWARE_VER}'; fi
             echo 'FIRMWARE_BAUD=${fw_baud}'
+            echo 'FIRMWARE_FLOW_CTRL=${RADIO_FLOW}'
             if [ -n '${BOOTLOADER_VERSION_DETECTED}' ]; then echo 'BOOTLOADER_VERSION=${BOOTLOADER_VERSION_DETECTED}'; fi
             if [ -n '${MODE_LINE}' ]; then echo '${MODE_LINE}'; fi
         } >> /userdata/etc/radio.conf
@@ -1320,6 +1361,7 @@ if [ -n "$FIRMWARE_NAME" ]; then
         echo "" >&2
         echo "  ssh root@${GW_IP} \"echo FIRMWARE=${FIRMWARE_NAME} >  /userdata/etc/radio.conf\"" >&2
         echo "  ssh root@${GW_IP} \"echo FIRMWARE_BAUD=${fw_baud}    >> /userdata/etc/radio.conf\"" >&2
+        echo "  ssh root@${GW_IP} \"echo FIRMWARE_FLOW_CTRL=${RADIO_FLOW} >> /userdata/etc/radio.conf\"" >&2
         if [ -n "${MODE_LINE}" ]; then
             echo "  ssh root@${GW_IP} \"echo ${MODE_LINE}             >> /userdata/etc/radio.conf\"" >&2
         fi

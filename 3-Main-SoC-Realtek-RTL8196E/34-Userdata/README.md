@@ -117,6 +117,7 @@ See `ot-br-posix/README.md` for Thread-specific documentation.
 | `FIRMWARE` | `ncp`, `rcp`, `otrcp`, `router` | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_VERSION` | e.g. `7.5.1` (NCP, Router only) | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_BAUD` | `115200`, `230400`, `460800`, `691200`, `892857` | `460800` | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
+| `FIRMWARE_FLOW_CTRL` | `none`, `sw`, `hw` | (absent ⇒ devicetree per-board default) | `flash_efr32.sh` — app flashes (#141) | `S50uart_bridge`, `S70otbr` |
 | `BOOTLOADER_VERSION` | e.g. `2.4.2` | (absent) | `flash_efr32.sh` — every flash | docs / diagnostics |
 | `MODE` | `otbr` (or absent) | (absent = Zigbee) | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
 | `BRIDGE_BIND` | `0.0.0.0`, `127.0.0.1` | `0.0.0.0` | (manual) | `S50uart_bridge` |
@@ -164,6 +165,21 @@ running without probing the chip via `universal-silabs-flasher`.
 If the chip happens to be sitting in the Gecko Bootloader (empty or
 corrupt application slot), `FIRMWARE` may be stale — the actual
 runtime state is detected by `flash_efr32.sh`'s pre-flight probe.
+
+#### `FIRMWARE_FLOW_CTRL` (v4.0.0, #141)
+
+The chip's flow-control mode (`hw` | `sw` | `none`), written on every
+application flash from the selected board's
+`2-Zigbee-Radio-Silabs-EFR32/boards/<board>/board.env`
+(`BOARD_UART_FLOW` — `hw` on the Lidl reference, `sw` on the Sengled G4).
+`S50uart_bridge` writes it verbatim to the bridge's `flow_control` knob;
+`S70otbr` omits the `uart-flow-control` parameter from the spinel URL for
+`none`/`sw` — OpenThread treats that parameter as a presence flag, so any
+value (even `false`) would enable CRTSCTS (#142).
+When the key is absent (a config from before v4.0.0, never reflashed),
+the bridge falls back to the devicetree per-board default and `S70otbr`
+assumes `hw` — the case that used to require adding the key by hand on a
+G4 running OT-RCP.
 
 ### Switching Radio Mode
 

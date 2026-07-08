@@ -8,22 +8,3 @@ config RTL8196E_ETH
 
 	  Delivers ~94 Mbps TCP RX and ~73 Mbps TCP TX on the Lexra RLX4181
 	  (RTL8196E at 400 MHz). Configured via devicetree (interface@0 node).
-
-config RTL8196E_ETH_DEBUG
-	bool "RTL8196E Ethernet fault-injection hooks (issue #99 validation)"
-	depends on RTL8196E_ETH
-	help
-	  Compile in debug-only fault-injection hooks used to validate the
-	  issue #99 soft-lockup recovery path on the bench:
-
-	    rtl8196e_force_dropflood - force the RX poll to drop the next N
-	      consumed descriptors, reproducing the field drop-flood storm so
-	      the bounded poll (return-under-saturation) can be exercised.
-	    rtl8196e_force_stall - present N budget-saturating zero-delivery
-	      polls to the wrapper, deterministically driving the stall
-	      detector into the switch-core deep-reset escalation.
-
-	  Both are module parameters under
-	  /sys/module/rtl8196e_eth/parameters/ and auto-expire (countdowns).
-
-	  This must NEVER be enabled in a shipped image. Say N.

@@ -31,13 +31,36 @@
 	 * (CDBR, sysc + 0x3118) is shared by Timer0 (clockevent), Timer1
 	 * (clocksource) and the on-chip watchdog. The timer driver
 	 * programs CDBR DivFactor = busclk / slowclk = 200 MHz / 25 kHz
-	 * = 8000 (the same DivFactor the SDK BSP uses). At 25 kHz the
-	 * watchdog overflow ceiling at OVSEL=1001 grows from ~671 ms
-	 * (at DivFactor=8) to ~671 s, finally giving a userspace feeder
-	 * comfortable headroom and closing WDT-005 in
+	 * = 8000. At 25 kHz the watchdog overflow ceiling at OVSEL=1001
+	 * grows from ~671 ms (at DivFactor=8) to ~671 s, giving a
+	 * userspace feeder comfortable headroom and closing WDT-005 in
 	 * drivers/watchdog/AUDIT.md. Trade-off: sched_clock granularity
 	 * drops from 40 ns to 40 µs — fine for kernel timekeeping
 	 * (HZ=250 = 4 ms tick), visible only in perf/ftrace precision.
+	 *
+	 * Vendor lineage, for the record (V3.4.7.3 SDK): DivFactor=8000
+	 * is the linux-2.6.30-era BSP value (boards/rtl8196e/bsp). The
+	 * linux-3.10 BSP the stock firmware shipped with uses
+	 * DivFactor=200 (1 MHz tick) with the watchdog at OVSEL=1001 —
+	 * a 16.8 s window — kicked from userspace through a rtl_gpio
+	 * char-dev write, gated kernel-side by an is_fault flag. That
+	 * geometry survives a Tuya-class workload (the box never
+	 * saturates for 16 s) but NOT this firmware's validation bar —
+	 * see below.
+	 *
+	 * DO NOT raise this frequency to claw back timekeeping precision.
+	 * A 250 kHz retune (DivFactor=800, watchdog ceiling ~67.1 s —
+	 * comfortably above the 60 s timeout contract) was tried on
+	 * 2026-07-02 and REJECTED on the bench: the box hard-reset in the
+	 * middle of the second saturating iperf3 TX rep. Reconstructed
+	 * kick timeline: the BusyBox feeder's 30 s-period kicks provably
+	 * only land in idle gaps — during a CPU-saturating rep (~99.5 %
+	 * sys+sirq) the feeder's wakeup+write does not get through for
+	 * the whole rep. The real sizing rule for this shared clock is
+	 * NOT "ceiling > timeout": the window must exceed the longest
+	 * CPU-saturating episode the box can legitimately face (bench
+	 * stress reps run 300 s) plus the feeder period. 671 s absorbs
+	 * that; 67 s does not. See drivers/watchdog/AUDIT.md section 6.
 	 */
 	slowclk: slowclk {
 		#clock-cells = <0>;

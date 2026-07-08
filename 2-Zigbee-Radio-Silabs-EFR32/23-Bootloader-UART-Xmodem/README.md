@@ -4,6 +4,15 @@ UART XMODEM bootloader for EFR32MG1B232F256GM48 (Lidl Silvercrest Gateway).
 
 This bootloader enables firmware updates via UART using the XMODEM-CRC protocol, without requiring SWD/JTAG access.
 
+> **Multi-board:** this bootloader also builds for other RTL8196E hubs via
+> `BOARD=` (default `lidl`, #143); e.g. `BOARD=sengled-e39-g8c ./build_bootloader.sh`
+> for the Sengled Smart Hub G4 (MG13 target — builds, but **never tested on a
+> real G4**; no prebuilt committed). Non-lidl artefacts carry a `-<board>`
+> filename suffix, and `flash_efr32.sh` resolves them from the same `BOARD=`
+> selector. Mind the warning below: a bad bootloader flash needs SWD to
+> recover, and on the MG13 the layout differs — see the memory-map note.
+> Details in [`../boards/README.md`](../boards/README.md).
+
 ## Quick Start
 
 ```bash
@@ -116,6 +125,13 @@ EFR32MG1B (Gecko Series 1) devices use a **two-stage bootloader system**:
            │  NVM3 Storage (36 KB)   │ ← Network keys, tokens
 0x00040000 └─────────────────────────┘
 ```
+
+> **MG13 boards (e.g. the Sengled G4) use a different layout**: xG13 chips
+> have a **dedicated 16 KB bootloader flash region at `0x0FE10000`** (first
+> stage at `0x0FE10000`, main bootloader at `0x0FE10800`), and the
+> application starts at `0x00000000` in main flash. The `BOARD=` build
+> places both stages there automatically — the map above is the MG1B
+> (bootloader-in-main-flash) case.
 
 ______________________________________________________________________
 

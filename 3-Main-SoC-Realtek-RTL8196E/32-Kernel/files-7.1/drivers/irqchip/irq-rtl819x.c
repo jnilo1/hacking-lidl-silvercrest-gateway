@@ -27,9 +27,18 @@
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
 #include <linux/io.h>
+#include <linux/rtl819x_intc_stats.h>
 #include <asm/mach-realtek/imem.h>
 
-#define DRV_VERSION "1.0"
+#define DRV_VERSION "1.1"
+
+/*
+ * Dispatch statistics consumed by the rtl819x watchdog (1 Hz flight recorder
+ * + panic record v8) — see rtl819x_intc_stats.h for the issue #99 rationale.
+ * `empty` counts handler entries with mask&status == 0: an INTC-level storm
+ * (parent IP re-asserting with nothing pending) increments ONLY this.
+ */
+struct rtl819x_intc_stats rtl819x_intc_stats;
 
 /* ========================================================================== */
 /* Hardware Definitions */
@@ -216,10 +225,23 @@ static __iram void realtek_soc_irq_handler(struct irq_desc *desc)
 	status = ic_r32(REALTEK_IC_REG_STATUS);
 	pending = mask & status;
 
+	/*
+	 * issue #99 flight-recorder taps. `empty` is the only witness of an
+	 * INTC-level storm (parent IP asserted, nothing pending after mask);
+	 * the per-bit count/last_seen_j pairs name which line was active in
+	 * the final seconds before a panic. Two u32 stores next to MMIO reads.
+	 */
+	rtl819x_intc_stats.entries++;
+	if (unlikely(!pending))
+		rtl819x_intc_stats.empty++;
+
 	/* Spurious: no pending bits after masking — skip loop, still call exit */
 	while (pending) {
 		int bit = __ffs(pending);
 		unsigned int virq = 0;
+
+		rtl819x_intc_stats.count[bit]++;
+		rtl819x_intc_stats.last_seen_j[bit] = (u32)jiffies;
 
 		/*
 		 * GISR ack is handled by realtek_soc_irq_ack() (the .irq_ack

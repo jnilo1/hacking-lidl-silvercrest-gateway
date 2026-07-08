@@ -4,6 +4,145 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [Unreleased]
+
+## [4.0.0-rc5] - 2026-07-08
+
+### `flash_efr32.sh` — record `FIRMWARE_FLOW_CTRL` in radio.conf at flash time (discussion #141)
+
+Suggested by @hlyi (#141). `radio.conf` is the record of the chip-side truth written
+at flash time (`FIRMWARE=`, `FIRMWARE_VERSION=`, `FIRMWARE_BAUD=`, `MODE=`), yet the
+flow-control mode — the one chip-side fact the build system already knows via
+`boards/<board>/board.env` — was left for the user to add by hand. On a G4 running
+OT-RCP that manual step was mandatory: with the key absent, `S70otbr` passes
+`uart-flow-control=true` and otbr-agent asserts RTS/CTS on a board that doesn't wire it.
+
+- Every **application flash** (NCP / RCP / OT-RCP / Router) now writes
+  `FIRMWARE_FLOW_CTRL=<hw|sw|none>` into `/userdata/etc/radio.conf`, using the same
+  strip-then-append pattern as the other keys the script owns. The value is
+  `BOARD_UART_FLOW` from the selected board's `board.env` (`hw` for `lidl`, `sw` for
+  `sengled-e39-g8c`), validated at board-selection time (fail-fast on a malformed
+  third-party `board.env`, before anything touches the gateway).
+- Bootloader-only flashes are unchanged — they still touch only `BOOTLOADER_VERSION=`.
+- Behaviourally a no-op for Lidl users: `hw` is what the devicetree default and
+  `S70otbr`'s absent-key fallback already selected. On the G4, flashing any radio
+  firmware now leaves the host side matched to the chip with nothing to edit.
+- A manually-set `FIRMWARE_FLOW_CTRL` is now reset to the board default at each app
+  flash — re-apply it afterwards if you flash a `--firmware-file` image whose flow
+  mode differs from the board's (rare, power-user case).
+- Consumers unchanged: `S50uart_bridge` (bridge `flow_control` knob) and `S70otbr`
+  (spinel `uart-flow-control`) already read the key.
+
+### `27-Router` — `BOARD=` support (discussion #143)
+
+Requested by @hlyi (#143): a Z3 Router build with software flow control for the
+Sengled G4. `build_router.sh` now follows the exact `build_ncp.sh` mechanism —
+it sources `boards/<board>/board.env`, re-points the `.slcp` device component at
+`BOARD_TARGET_DEVICE`, applies the board's UART routing and flow-control type to
+the VCOM header via `lib_uart_config.sh`, and suffixes non-lidl artefacts with
+`-<board>` (`.gbl` and `.s37`). For the G4 that means an MG13 target with XON/XOFF
+flow, `z3-router-<ver>-115200-sengled-e39-g8c.gbl`.
+
+- `flash_efr32.sh` lifts its router refusal for non-lidl boards: `router` joins
+  `ncp`/`otrcp` in the board-parameterised set (suffixed-GBL resolution + the
+  existing devicetree board-match guard). RCP and the Gecko bootloader remain
+  lidl-only.
+- `build_efr32.sh` no longer skips the router for a non-lidl `BOARD=`.
+- The lidl router build is byte-for-byte unchanged (the board mechanism resolves
+  to the reference values), and the committed lidl prebuilts keep their names.
+- No G4 prebuilt is committed: the G4 router build has not been hardware-validated
+  yet (same policy as OT-RCP) — build it yourself and validate before trusting it.
+
+### `23-Bootloader-UART-Xmodem` — `BOARD=` support + pinned GCC first stage (discussion #143)
+
+The Gecko bootloader build joins the `BOARD=` mechanism, leaving RCP as the only
+lidl-only build. `build_bootloader.sh` re-points the `.slcp` device component at
+`BOARD_TARGET_DEVICE` and applies the board's UART routing to `btl_uart_driver_cfg.h`
+via a new routing-only helper (`apply_uart_routing` in `boards/lib_uart_config.sh` —
+this header has no CTS/RTS or flow-control-type defines; the bootloader's numeric
+flow-control knob stays 0 for every board, since the Xmodem path always runs
+flow-off). Non-lidl artefacts carry the `-<board>` suffix (`.gbl`, `.s37`,
+`-combined.s37`), and the artefact cleanup is now scoped so boards don't wipe each
+other's files.
+
+- `flash_efr32.sh` lifts the bootloader refusal for non-lidl boards: lidl keeps its
+  pinned exact GBL path (unchanged), a non-lidl board resolves its suffixed GBL.
+- **Reproducibility fix:** `slc generate` was invoked without `--toolchain`; the
+  resolution is ambiguous and could embed the **IAR-built** first-stage binary in
+  `-combined.s37` instead of the GCC one (both official Silabs prebuilts for the
+  chip; the `.gbl` — stage 2 only — was never affected). The build now pins
+  `--toolchain gcc`; with it, the lidl rebuild is byte-identical to **both** committed
+  artefacts.
+- G4 build verified structurally: correct GCC `first_stage_btl_efx32xg13` first stage
+  and placement in the MG13's dedicated bootloader flash region at `0x0FE10000`
+  (application at `0x0` — different layout from the MG1B's bootloader-in-main-flash).
+  **Never run on real G4 hardware, and a bad bootloader flash is an SWD-only
+  recovery** — no prebuilt committed; a G4 flashed via `flash_efr32.sh` already has a
+  working bootloader, so only replace it with a debugger attached.
+
+### `25-RCP-UART-HW` — `BOARD=` support (discussion #143)
+
+The multi-PAN RCP build joins the `BOARD=` mechanism — **every EFR32 firmware is now
+board-parameterised**, and `flash_efr32.sh` no longer refuses anything by board (the
+`-<board>`-suffixed GBL resolution + devicetree board-match guard apply uniformly).
+
+- Same pattern as the others: `build_rcp.sh` sources `boards/<board>/board.env`,
+  targets `BOARD_TARGET_DEVICE` (this slcp pins no device component — `--with` does
+  the job), applies the board's UART routing to the CPC VCOM header via
+  `apply_uart_config`, and suffixes non-lidl artefacts with `-<board>`.
+- **Flow-control clamp:** CPC supports only RTS/CTS or none — the driver is a binary
+  `WITH_HWFC`/`WITHOUT_HWFC` and the framing has no XON/XOFF escaping, so software
+  flow control does not exist on this path. A `BOARD_UART_FLOW=sw` board (the G4) is
+  built with flow control **none**, and `flash_efr32.sh` records
+  `FIRMWARE_FLOW_CTRL=none` (not the board's `sw`) for an RCP flash on such a board:
+  the chip's flow partner is the gateway's **in-kernel UART bridge** — cpcd connects
+  to it over TCP (`bus_type: TCP`), so cpcd's `uart_hardflow` never applies — and a
+  bridge armed `sw` against unescaped binary CPC frames would consume in-frame
+  `0x11`/`0x13` bytes as flow control.
+- Like OT-RCP, the RCP build is OpenThread-based and not byte-reproducible (embedded
+  build-id). Lidl innocence was proven the same way: the generated CPC VCOM header
+  and the slcp are byte-identical to their `patches/` references; the committed lidl
+  prebuilts are untouched.
+- G4 build compiles end-to-end (MG13 target, flow none in slcp + header,
+  `rcp-uart-802154-460800-sengled-e39-g8c.gbl`/`.s37`). Not hardware-validated — no
+  prebuilt committed.
+- Cleanup: the `cpcd-zigbeed` container's `UART_BAUDRATE` env var is gone — nothing
+  ever consumed it on the native TCP bus (the gateway's in-kernel bridge owns baud
+  and flow control, armed from `radio.conf`). An existing compose file that still
+  sets it keeps working; the variable was always ignored.
+
+### `26-OT-RCP` — per-board UART backend: `uartdrv` (hw/none) or `iostream` (sw) (discussion #142)
+
+The Gecko SDK's OpenThread platform abstraction has two UART backends, selected purely
+by project component: `uartdrv_usart` (DMA-first; Silabs' own docs call its XON/XOFF
+support *"partially supported"* / *"partial only"* — reaction quantised by DMA-chunk
+cadence, the #134 analysis) and `iostream_usart` (per-byte IRQ; the NCP's driver, whose
+software flow control is **complete**: watermark-driven XOFF/XON emission plus inbound
+honor in `sl_iostream_uart.c`). `build_ot_rcp.sh` now picks the backend from the
+board's flow mode:
+
+- `BOARD_UART_FLOW=hw` or `none` → `uartdrv_usart`, the historical default — the lidl
+  build path is untouched (slcp byte-identical, same artefact names).
+- `BOARD_UART_FLOW=sw` (the Sengled G4) → `iostream_usart` with
+  `uartFlowControlSoftware`: the only backend that actually flow-controls a board
+  without RTS/CTS. **This changes what `BOARD=sengled-e39-g8c ./build_ot_rcp.sh`
+  produces.**
+- `UART_DRIVER=uartdrv|iostream` forces a backend for experiments; a forced
+  non-default choice gets a `-<driver>` filename suffix, so it can never shadow the
+  canonical artefact and `flash_efr32.sh`'s exact globs never resolve it
+  (`--firmware-file` flashes it explicitly).
+
+The historical objection that iostream corrupts the binary Spinel stream (LF→CRLF)
+was a configuration default, not a driver property: the new
+`patches/sl_iostream_usart_vcom_config.h` (same reference header as the NCP) disables
+the conversion. Validation status: the iostream backend ran clean on the Lidl dev
+gateway (hw flow, 460800 — spinel intact, network formed, zero agent restarts under
+back-to-back spinel load); the sw-flow variant on a real G4 is with @hlyi for
+hardware validation (experimental package attached in #142). Pairs with the host-side
+`IXON` work under discussion there.
+
+---
+
 ## [4.0.0-rc3] - 2026-06-25
 
 _EFR32 deliverables shipped in `v4.0.0-rc3`: the Sengled G4 NCP firmware is validated on

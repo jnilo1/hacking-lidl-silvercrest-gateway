@@ -29,13 +29,15 @@ struct rtl8196e_ring_diag {
 	u32 rx_rearm_badidx;	/* RX rearm mbuf index outside the mbuf ring */
 	u32 rx_mbuf_no_shadow;	/* HW mbuf index has no rx_bufs shadow skb */
 	u32 rx_pkthdr_mbuf_skew;/* RX mbuf_index != rx_idx: switch paired a skewed mbuf
-				 * (saturation-only per the rx_poll note; issue #99 probe) */
+				 * (saturation-only per the rx_poll note; switch-desync probe) */
 	u32 tx_bad_args;	/* TX submit with null/zero arguments */
 	u32 tx_bad_len;		/* TX submit length over 1518 */
 	u32 tx_ring_full;	/* TX submit found the ring full */
 	u32 tx_reclaim_no_skb;	/* TX reclaim of a completed desc with no skb */
 	u32 tx_bad_pkthdr;	/* TX pkthdr ptr outside the TX pool */
 	u32 tx_bad_mbuf;	/* TX mbuf ptr outside the TX pool */
+	u32 tx_defer_queued;	/* TX skbs deferred to the NAPI-poll free path */
+	u32 tx_defer_direct;	/* TX skbs freed directly (defer list at cap) */
 };
 
 struct rtl8196e_ring *rtl8196e_ring_create(unsigned int tx_cnt,
@@ -56,7 +58,8 @@ int rtl8196e_ring_tx_submit(struct rtl8196e_ring *ring, void *skb,
 int rtl8196e_ring_tx_reclaim(struct rtl8196e_ring *ring,
 				    unsigned int *pkts,
 				    unsigned int *bytes,
-				    int napi_budget);
+				    int napi_budget,
+				    struct sk_buff_head *defer);
 
 int rtl8196e_ring_rx_poll(struct rtl8196e_ring *ring, int budget,
 				 struct napi_struct *napi,

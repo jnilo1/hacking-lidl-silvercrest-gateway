@@ -338,7 +338,7 @@ Zigbeed Version: GSDK 8.2.2 - ...
 3. **Baud rate**: 460800 baud is the pre-built firmware default. All
    bauds up to 460800 (POSIX-capped by cpcd) run through the in-kernel
    UART bridge on kernel 6.18 (see
-   [baudrate guide](../README.md#baudrate-and-network-considerations)).
+   [baudrate guide](README.md#baudrate-and-network-considerations)).
 
 ---
 

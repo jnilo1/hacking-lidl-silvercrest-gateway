@@ -92,8 +92,19 @@ Output: `firmware/ot-rcp-460800.gbl` (UART flash) and
 
 ### Technical Notes
 
-- **UART driver:** Uses `uartdrv_usart` (low-level, DMA, async), not `iostream_usart`
-  which would corrupt the binary Spinel stream with LF→CRLF conversion.
+- **UART driver — selected per board (#142):** boards with RTS/CTS
+  (`BOARD_UART_FLOW=hw`) or no flow control build on `uartdrv_usart` (DMA,
+  near-zero CPU per byte — the historical default, unchanged for Lidl);
+  boards with software flow (`sw`, e.g. the Sengled G4) build on
+  `iostream_usart`, the only backend whose XON/XOFF support is complete
+  (watermark-driven emission + inbound honor — uartdrv's is "partial only"
+  per Silabs' own docs, see discussion #134). The old concern that iostream
+  corrupts the binary Spinel stream via LF→CRLF conversion was a config
+  default, not a driver property — our header disables the conversion
+  (`SL_IOSTREAM_USART_VCOM_CONVERT_BY_DEFAULT_LF_TO_CRLF 0`), verified with
+  live spinel traffic at 460800. Force a backend for experiments with
+  `UART_DRIVER=uartdrv|iostream` (forced builds get a `-<driver>` filename
+  suffix and are never auto-resolved by `flash_efr32.sh`).
 - **RTL8196E boot delay:** 1-second delay at startup for host UART initialization.
 - **Hardware flow control:** RTS/CTS enabled in the EFR32 firmware, **and**
   enabled on the host side via `&uart-flow-control=true` in the spinel

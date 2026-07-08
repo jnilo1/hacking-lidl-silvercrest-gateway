@@ -150,6 +150,8 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
     echo "========================================="
     echo "  boothold          reboot-to-bootloader helper"
     echo "  s40button         front-panel button daemon"
+    echo "  keepalive         process supervisor (issue #109)"
+    echo "  otbr-monitor      OTBR housekeeping daemon (C)"
     echo "  nano              editor (with vi symlink)"
     echo "  otbr-agent+ot-ctl OpenThread Border Router (~30 min on first run)"
     echo ""
@@ -186,6 +188,18 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
         "${SCRIPT_DIR}/keepalive/build_keepalive.sh"
     else
         echo "Error: keepalive/build_keepalive.sh not found or not executable"
+        exit 1
+    fi
+    echo ""
+
+    # Build otbr-monitor (C rewrite of the ash housekeeping loop, #109)
+    echo "========================================="
+    echo "  BUILDING OTBR-MONITOR"
+    echo "========================================="
+    if [ -x "${SCRIPT_DIR}/otbr-monitor/build_otbr-monitor.sh" ]; then
+        "${SCRIPT_DIR}/otbr-monitor/build_otbr-monitor.sh"
+    else
+        echo "Error: otbr-monitor/build_otbr-monitor.sh not found or not executable"
         exit 1
     fi
     echo ""

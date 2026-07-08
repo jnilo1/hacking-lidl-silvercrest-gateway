@@ -556,7 +556,83 @@ but separating v3.5.0/v3.8.0 at the sub-percent level would need more rounds. RX
 held line-rate (93.2–94.1) on every build. Raw data:
 `test_results_history_sweep_*/sweep.tsv`.
 
+## Standardized release bench — v4.0.0-rc4 / driver v2.20 (2026-06-30)
+
+`scripts/bench_release_iperf3.sh` against `6.18.35-rtl8196e-v4.0.0-rc4 #12`
+(driver v2.20: switch-core PHY-interface watchdog + comment genericization +
+debug-injector removal — the watchdog is a 1 s cold-path timer, and the removed
+injectors were `#ifdef CONFIG_RTL8196E_ETH_DEBUG` code that never compiled, so
+the RX/TX hot path is byte-identical to rc4). Same protocol as the rc2 run
+above. Rig: host 192.168.1.200 direct Cat-6 on `enp2s0`, OTBR quiesced.
+
+| Workload | Reps | Median (Mbit/s) | Spread / loss |
+|---|:--:|--:|---|
+| TCP RX (host → gateway)           | 3  | 94.0 | range 93.8–94.0 |
+| **TCP TX (gateway → host)**       | 10 | **67.0** | spread 1.2, sd 0.38, range 66.6–67.8 |
+| TCP stress (host → gw, 300 s)     | 1  | 93.9 | retrans 0.0000% |
+| UDP TX (gateway → host, `-b 0`)   | 3  | 32.0 | loss 0.0% |
+| UDP RX (host → gateway, `-b 100M`)| 3  | 31.8 | loss 67.0% |
+
+TCP-phase counters: rx_errs / rx_drop / tx_errs / tx_drop **all +0**;
+RetransSegs **+0 of 1,867,003** (0.0000%). UDP-flood window: rx_drop +0.
+**Verdict: PASS.**
+
+TX sat at **67.0** (10 reps 66.6–67.8, sd 0.38) — ~2 Mbit/s under the rc2
+suite's 69.0 and just below the documented 69.3–72.8 band, but a *settled-low
+session*, not a regression. The driver change cannot move TX: the hot-path
+codegen is byte-identical to rc4, and the new watchdog runs once per second from
+a timer, never on the datapath. TX is CPU-bound (gw 0 % idle, confirmed). The
+same day, a clean reboot to a cold-boot switch state (vs the
+post-`FullAndSemiReset` state the suite happened to run on, after a PHY-watchdog
+bench) reproduced the figure — 5 cold-boot TX reps 66.9–67.2, median **67.1** —
+so the number is neither a deep-reset artefact nor driver-introduced; it is this
+box/session's position in the variance band the rest of this doc characterises
+(same-day lows of 68.2 at v2.8; the +3.9 % v3.5.0 "toolchain" lift since refuted
+as session drift). RX holds line-rate, retrans 0. No action.
+
+## `xmit_stopped` hint measurement — driver v2.20 (2026-07-01, `optim_tx` branch)
+
+Two sites in the TX path arm the software TX-reclaim timer when the queue is
+already stopped: `rtl8196e_start_xmit()` (after submit) and `rtl8196e_poll()`
+(after reclaim), both hinted `unlikely(netif_xmit_stopped(...))`. Both predate
+BQL (v2.13), whose converged byte limit is documented above as **~2.5 KB**
+under sustained TCP TX — under 2 full frames, which raised the question of
+whether "queue stopped" had become the *common* case on this exact workload,
+making `unlikely()` stale. Rather than infer from the 2.5 KB figure alone
+(itself measured on a different run and BQL's limit is adaptive), two ethtool
+counters were added (`tx_xoff_seen_xmit`, `tx_xoff_seen_poll`, feat commit
+`887d696`) and read back after a real transfer.
+
+Rig: `iperf3 -c <gw> -R -t 30` (gateway → host, 192.168.1.200 direct Cat-6 on
+`enp2s0`), OTBR fully stopped (`S70otbr stop` + `killall keepalive otbr-agent
+otbr-monitor`, verified via `ps`), fresh `6.18.35-rtl8196e-v4.0.0-rc4 #16`.
+Result: 238 MBytes / 66.6 Mbit/s, 0 retrans.
+
+| Counter               | Before | After  | Delta | / tx_packets (173,582) |
+|------------------------|-------:|-------:|------:|------------------------:|
+| `tx_xoff_seen_xmit`    |      4 |     75 |    71 | **0.0409 %** |
+| `tx_xoff_seen_poll`    |      0 |     10 |    10 | **0.0058 %** |
+| `tx_ring_full`         |      — |      — |     0 | driver ring never saturated; all XOFF events were BQL byte-limit, not ring-full |
+
+**Verdict: `unlikely()` stays. No code change.** The queue is observed stopped
+in roughly 1 packet in 2,400 (`start_xmit`) and 1 in 17,000 (`poll`) — nowhere
+near the >50 % line that would justify flipping the hint, and nowhere near
+what the raw ~2.5 KB BQL figure alone might have suggested. BQL's byte-limit
+XOFF is evidently a brief, self-clearing transient (the queue reopens well
+before the next packet in the overwhelming majority of cases), not a
+steady-state condition — consistent with BQL's own purpose (bounding
+bufferbloat latency, not throttling steady throughput). The two counters are
+kept permanently (matching this driver's convention for structural-condition
+observability counters, e.g. `poll_budget_hit`/`rx_stall_run`).
+
 ## TX path per-packet decomposition (driver v2.4 + Track A, probe-on)
+
+**Superseded by the 2026-07-02 re-measurement below** ("TX/RX per-packet
+CPU decomposition — driver v2.20") — this table only ever decomposed
+`start_xmit()` itself (`rtl8196e_poll()` was never instrumented), and the
+"~6 % of total" claim in `## Asymptote and bottleneck` below was an
+*inference* from an assumed CPU budget, not a direct measurement. Kept
+here as historical record.
 
 Captured during the v3.4.1 perf session with the optional `ktime_get()`
 probes from the `feat/tx-throughput` branch (`xmit_probe`, `kick_probe`,
@@ -661,6 +737,14 @@ NAPI processing of the TCP ACK return traffic.  Tuning the driver
 beyond Track A's +1.2 % coalescing has no measurable effect on
 throughput, as documented in the orthogonal-levers session.
 
+**Superseded, 2026-07-02:** the "~6 %" figure above never measured
+`rtl8196e_poll()` — see "TX/RX per-packet CPU decomposition — driver
+v2.20" below, which found the driver's own code (`start_xmit` +
+`poll()` combined) accounts for **~32 %** of total per-packet CPU, not
+~6 %. The conclusion that further driver tuning has little effect on
+*throughput* still holds (unchanged from the orthogonal-levers data),
+but the reason is different from what this paragraph assumed.
+
 ## Levers explored — orthogonal-levers session 2026-05-02
 
 A dedicated measurement session evaluated four orthogonal levers
@@ -722,3 +806,197 @@ echo 1 > /sys/class/net/eth0/xmit_probe_reset
 The archive branch also carries the bench harness
 (`scripts/bench_tx.sh`) that drives the probes during a 5 × 60 s sweep
 across TCP RX/TX, UDP TX 100M, and UDP storm 64B workloads.
+
+A second, separate archive branch, `perf/tx-rx-decomposition` (off
+`optim_tx`, not `main`), carries a fourth probe (`poll_probe`,
+bracketing all of `rtl8196e_poll()`) ported alongside the three above
+onto the current driver — see the next section for what it measured.
+
+## TX/RX per-packet CPU decomposition — driver v2.20 (2026-07-02, `perf/tx-rx-decomposition`)
+
+The decomposition above only ever measured `start_xmit()`'s own
+internals; the claim that "the rest is TCP/IP stack + NAPI ACK
+processing" was an inference, not a measurement, and `rtl8196e_poll()`
+(the NAPI RX/reclaim path — plausibly the *larger* of the two driver
+entry points, since it's where GRO/stack delivery and
+`napi_complete_done()`'s "~180 µs/cycle" cost documented above actually
+execute) had never been instrumented. This session ported
+`xmit_probe`/`cache_probe`/`kick_probe` onto the current `start_xmit()`
+(main.c:564-666 — now carrying BQL, a retry path, and the
+`tx_xoff_seen_*` counters, none of which existed at v2.4) and added a
+new `poll_probe` bracketing all of `rtl8196e_poll()` (main.c:772-906).
+Branch `perf/tx-rx-decomposition` (off `optim_tx` tip `15f1b51`,
+commit `becf657`), archived on `private`, never merged — reproduce with:
+
+```bash
+git fetch private perf/tx-rx-decomposition
+git checkout private/perf/tx-rx-decomposition
+./build_kernel.sh && ./flash_remote.sh -y kernel <gateway-ip>
+```
+
+**Rig:** kernel `6.18.35-rtl8196e-v4.0.0-rc4`, driver
+`2.20-tx-rx-probe`, gateway 192.168.1.88, host 192.168.1.200 (direct
+Cat-6 on `enp2s0`), OTBR fully stopped, `iperf3 -c <gw> -R -t 30`
+(gateway → host TX direction) × 5 reps per set, `sleep 2` between reps.
+CPU-busy fraction from `/proc/stat` deltas measured *this session*, not
+assumed from any prior doc — **not** `top`/`vmstat` (this BusyBox build
+has no `vmstat`). Wall-clock duration taken from each rep's own
+`iperf3` sender-interval report (10 ms precision): BusyBox `date` on
+this rootfs does not support `%N` (`date +%s%N` returns garbage, not
+nanoseconds) — discovered live, so `/proc/stat`-based deltas are paired
+with the `iperf3`-reported window instead of a gateway-side timestamp.
+
+Running all four probes simultaneously measurably inflated the very
+quantity being measured (a calibration rep with only `xmit_probe`
+enabled read 11,901 ns/pkt vs ~15,500 ns/pkt with `cache_probe` +
+`kick_probe` also active — those two probes' own `ktime_get()` calls
+sit *inside* `xmit_probe`'s bracket by construction, and `ktime_get()`
+itself is not cheap on this core, no CP0 `Count`, falls back to
+`timer-rtl819x`). To avoid this, the final numbers below come from two
+**separately** probed 5-rep sets rather than one 4-probe run: **Set
+A** (`xmit_probe`+`cache_probe`+`kick_probe`, `poll_probe` off) and
+**Set B** (`poll_probe` only). A same-window 4-probe run was also taken
+as a cross-check and landed within ~1 point of the separated result
+(31.4 % vs ~32 %) — the conclusion is not sensitive to this choice.
+
+**Table A — headline split:**
+
+| Component | ns/pkt | % of total | Basis |
+|---|---:|---:|---|
+| `start_xmit()` (TX submit path) | 15,528 | ~9 % | **DIRECT** (`xmit_probe`, Set A median) |
+| `poll()` attributable to TX-direction ACK stream | 40,098 | ~23 % | **DIRECT** (`poll_probe`, Set B median, `poll_sum_ns / tx_packets`) |
+| **Driver-own total** | **55,626** | **~32 %** | DIRECT (sum of above two) |
+| Generic TCP/IP stack + softirq (residual) | 115,800–119,835 | ~68 % | **DERIVED** (`total_cpu − driver_own`; includes probe self-overhead, see caveats) |
+| **Total CPU per TX packet** | 171,430–175,461 | 100 % | DIRECT (`busy_frac × wall_ns / tx_packets`; range = Set B vs Set A, not the same window) |
+
+`driver_own_pct` sensitivity range: **31.7 %** (Set A's own total_cpu)
+to **32.5 %** (Set B's own total_cpu), central estimate **~32 %** —
+reported as a range rather than a single figure because `start_xmit`
+and `poll()` were measured in different reps, not literally the same
+window (the two sets' own throughput, 65.3 vs 66.8 Mbit/s median, is
+itself inside the documented noise band).
+
+**Table B — internal `start_xmit()` decomposition** (Set A, cache/kick
+probes nested inside `xmit_probe` by design — same as the v2.4 table):
+
+| Phase | ns/pkt | % of start_xmit | v2.4 comparison |
+|---|---:|---:|---|
+| `dma_cache_wback_inv(skb->data, skb->len)` | 1,597 | 10.3 % | was 15.4 % (1,675 ns) |
+| `rtl8196e_ring_kick_tx` (CPUICR pulse) | 970 | 6.2 % | was 13.3 % (1,444 ns) |
+| Other (submit + reclaim + BQL + retry path + xoff counters + stats) | 12,962 | 83.5 % | was 71.3 % (7,733 ns) |
+| **Total `start_xmit`** | **15,528** | **100 %** | was 10,852 ns |
+
+Cache flush and kick both shrank as a *share* of `start_xmit` (kick's
+absolute cost also dropped, 970 vs 1,444 ns — consistent with Track A's
+kick-coalescing now amortizing most pulses across several submits,
+confirmed by `ethtool -S eth0` showing the majority of
+`tx_kicks_total` landing in `tx_kicks_threshold`, not `tx_kicks_cold`,
+during every rep). "Other" grew both as a share and in absolute terms
+(+5,229 ns) — expected, since `start_xmit` now does real additional
+work the v2.4 measurement predates: BQL accounting
+(`netdev_sent_queue`/`netdev_completed_queue`), the retry-on-failure
+path, and the `tx_xoff_seen_xmit` counter check.
+
+**Round 2 (same day) split the "other" bucket** with two more probes
+(`submit_probe`/`reclaim_probe`, branch commit `e974949`): submit =
+2,684 ns (17.3 %), **TX-reclaim block = 7,867 ns (50.7 %) — the
+dominant phase of `start_xmit`**, rest ~2,411 ns. New always-on context
+counters showed **73.5 % of TX packets are reclaimed in `start_xmit`
+context** (`napi_budget=0` → `dev_consume_skb_any()`, bypassing the
+NAPI bulk skb freelist credited by `POST-MORTEM-driver-perf.md` for
+part of the 5.10→6.18 gains), only 26.5 % via `poll()`'s recycled path.
+Deferring xmit-context frees to the poll freelist is therefore the
+largest untested driver-side TX lever (ceiling ~7.9 µs/pkt ≈ 4.5 % of
+total budget; realistically less). Full round-2 tables, the reclaim
+split, and the 40 µs clocksource-quantization note live in
+`TX-RX-CPU-DECOMPOSITION.md`.
+
+**Verdict:** the driver's own code (`start_xmit` + `poll()` combined)
+accounts for **~32 % of total per-packet CPU**, roughly **5× the old
+"~6 %" inference**. This is not because `start_xmit` itself got much
+more expensive (10,852 → 15,528 ns is real growth from BQL/retry/xoff,
+but the same order of magnitude) — it's because the old figure never
+measured `poll()` at all and silently attributed 100 % of
+"everything else" to the generic stack. `poll()`'s TX-attributable cost
+(40,098 ns/pkt) is actually **larger** than `start_xmit`'s own
+(15,528 ns/pkt) — plausibly dominated by the GRO/stack-walk work this
+document's own probe() comments already flagged as "~180 µs/cycle" for
+`napi_complete_done()` alone, plus RX-ring housekeeping, TX reclaim,
+`kick_drain`, and the RUNOUT/stall-detector checks that all run inside
+the same call frame. This does **not** overturn "tuning the driver
+beyond Track A has no measurable effect on throughput" — the
+orthogonal-levers session already empirically tested several
+driver-side changes and found ≤1.2 % throughput deltas despite
+operating on what is now known to be ~32 % (not ~6 %) of the budget,
+consistent with per-packet cost being dominated by cache-flush/MMIO
+latency that driver logic changes don't reduce. It does shift where a
+*future* lever would most plausibly land: `poll()`'s NAPI-batching
+behavior (`napi_defer_hard_irqs`, `gro_flush_timeout` — both already
+tuned, see the probe() comment above) rather than `start_xmit`'s
+already-lean ~15.5 µs/pkt.
+
+**Caveats:**
+- Probe self-overhead is folded into the residual, not hidden: the
+  ~3.6 µs/pkt inflation from `cache_probe`/`kick_probe` nesting inside
+  `xmit_probe` is real (calibrated above), but since both
+  `driver_own_ns_per_pkt` and `total_cpu_ns_per_pkt` in Set A come from
+  the *same* overhead-inclusive window, the ratio stays internally
+  consistent — it is not a hidden bias in `driver_own_pct` itself,
+  though it does mean Set A's absolute ns/pkt figures run a few percent
+  hot relative to an unprobed production build.
+- All ring-anomaly counters (`ethtool -S eth0`) stayed 0 across every
+  rep (20 total across the 4-probe run and the two separated sets) —
+  the correctness gate held throughout, no rep excluded.
+- `tx_ring_full` was 0 in every rep, so the retry path (§ above,
+  "no special-casing") never actually fired during this bench —
+  its handling is by design, not empirically exercised here.
+- Median of 5 reps per set, matching this driver's noise-floor-aware
+  bench convention; both sets' throughput (65.3, 66.8 Mbit/s) sits
+  inside the "settled-low" band seen elsewhere this session (66–67),
+  not the historical 69.3–72.8 band — a session/build variance
+  consideration, not evidence of a regression.
+
+## Driver v2.20 defer-frees gate run (2026-07-02, `optim_tx` branch)
+
+Acting on the decomposition above (reclaim block = 50.7 % of
+`start_xmit`; 73.5 % of TX skbs freed via `dev_consume_skb_any()` in
+xmit context): `rtl8196e_ring_tx_reclaim()` gained a `defer` list
+parameter — the xmit-context reclaim now parks completed skbs on
+`priv->tx_defer_list` (cap 64, fallback to direct free past it) and the
+NAPI poll drains them through `napi_consume_skb(skb, budget)`.
+Descriptor slots are still released by the cursor advance at reclaim
+time, so ring availability and BQL completion timing are unchanged —
+only the skb free moves.
+
+**Known mechanism caveat, identified before benching:** TCP TX skbs
+reaching the driver are fast clones (`tcp_transmit_skb()` transmits a
+clone of the write-queue skb), and `napi_consume_skb()` routes clones
+to `__kfree_skb()` — the per-NAPI skb cache recycling does *not* apply
+to them. Any gain therefore comes from batching the frees in poll
+context (slab/cache locality of ~14 back-to-back frees per poll) and
+from shortening `start_xmit` itself, not from skb-struct recycling.
+
+A/B/A gate (same session, `iperf3 -R -t 30`, OTBR stopped, drift
+control by re-flashing the baseline after):
+
+| Set | Build | Reps | Median (Mbit/s) | Mean |
+|---|---|---:|---:|---:|
+| A1 baseline | #19 | 5 | 66.8 | 67.2 |
+| B defer-frees | #21 | 10 | **67.4** | **67.9** |
+| A2 baseline (re-flash) | #19 | 5 | 66.9 | — |
+
+A1 ≈ A2 (no session drift), so the +0.55 Mbit/s median (+0.8 %) is
+attributable to the change — **suggestive but not conclusive**
+(t ≈ 1.7, p ≈ 0.11); B's central cluster (7/10 reps in 67.1–67.5)
+sits consistently above A's (6/10 reps in 66.6–66.9). Correctness:
+0 retrans across all 21 reps, every ring-anomaly counter 0, a 120 s
+stress rep clean (67.6), no memory leak after 1.5 M packets
+(MemFree −256 kB, slab noise), `tx_defer_queued` = 994 k / 1.58 M
+packets (63 % — mechanism engaged), `tx_defer_direct` = 0 (cap never
+hit). Two new ethtool counters (`tx_defer_queued`/`tx_defer_direct`,
+28 → 30) stay as observability, per convention.
+
+**Kept** — Track A-class profile (+1.2 % was kept on the same
+protocol), modest measured payoff, zero measured risk, and it shortens
+the latency-sensitive `start_xmit` path. Revisit at merge review if
+the branch is squashed for release.

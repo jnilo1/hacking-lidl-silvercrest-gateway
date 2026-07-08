@@ -12,8 +12,8 @@
 # track CFLAGS changes.
 #
 # Outputs:
-#   boot.bin              - flash image
-#   btcode/build/test.bin - RAM-loadable image for RAM testing
+#   boot-img/$(BOARD)/boot.bin - flash image (per-board slot, committed)
+#   btcode/build/test.bin      - RAM-loadable image for RAM testing
 #
 # Targets:
 #   all   - build both variants (default)
@@ -41,14 +41,16 @@ all:
 	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD)
 	$(MAKE) -C btcode clean
 	$(MAKE) -C btcode BOARD=$(BOARD)
-	cp -f btcode/build/boot.bin boot.bin
+	mkdir -p boot-img/$(BOARD)
+	cp -f btcode/build/boot.bin boot-img/$(BOARD)/boot.bin
 	# --- ramtest variant (btcode CFLAGS change -> clean btcode) ---
 	$(MAKE) -C boot clean
 	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD) RAMTEST_TRACE=1
 	$(MAKE) -C btcode clean
 	$(MAKE) -C btcode BOARD=$(BOARD) RAMTEST_TRACE=1
 
+# boot-img/<board>/boot.bin is a committed artifact, not a build output —
+# clean leaves it alone (git restores it if a build overwrote it).
 clean:
 	$(MAKE) -C boot clean
 	$(MAKE) -C btcode clean
-	rm -f boot.bin

@@ -1,5 +1,5 @@
-Lidl Zigbee Gateway RTL8196E - v4.0.0-rc4
-J. Nilo - 2026-06-30
+Lidl Zigbee Gateway RTL8196E - v4.0.0-rc5
+J. Nilo - 2026-07-08
 ---
 crosstool-NG 1.28.0 (gcc 15.2.0 + binutils 2.45.1)
 musl 1.2.6

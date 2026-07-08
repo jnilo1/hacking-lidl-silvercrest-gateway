@@ -1,17 +1,49 @@
 # Issue #99 — RTL8196E soft-lockup: root mechanism and proposed fix
 
-**Status:** root mechanism identified and code-verified; RC1 shipped (v4.0.0-rc2) and
-**recurred in the field after ~4.3 days** — see §12. Detector left unchanged; the watchdog
-panic record extended to **v6** to capture the eth recovery + switch-core/TX/ring state so
-the next field crash disambiguates the three surviving hypotheses (§12) before any further
-code change. **Date:** 2026-06-19, updated 2026-06-24.
-**Audience:** senior kernel/driver reviewer. Everything below cites `file:line` against the
-in-tree driver (working tree = driver **v2.14**) and notes equivalence to the field build
-**v2.7** (shipped as `v3.8.5`). All line numbers are from this driver directory.
+**Status:** **A STORM CAPTURED AND IDENTIFIED ON THE BENCH (2026-07-08) — field confirmation
+PENDING.** The rc4 theory (§13) did not survive the field: the first crash captured with the full
+v7 record (v4.0.0-rc4, uptime 7.83 d) showed every §13/§14 detector counter at **zero**
+(`pollhit=0` — the bounded RX poll never even saturated its budget). The **v8 diagnostic
+instrumentation** built in response (rtl819x_wdt v1.11: 1 Hz flight recorder, panic-time
+kernel-log capture, INTC dispatch stats, UART1 register snapshot; eth v2.21 activity taps) then
+caught a crash **in the act, on the bench, the same day**: a **UART1 stuck-interrupt storm** —
+IIR frozen at 0xCC (RX character timeout pending) with LSR reporting an empty FIFO, the level
+line re-firing after every eret at ~1360 rotations/s for 21 s until the softlockup reboot. In
+THAT crash the ethernet controller is an innocent bystander (its state at panic — `iimr=0`, NAPI
+scheduled, NET_RX pending — is exactly the normal `napi_defer_hard_irqs` masked window, and its
+last interrupt predates the storm onset). Fix shipped: `rtl8196e-uart` v1.5 stuck-IIR recovery
+(dw8250-precedented dummy RBR read) with a rate-limited log line as the confirmation signal.
+**What is NOT yet established** — this investigation has been "solved" twice before and refuted
+by the field both times, so the claims are kept falsifiable: (a) the field crashes match the
+bench storm on the macro-signature only (pc/ra, softirq mask, frozen wheel, iisr residue) —
+v7 records structurally could not see UART registers or per-line interrupt rates, so whether the
+reporting units die of the SAME mechanism is unconfirmed; (b) the quirk has never been exercised
+against a live storm (no false positives ≠ efficacy, and this is Realtek silicon, not the
+DesignWare the precedent covers); (c) the trigger that wedges the FIFO/IIR state is unexplained.
+Confirmation criteria: a field unit logging `stuck RX-timeout IIR` with unbroken uptime, and no
+soft-lockup recurrence over several times the historical 3–8 d MTBF. Refutation: any v8-recorded
+crash showing a UART1 storm despite the quirk, or a different storming line. Meanwhile the rc4
+bounded poll and all §13/§14 detectors stay in as hardening, and the v8 record remains the
+permanent black box precisely because we may be wrong again.
+**Date:** 2026-06-19, root cause revised 2026-06-30, reopened by the rc4 field crash 2026-07-08;
+bench storm captured and fixed the same day — awaiting field confirmation.
+**Audience:** senior kernel/driver reviewer. `file:line` citations in §1–§12 are against the
+rc1/rc2-era driver (v2.14); §13–§14 against v2.20. Line numbers drift between revisions — trust
+the function names over the line numbers.
+
+> **Reading guide.** §1–§12 are the **historical investigation** (rc1/rc2 era) — their
+> RUNOUT-handshake thesis was superseded by the rc3 field data. §13–§14 are the **rc4 fix** —
+> correct hardening, but the fully-instrumented rc4 field crash proved it is not the field
+> mechanism (every §13/§14 counter read zero at panic). Both stay on record as the elimination
+> trail. The actual root cause and fix live outside this document: the UART1 stuck-IIR analysis
+> is in the `8250_rtl819x.c` handler comment block and the platform CHANGELOG.
 
 ---
 
 ## 1. TL;DR
+
+> **SUPERSEDED (rc3 field data) — the root cause was revised; see §13.** The RUNOUT-storm model
+> below is the rc1/rc2-era hypothesis, kept for the record.
 
 Issue #99 is a **self-sustaining `PKTHDR_DESC_RUNOUT` interrupt storm**. Once the switch's RX
 descriptor pointer and the driver's `rx_idx` cursor disagree, the ISR → NAPI-poll → re-enable
@@ -89,6 +121,10 @@ by hand against the cited lines.
 ---
 
 ## 6. Root mechanism — the self-sustaining handshake (code-verified)
+
+> **SUPERSEDED — see §13.** The handshake below is real, but the rc3 field captures
+> (`RUNOUT` *clear*) show it is **not** the #99 field mechanism. The actual root cause is an
+> unbounded RX poll loop; this section is retained as the rc1/rc2-era analysis.
 
 Descriptor ownership: `RTL8196E_DESC_OWNED_BIT = 1<<0`; **set = `SWCORE_OWNED`** (the switch
 owns it and may DMA an incoming frame into it), **clear = `RISC_OWNED`** (software owns it)
@@ -394,3 +430,94 @@ idle-box capture read `iisr=0x3206` with no RUNOUT bits, `iimr=0x807e01f8` decod
 exactly `RX_DONE_IE_ALL | LINK_CHANGE_IE | PKTHDR_DESC_RUNOUT_IE_ALL` — the live driver
 mask); v6 adds more reads of the same kind through the same path. The real fix waits for
 one decisive field crash.
+
+---
+
+## 13. Root cause REVISED — the rc3 field recurrence (2026-06-30)
+
+§12 ended by instrumenting (record v6) and waiting for one decisive field crash. It came: on
+**v4.0.0-rc3** two units soft-locked (**frtz13**, **olivluca**, 2026-06-28), and their v6 panic
+records **overturned the §1–§6 model**.
+
+**The decisive signature:** `iisr=0x320e`, `iimr=0x0`, **all four recovery counters 0**
+(`resync=0 kick=0 zero=0 seen=0`), `txprod==txcons`, 100% softirq / 0% hardirq. Decoding
+`0x320e` against `rtl865xc_asicregs.h`: `RX_DONE`(b3) + `TX_ALL_DONE`(b1,2) + `TX_DONE`(b9) set,
+**`PKTHDR_DESC_RUNOUT`(b17–22) CLEAR**. The storm the whole of §1–§12 was built around is gated
+on RUNOUT being *asserted*; in the field it was *clear*. Consequences:
+
+- **Both rc2 hypotheses (§12 A/B) were wrong.** They share the RUNOUT-gated detector, and RUNOUT
+  was clear, so neither the poll detector nor the `swcore_check` watchdog could ever fire (hence
+  all counters 0). rc3's added TX-hang / deep-reset escalation was *also* RUNOUT/TX-gated and
+  equally blind to this storm.
+- **The real bug is an unbounded RX poll, not a RUNOUT handshake.** `rtl8196e_ring_rx_poll` looped
+  `while (work_done < budget)`, but `work_done++` counted **deliveries only**; every drop / error
+  path (`rearm_drop`, `rearm_bad`) re-armed the descriptor and advanced `rx_idx` **without
+  counting**. Under a flood of *droppable* descriptors (runts, or an intrinsic switch desync that
+  pairs a valid pkthdr with a wild mbuf) the switch refills ahead of `rx_idx`, the loop's exit
+  condition is never reached, **the poll never returns**, and the CPU pins in the NET_RX softirq —
+  exactly the captured signature, with no RUNOUT required.
+
+This is the parity gap §11 had already half-named. The vendor RX DSR `interrupt_dsr_rx`
+(`rtl_nic.c:4062`) bounds its loop by **total iterations**
+(`for (rx_left=budget; rx_left>0; rx_left--)`) and returns `budget - rx_left` — *processed*, not
+delivered. Only an empty ring (`RTL_RX_PROCESS_RETURN_BREAK`) undoes the decrement; every drop
+still consumes the budget. Our from-scratch poll counted deliveries and so could spin forever.
+
+### The rc4 fix
+
+1. **Bound the poll by `processed`, not `delivered`** (`rtl8196e_ring_rx_poll`): a `processed++`
+   on *every* iteration past the OWNED-break, loop `while (processed < budget)`, return
+   `processed`; deliveries are tracked separately via an out-param. Terminates in ≤budget
+   iterations by construction — the direct vendor parity. **This is the fix**; everything else is
+   detection/recovery around it.
+2. **RUNOUT-independent stall detector** (`rtl8196e_poll`): when a poll saturates the budget
+   (`processed == budget`) yet delivered nothing, increment `rx_stall_run`; after
+   `rtl8196e_rx_stall_thresh` such polls in a row — *independent of RUNOUT*, which was clear in the
+   field — escalate to the existing switch-core deep reset (`swcore_reset_work`,
+   `FullAndSemiReset`). Any productive poll resets the run.
+3. **Richer panic capture (record v6 → v7) + a live recovery fingerprint.** One
+   `__rtl8196e_eth_capture()` feeds both the DRAM record (reboot case) and a `netdev_warn`
+   "eth recovery fingerprint" at each recovery action (the self-heal case leaves no reboot to
+   write a record). v7 adds the bounded-poll detector state plus an **A/B discriminator**:
+   `wild_pkthdr`/`wild_mbuf`/`mbuf_no_shadow`/`skew` ⇒ A (intrinsic switch desync);
+   `bad_len` ⇒ B (real runt flood); the switch-side descriptor pointers
+   (`CPURPDCR0`/`CPURMDCR0`/`P6_DCR0`) cross-check against `rx_idx`.
+
+rc4 is **additive**: rc3's RUNOUT ring-resync, the periodic NAPI kick, the TX-done-hang watchdog
+and the deep-reset worker all remain. After rc4, **three** independent triggers converge on the
+one `FullAndSemiReset` deep reset (RUNOUT-resync escalation, TX-done hang, RX-stall) — plus the
+bounded poll that lets any of them actually run.
+
+**Validated** on `.88` with debug fault injectors (behind `CONFIG_RTL8196E_ETH_DEBUG`, never
+shipped, since removed): a real ~384K-drop flood drove the bounded poll to return with no
+soft-lockup, and the stall detector → deep reset → RX restored. eth **→ v2.19**, wdt record
+**v6 → v7**. Shipped as the `v4.0.0-rc4` public prerelease.
+
+---
+
+## 14. Follow-up — switch-core PHY-interface watchdog (2026-06-30)
+
+A second pass over §11's vendor cross-check found one recovery trigger the vendor ships that none
+of the three deep-reset triggers above replicated. The vendor `one_sec_timer()`
+(`rtl_nic.c:5131`) re-inits the switch core whenever a port that is administratively up reads
+`(RTL_R32(PCRP0 + port*4) & EnablePHYIf) == 0` (`rtl_nic.c:5380`) — i.e. the switch core has
+*silently* cleared the port's MAC↔PHY interface enable. That failure mode has **no RUNOUT, no
+TX-done hang, and no carrier-down event** (`EnablePHYIf` is independent of PHY link state), so it
+is invisible to all three existing detectors: a fourth blind spot, distinct from the #99 storm.
+
+Added to `rtl8196e_swcore_check_timer_fn`: for `phy_port`, if `EnablePHYIf` reads back clear
+across `RTL8196E_PHYIF_LOST_THRESH` (3) consecutive 1 s checks — the consecutive count rides over
+the brief clear-then-re-enable window of our own deep reset — escalate to the same
+`FullAndSemiReset` (`swcore_reset_work`). This is the **fourth** trigger converging on the one
+deep reset.
+
+**Bench-validated** on `.88`: cleared `EnablePHYIf` live (`devmem 0x1B804114`, PCRP0[port 4],
+bit 0); the detector fired in ~3 s (`switch-core PHY interface lost on port 4`), the deep reset
+(#1) restored the bit and traffic in ~3.2 s end to end, and the RUNOUT / stall counters stayed 0
+(independent trigger, no cross-firing). Hot RX/TX path unchanged (RX 93.7 Mbit/s, 0 retrans). eth
+**v2.19 → v2.20**.
+
+Shipped with this change: the eth + watchdog driver comments were genericised (project-internal
+issue / audit tags dropped so the code reads standalone for reuse) and the
+`CONFIG_RTL8196E_ETH_DEBUG` fault injectors (`force_dropflood` / `force_stall`) removed. Not yet
+released — heads to the next version.

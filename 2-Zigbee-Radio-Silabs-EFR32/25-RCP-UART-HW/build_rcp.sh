@@ -22,8 +22,9 @@
 # Output:
 #   firmware/rcp-uart-802154-<BAUD>.gbl  (ready to flash via UART/Xmodem)
 #   firmware/rcp-uart-802154-<BAUD>.s37  (for J-Link/SWD flashing)
+#   Non-lidl BOARD= builds carry a -<board> suffix before the extension.
 #
-# J. Nilo - December 2025; baud parameter added April 2026
+# J. Nilo - December 2025; baud parameter added April 2026; BOARD= support July 2026 (#143)
 
 set -e
 
@@ -36,9 +37,44 @@ PATCHES_DIR="${SCRIPT_DIR}/patches"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md.
+#
+# Flow-control note: CPC supports only two modes — RTS/CTS or none (the
+# framing has no XON/XOFF escaping, so software flow does not exist here).
+# A board.env with BOARD_UART_FLOW=sw is therefore clamped to *none*. The
+# chip's flow partner is the gateway's in-kernel UART bridge (cpcd connects
+# to it over TCP — bus_type: TCP — so cpcd's uart_hardflow never applies);
+# flash_efr32.sh records FIRMWARE_FLOW_CTRL=none for this build so the
+# bridge arms to match.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
 PROJECT_NAME="rcp-uart-802154"
+
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
+
+# CPC flow-control token: hw → RTS/CTS, none AND sw → none (see note above).
+RCP_FLOW_TOK="$(flow_control_token usartHwFlowControlCtsAndRts usartHwFlowControlNone usartHwFlowControlNone)" || exit 1
+if [ "${BOARD_UART_FLOW}" = "sw" ]; then
+    echo "NOTE: BOARD_UART_FLOW=sw — CPC has no software flow control; building"
+    echo "      with flow control NONE. flash_efr32.sh records it as such, so"
+    echo "      the gateway's UART bridge (cpcd's TCP peer) arms to match."
+    echo ""
+fi
 
 # Default baud — historical RCP default. cpcd POSIX cap is 460800.
 DEFAULT_BAUD=460800
@@ -82,6 +118,7 @@ esac
 
 echo "========================================="
 echo "  RCP 802.15.4 Firmware Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  CPC Protocol: v5 (GSDK 4.5.0)"
 echo "  Baud:   ${BAUD}"
@@ -165,7 +202,13 @@ cp "${PATCHES_DIR}/main.c" .              # Patched with RTL8196E boot delay
 cp "${SDK_SAMPLE_DIR}/app.c" .
 cp "${SDK_SAMPLE_DIR}/app.h" .
 cp "${SDK_PLATFORM_DIR}/reset_util.h" .
-echo "  - Copied slcp, main.c from patches (RTL8196E delay)"
+# Point the slcp's flow-control config item at the board's (CPC-clamped) flow
+# type so the project file matches the VCOM header that apply_uart_config
+# writes below. The value sits on the line after the name in this slcp. lidl
+# resolves back to the same hw token, so the slcp stays byte-identical.
+# (This slcp pins no device component — --with does the job.)
+sed -i -E "/SL_CPC_DRV_UART_VCOM_FLOW_CONTROL_TYPE/{n;s|(value: )[A-Za-z0-9]+|\1${RCP_FLOW_TOK}|}" ${PROJECT_NAME}.slcp
+echo "  - Copied slcp, main.c from patches (RTL8196E delay; flow=${BOARD_UART_FLOW})"
 echo "  - Copied app.c, app.h, reset_util.h from SDK"
 
 # =========================================
@@ -181,13 +224,18 @@ slc generate ${PROJECT_NAME}.slcp --sdk "${GECKO_SDK}" --with ${TARGET_DEVICE} -
 echo ""
 echo "[3/5] Applying configuration..."
 
-# Copy config files for Lidl Gateway
+# Copy config files for the selected board
 if [ -d "config" ]; then
     cp "${PATCHES_DIR}/sl_cpc_drv_uart_usart_vcom_config.h" config/ 2>/dev/null || true
     cp "${PATCHES_DIR}/sl_cpc_security_config.h" config/ 2>/dev/null || true
     # Substitute the requested baud into the CPC UART config header
     sed -i "s|^#define SL_CPC_DRV_UART_VCOM_BAUDRATE.*|#define SL_CPC_DRV_UART_VCOM_BAUDRATE                 ${BAUD}|" config/sl_cpc_drv_uart_usart_vcom_config.h
-    echo "  - Copied UART config (baud=${BAUD}, HW flow control, PA0/PA1/PA4/PA5)"
+    # Apply the selected board's UART routing — a no-op (byte-identical header)
+    # for the lidl reference, the override path for ported boards. The sw token
+    # equals the none token: CPC has no software flow control (see top note).
+    apply_uart_config config/sl_cpc_drv_uart_usart_vcom_config.h \
+        SL_CPC_DRV_UART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone usartHwFlowControlNone
+    echo "  - Copied UART config (baud=${BAUD}, board=${BOARD}, flow=${BOARD_UART_FLOW})"
     echo "  - Copied security config (CPC security disabled)"
 fi
 
@@ -237,7 +285,7 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/${PROJECT_NAME}"
-OUT_BASE="${PROJECT_NAME}-${BAUD}"
+OUT_BASE="${PROJECT_NAME}-${BAUD}${BOARD_SUFFIX}"
 
 if [ -f "${SRC_BASE}.s37" ]; then
     # Only remove the specific files we're about to rewrite — preserve other
