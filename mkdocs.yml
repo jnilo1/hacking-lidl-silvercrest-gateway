@@ -1,8 +1,8 @@
-site_name: Hacking the Lidl Silvercrest Gateway
-site_description: Open firmware for the Lidl Silvercrest Zigbee Gateway — Zigbee coordinator, Thread Border Router, or router.
-site_url: https://jnilo1.github.io/hacking-lidl-silvercrest-gateway/
-repo_url: https://github.com/jnilo1/hacking-lidl-silvercrest-gateway
-repo_name: jnilo1/hacking-lidl-silvercrest-gateway
+site_name: RTL8196E Gateway
+site_description: Open-source Linux firmware for RTL8196E-based smart home gateways (Lidl Silvercrest, Sengled G4) — Zigbee coordinator, Thread Border Router, or router.
+site_url: https://jnilo1.github.io/rtl8196e-gateway/
+repo_url: https://github.com/jnilo1/rtl8196e-gateway
+repo_name: jnilo1/rtl8196e-gateway
 edit_uri: edit/main/
 
 # Single source: .md files stay at their current location in the repo.

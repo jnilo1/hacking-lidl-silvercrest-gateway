@@ -26,7 +26,7 @@ jobs:
     # GITHUB_TOKEN has no write_package on it. The release tag is pushed to
     # both remotes; this guard skips the private repo's run so it does not fail
     # on the denied push (and avoids a duplicate build).
-    if: github.repository == 'jnilo1/hacking-lidl-silvercrest-gateway'
+    if: github.repository == 'jnilo1/rtl8196e-gateway'
     permissions:
       contents: read
       packages: write

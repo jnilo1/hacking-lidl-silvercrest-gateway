@@ -68,8 +68,8 @@ For native Ubuntu or WSL2 users. **Recommended for Windows users.**
 
 ```bash
 # Clone the repository (anywhere, rename if you want)
-git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
-cd hacking-lidl-silvercrest-gateway/1-Build-Environment
+git clone https://github.com/jnilo1/rtl8196e-gateway.git
+cd rtl8196e-gateway/1-Build-Environment
 
 # Install everything — takes ~45 minutes
 sudo ./install_deps.sh

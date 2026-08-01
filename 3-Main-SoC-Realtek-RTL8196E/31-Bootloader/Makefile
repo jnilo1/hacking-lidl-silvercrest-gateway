@@ -25,7 +25,7 @@
 #   CROSS      - toolchain prefix (default mips-lexra-linux-musl-)
 
 JUMP_ADDR    ?= 0x80500000
-XTOOLS_DIR   ?= $(HOME)/hacking-lidl-silvercrest-gateway/x-tools/mips-lexra-linux-musl
+XTOOLS_DIR   ?= $(HOME)/rtl8196e-gateway/x-tools/mips-lexra-linux-musl
 CROSS        ?= mips-lexra-linux-musl-
 PATH         := $(XTOOLS_DIR)/bin:$(PATH)
 

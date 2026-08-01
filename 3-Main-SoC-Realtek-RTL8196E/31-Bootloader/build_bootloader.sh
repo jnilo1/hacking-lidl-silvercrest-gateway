@@ -32,7 +32,7 @@ CROSS_PREFIX="mips-lexra-linux-musl-"
 
 # Toolchain - check project root first, then walk up the repo tree
 find_toolchain() {
-    # Check in the project root directory (~/hacking-lidl-silvercrest-gateway)
+    # Check in the project root directory (~/rtl8196e-gateway)
     if [ -d "$PROJECT_ROOT/x-tools/mips-lexra-linux-musl/bin" ]; then
         echo "$PROJECT_ROOT/x-tools/mips-lexra-linux-musl"
         return 0

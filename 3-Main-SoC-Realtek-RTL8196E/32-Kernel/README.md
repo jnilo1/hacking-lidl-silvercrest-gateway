@@ -27,10 +27,10 @@ The result is a clean, maintainable kernel that can be updated to newer 6.18.x p
 
 | Directory/File | Description |
 |----------------|-------------|
-| [`patches-6.18/`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18) | Patches to apply on vanilla Linux 6.18 |
-| [`files-6.18/`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18) | New files to add to the kernel tree (Realtek platform support, custom drivers) |
-| [`config-6.18-realtek.txt`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/config-6.18-realtek.txt) | Kernel configuration |
-| [`build_kernel.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build script |
+| [`patches-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18) | Patches to apply on vanilla Linux 6.18 |
+| [`files-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18) | New files to add to the kernel tree (Realtek platform support, custom drivers) |
+| [`config-6.18-realtek.txt`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/config-6.18-realtek.txt) | Kernel configuration |
+| [`build_kernel.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build script |
 
 ## Building
 

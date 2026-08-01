@@ -40,7 +40,7 @@ jobs:
           path: site
 
   deploy:
-    if: github.repository == 'jnilo1/hacking-lidl-silvercrest-gateway'
+    if: github.repository == 'jnilo1/rtl8196e-gateway'
     needs: build
     runs-on: ubuntu-latest
     environment:

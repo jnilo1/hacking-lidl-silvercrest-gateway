@@ -36,8 +36,8 @@ The **in-kernel UART↔TCP bridge** (`rtl8196e-uart-bridge`, part of the 6.18 ke
 ### Get the Project
 
 ```bash
-git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
-cd hacking-lidl-silvercrest-gateway/3-Main-SoC-Realtek-RTL8196E
+git clone https://github.com/jnilo1/rtl8196e-gateway.git
+cd rtl8196e-gateway/3-Main-SoC-Realtek-RTL8196E
 ```
 
 ### Choose Your Path

@@ -99,7 +99,7 @@ The `rcp-stack` script needs its companion files (scripts/, systemd/, examples/)
 
 Add to your `~/.bashrc`:
 ```bash
-alias rcp-stack='/path/to/hacking-lidl-silvercrest-gateway/2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/bin/rcp-stack'
+alias rcp-stack='/path/to/rtl8196e-gateway/2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/bin/rcp-stack'
 ```
 
 Then reload:
@@ -137,7 +137,7 @@ ZIGBEED_COMMAND='zigbeed -r "spinel+cpc://$CPC_INSTANCE_NAME?iid=1&iid-list=0" -
 
 Copy the cpcd config:
 ```bash
-cp /path/to/hacking-lidl-silvercrest-gateway/2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/examples/cpcd.conf.example ~/.config/rcp-stack/cpcd.conf
+cp /path/to/rtl8196e-gateway/2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/examples/cpcd.conf.example ~/.config/rcp-stack/cpcd.conf
 ```
 
 **Important:** Edit `cpcd.conf` and set the correct baudrate (must match RCP firmware):

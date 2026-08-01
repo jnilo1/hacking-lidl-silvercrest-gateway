@@ -45,9 +45,9 @@ OBJCOPY  = $(CROSS)objcopy
 OBJDUMP  = $(CROSS)objdump
 NM       = $(CROSS)nm
 
-CVIMG       ?= $(HOME)/hacking-lidl-silvercrest-gateway/1-Build-Environment/11-realtek-tools/bin/cvimg
+CVIMG       ?= $(HOME)/rtl8196e-gateway/1-Build-Environment/11-realtek-tools/bin/cvimg
 CVIMG_FLAGS ?= -t boot -c any -e 0x0 -b 0x0
-LZMA        ?= $(HOME)/hacking-lidl-silvercrest-gateway/1-Build-Environment/11-realtek-tools/bin/lzma
+LZMA        ?= $(HOME)/rtl8196e-gateway/1-Build-Environment/11-realtek-tools/bin/lzma
 
 OUTDIR = build
 

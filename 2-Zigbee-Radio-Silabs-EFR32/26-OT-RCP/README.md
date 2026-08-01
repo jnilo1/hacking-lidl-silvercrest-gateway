@@ -305,7 +305,7 @@ characterise your own deployment instead of relying on these defaults.
 - [OpenThread RCP](https://openthread.io/platforms/co-processor)
 - [bnutzer/docker-otbr-tcp](https://github.com/bnutzer/docker-otbr-tcp) — OTBR Docker image for TCP-based RCPs
 - [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/)
-- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) — Thread/Matter on the Lidl gateway
+- [Discussion #47](https://github.com/jnilo1/rtl8196e-gateway/discussions/47) — Thread/Matter on the Lidl gateway
 
 ## License
 

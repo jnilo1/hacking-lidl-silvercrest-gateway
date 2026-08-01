@@ -439,7 +439,7 @@ The CPC protocol is sensitive to network conditions. For reliable operation:
 
 - [CPC Daemon](https://github.com/SiliconLabs/cpc-daemon)
 - [`EMBERZNET-8.x-GUIDE.md`](./EMBERZNET-8.x-GUIDE.md) — how a Series 1 EFR32MG1B ends up exposing EZSP v18 via host-side `zigbeed`
-- [rtl8196e-uart-bridge](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge)
+- [rtl8196e-uart-bridge](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge)
 
 ## License
 

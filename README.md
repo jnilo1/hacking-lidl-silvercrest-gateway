@@ -1,10 +1,12 @@
-# Hacking the Lidl Silvercrest Gateway
+# RTL8196E Gateway — Open Linux Firmware for Smart Home Hubs
 
-> **If you find this project useful, please consider [giving it a star](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway)!** It helps others discover it and motivates continued development.
+> 📢 **This project was formerly known as `hacking-lidl-silvercrest-gateway`.** Same project, broader scope (Sengled G4 and other RTL8196E-based gateways), clearer name. All old GitHub links redirect automatically; the documentation site has moved to <https://jnilo1.github.io/rtl8196e-gateway/>.
+
+> **If you find this project useful, please consider [giving it a star](https://github.com/jnilo1/rtl8196e-gateway)!** It helps others discover it and motivates continued development.
 >
-> **Documentation site:** https://jnilo1.github.io/hacking-lidl-silvercrest-gateway/ — full project docs with search and navigation.
+> **Documentation site:** https://jnilo1.github.io/rtl8196e-gateway/ — full project docs with search and navigation.
 >
-> Questions? Use [Discussions](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions). Found a bug? Open an [Issue](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/issues).
+> Questions? Use [Discussions](https://github.com/jnilo1/rtl8196e-gateway/discussions). Found a bug? Open an [Issue](https://github.com/jnilo1/rtl8196e-gateway/issues).
 
 ## What Can You Do With This?
 
@@ -29,7 +31,7 @@ size) lives in the device tree, with per-board kernel builds
 (`BOARD=<board> ./build_kernel.sh`) and a documented add-a-board recipe. If
 you own another RTL8196E-based gateway, porting this firmware is a recipe,
 not a fork — a community port to the **Sengled Smart Hub G4** is in progress
-([#119](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/119)).
+([#119](https://github.com/jnilo1/rtl8196e-gateway/discussions/119)).
 
 ______________________________________________________________________
 
@@ -60,8 +62,8 @@ ______________________________________________________________________
 ### Step 1: Clone and Flash the Linux System
 
 ```bash
-git clone https://github.com/jnilo1/hacking-lidl-silvercrest-gateway.git
-cd hacking-lidl-silvercrest-gateway
+git clone https://github.com/jnilo1/rtl8196e-gateway.git
+cd rtl8196e-gateway
 
 # First flash — gateway must be in bootloader mode (<RealTek> prompt via serial ESC):
 ./flash_install_rtl8196e.sh
@@ -135,25 +137,25 @@ ______________________________________________________________________
 
 | Script | Description |
 |--------|-------------|
-| [`flash_install_rtl8196e.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/flash_install_rtl8196e.sh) | **Install custom firmware** — first flash (no arg, bootloader mode) or upgrade (`LINUX_IP`, saves config). `-y` for unattended upgrade (>= v2.0.0) |
-| [`build_fullflash.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/build_fullflash.sh) | Build a complete 16 MiB flash image from all 4 partitions |
-| [`backup_gateway.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
-| [`restore_gateway.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/restore_gateway.sh) | Restore a fullflash.bin backup — guides through TFTP + FLW |
-| [`flash_efr32.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/flash_efr32.sh) | Flash the Zigbee/Thread radio over SSH (OTA via universal-silabs-flasher) |
+| [`flash_install_rtl8196e.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/flash_install_rtl8196e.sh) | **Install custom firmware** — first flash (no arg, bootloader mode) or upgrade (`LINUX_IP`, saves config). `-y` for unattended upgrade (>= v2.0.0) |
+| [`build_fullflash.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/build_fullflash.sh) | Build a complete 16 MiB flash image from all 4 partitions |
+| [`backup_gateway.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/backup_gateway.sh) | Back up the full flash — auto-detects gateway state (SSH or bootloader) |
+| [`restore_gateway.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/restore_gateway.sh) | Restore a fullflash.bin backup — guides through TFTP + FLW |
+| [`flash_efr32.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/flash_efr32.sh) | Flash the Zigbee/Thread radio over SSH (OTA via universal-silabs-flasher) |
 
 **Per-component build & flash** (in `3-Main-SoC-Realtek-RTL8196E/`):
 
 | Script | Description |
 |--------|-------------|
-| [`31-Bootloader/build_bootloader.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/build_bootloader.sh) | Build the RTL8196E bootloader |
-| [`31-Bootloader/flash_bootloader.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/flash_bootloader.sh) | Flash bootloader only — gateway must be in bootloader mode |
-| [`32-Kernel/build_kernel.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build the Linux kernel |
-| [`32-Kernel/flash_kernel.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh) | Flash kernel only — gateway must be in bootloader mode |
-| [`33-Rootfs/build_rootfs.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/build_rootfs.sh) | Build the root filesystem |
-| [`33-Rootfs/flash_rootfs.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh) | Flash rootfs only — gateway must be in bootloader mode |
-| [`34-Userdata/build_userdata.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/34-Userdata/build_userdata.sh) | Build the JFFS2 userdata partition |
-| [`34-Userdata/flash_userdata.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh) | Flash userdata only — gateway must be in bootloader mode |
-| [`flash_remote.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/flash_remote.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed). For userdata, preserves user config (network, password, SSH keys, etc.) |
+| [`31-Bootloader/build_bootloader.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/build_bootloader.sh) | Build the RTL8196E bootloader |
+| [`31-Bootloader/flash_bootloader.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/31-Bootloader/flash_bootloader.sh) | Flash bootloader only — gateway must be in bootloader mode |
+| [`32-Kernel/build_kernel.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build the Linux kernel |
+| [`32-Kernel/flash_kernel.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/flash_kernel.sh) | Flash kernel only — gateway must be in bootloader mode |
+| [`33-Rootfs/build_rootfs.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/build_rootfs.sh) | Build the root filesystem |
+| [`33-Rootfs/flash_rootfs.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/33-Rootfs/flash_rootfs.sh) | Flash rootfs only — gateway must be in bootloader mode |
+| [`34-Userdata/build_userdata.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/34-Userdata/build_userdata.sh) | Build the JFFS2 userdata partition |
+| [`34-Userdata/flash_userdata.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/34-Userdata/flash_userdata.sh) | Flash userdata only — gateway must be in bootloader mode |
+| [`flash_remote.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/flash_remote.sh) | SSH into running gateway, boothold, then flash one partition (no serial needed). For userdata, preserves user config (network, password, SSH keys, etc.) |
 
 > **`flash_remote.sh` vs individual `flash_*.sh`**: The individual scripts require the gateway
 > to already be in bootloader mode. `flash_remote.sh` automates the full cycle: SSH → boothold
@@ -164,8 +166,8 @@ ______________________________________________________________________
 
 | Script | Description |
 |--------|-------------|
-| [`split_flash.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/split_flash.sh) | Split a 16 MB full flash into individual partition files |
-| [`restore_mtd_via_ssh.sh`](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/scripts/restore_mtd_via_ssh.sh) | Restore partitions via SSH (original Tuya firmware only) |
+| [`split_flash.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/split_flash.sh) | Split a 16 MB full flash into individual partition files |
+| [`restore_mtd_via_ssh.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/scripts/restore_mtd_via_ssh.sh) | Restore partitions via SSH (original Tuya firmware only) |
 
 ## Building from Source
 
@@ -208,7 +210,7 @@ ______________________________________________________________________
 If you are seeing repeated `HandleRcpTimeout()` / `Failed to communicate
 with RCP` errors in `otbr-agent` logs after ~1h of operation at 460800
 baud (issue
-[#89](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/issues/89))
+[#89](https://github.com/jnilo1/rtl8196e-gateway/issues/89))
 on **v3.1.x or v3.2.x**, upgrade to **v3.3.0+** — the root cause was that
 `S70otbr` did not enable hardware UART flow control on the spinel link;
 without it, the RX FIFO could overrun under bursty Spinel traffic. v3.3.0
@@ -249,4 +251,4 @@ No need to crack the root password — access to the Realtek bootloader prompt
 
 ## License
 
-MIT License — See [LICENSE](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/LICENSE) for details.
+MIT License — See [LICENSE](https://github.com/jnilo1/rtl8196e-gateway/blob/main/LICENSE) for details.

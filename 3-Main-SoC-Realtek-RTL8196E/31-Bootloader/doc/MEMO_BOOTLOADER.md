@@ -59,7 +59,7 @@ Used on routers/gateways with SPI flash and SDRAM.
 **Required**: Custom Lexra toolchain built with crosstool-ng
 
 ```bash
-export PATH=$HOME/hacking-lidl-silvercrest-gateway/x-tools/mips-lexra-linux-musl/bin:$PATH
+export PATH=$HOME/rtl8196e-gateway/x-tools/mips-lexra-linux-musl/bin:$PATH
 ```
 
 Compiler: `mips-lexra-linux-musl-gcc` (MIPS big-endian, Lexra LX4380, musl libc)

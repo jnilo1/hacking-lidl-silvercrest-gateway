@@ -210,7 +210,7 @@ values work end-to-end (Z2M ember adapter, ZHA).
 ### Network parameters
 
 The build process applies patches to optimize the firmware for the Lidl
-Gateway. See [patches/README.md](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md) for details.
+Gateway. See [patches/README.md](https://github.com/jnilo1/rtl8196e-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md) for details.
 
 ### Network Parameters
 

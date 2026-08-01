@@ -441,4 +441,4 @@ docker compose -f <compose-file> down -v
 - [Home Assistant Matter integration](https://www.home-assistant.io/integrations/matter/)
 - [python-matter-server](https://github.com/matter-js/python-matter-server) — Matter Server (migrated to matter-js org)
 - [chip-tool guide](https://project-chip.github.io/connectedhomeip-doc/development_controllers/chip-tool/chip_tool_guide.html)
-- [Discussion #47](https://github.com/jnilo1/hacking-lidl-silvercrest-gateway/discussions/47) — Thread/Matter on the Lidl gateway
+- [Discussion #47](https://github.com/jnilo1/rtl8196e-gateway/discussions/47) — Thread/Matter on the Lidl gateway
