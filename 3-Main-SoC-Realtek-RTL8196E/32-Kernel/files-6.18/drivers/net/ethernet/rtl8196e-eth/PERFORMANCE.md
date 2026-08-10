@@ -1231,9 +1231,16 @@ but the reason is different from what this paragraph assumed.
 ## Levers explored — orthogonal-levers session 2026-05-02
 
 A dedicated measurement session evaluated four orthogonal levers
-proposed by `BRIEF-tx-throughput-orthogonal-levers.md`.  See
-`MEMO-tx-throughput-verdict.md` at the repo root for the full
-per-track verdict; summary:
+proposed by `BRIEF-tx-throughput-orthogonal-levers.md`.  Conditions:
+kernel 6.18.24, driver v2.4, 5 × 60 s per workload, medians below,
+intra-phase variance ≈ 1 % (significance threshold 2σ ≈ 2 %).
+
+| Workload (Mbit/s) | R₀ baseline |     A |    B+ |     C |     D |
+|-------------------|------------:|------:|------:|------:|------:|
+| TCP RX            |        93.5 |  93.4 |  93.3 |  93.3 |  93.3 |
+| **TCP TX**        |    **69.3** |**70.1**| 69.3 |  69.5 |  69.3 |
+| UDP TX 100M       |        37.9 |  37.9 |  37.6 |  37.5 |  37.0 |
+| UDP storm 64 B    |        1.88 |  1.87 |  1.87 |  1.90 |  1.84 |
 
 | Track                                          | Δ TCP TX | Verdict   |
 |------------------------------------------------|---------:|-----------|
@@ -1242,13 +1249,40 @@ per-track verdict; summary:
 | C — NAPI weight 64 → 128                       | −0.9 %   | Reverted  |
 | D — Full TX scatter-gather (`NETIF_F_SG`)      | −1.1 %   | Reverted  |
 
-D is notable: the HW probe (`rtl8196e_ring_tx_sg_test`) confirmed the
-switch ASIC honours mBuf `m_next` chains on TX, contradicting the
-mbuf.h comment "MBUF_EOR is set only by ASIC" (true on RX only).  The
-full SG path was implemented and runs correctly (99.96 % non-linear
-SKBs once `NETIF_F_SG` is advertised) but splitting one big 1500 B
-cache flush into N small flushes (head + frags) costs more than
-skipping `skb_linearize` saves on this CPU.
+No lever moved RX or either UDP workload outside noise, so the three
+rejections are rejections on every workload measured, not just on the
+TCP TX column the session was aiming at.
+
+**A** pulses `TXFD` on `CPUICR` at most once per 4 submits (except a
+cold-start `was_empty`), drained at the end of every NAPI poll —
+roughly 3 µs of MMIO bus time saved per 4-packet batch.  Its +1.2 %
+sits at the variance edge but was consistent across all 5 reps
+(71.2 / 69.9 / 70.2 / 69.9 / 70.1, median 70.1 against R₀ 69.3).
+
+**B+** was expected to win by keeping the TX buffer warm; it lost.
+With an 8 KB D-cache a 1500-byte frame is ~19 % of the cache, and
+holding it evicts lines the stack still needs — the invalidate frees
+the cache better than the warm-keeping pays.  `dma_cache_wback_inv`
+stays the right call on this hardware.
+
+**C** lost on a single core: a larger NAPI weight starves process
+context (the `start_xmit` syscall) in favour of poll.  The default 64
+is well matched to this CPU.
+
+**D** is notable: the HW probe (`rtl8196e_ring_tx_sg_test`) confirmed
+the switch ASIC honours mBuf `m_next` chains on TX, contradicting the
+mbuf.h comment "MBUF_EOR is set only by ASIC" (true on RX only) — a
+96-byte two-mBuf chain reached the wire intact, with the payload
+pattern crossing the mBuf boundary.  The full SG path was implemented
+and runs correctly (99.96 % non-linear SKBs once `NETIF_F_SG` is
+advertised) but splitting one big 1500 B cache flush into N small
+flushes (head + frags) costs more than skipping `skb_linearize` saves
+on this CPU.
+
+The brief had projected 5–15 % per track.  Measured reality was
+±1.5 % noise on all four, with only A net-positive at the threshold —
+which is what redirected the investigation away from the driver hot
+path and towards the stack and the DDR bus.
 
 Implementation, instrumentation, and full bench data for all four
 tracks are preserved on the `feat/tx-throughput` archive branch.

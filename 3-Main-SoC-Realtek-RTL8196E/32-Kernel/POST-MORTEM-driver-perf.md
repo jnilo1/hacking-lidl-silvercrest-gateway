@@ -446,7 +446,7 @@ to mainline 6.x has paid off.
 > **Postscript (May 2026).**  Track A (kick_tx coalescing,
 > `rtl8196e_kick_threshold = 4` with NAPI-end drain) was deployed in
 > v3.4.1 and adds another +1.2 % on TCP TX over the April baseline.
-> See `MEMO-tx-throughput-verdict.md` at the repo root for the full
+> See "Levers explored" in the driver's `PERFORMANCE.md` for the full
 > v3.4.1 perf session, including the three other orthogonal levers
 > that were measured and rejected (writeback-only flush, NAPI weight
 > 128, full TX scatter-gather).

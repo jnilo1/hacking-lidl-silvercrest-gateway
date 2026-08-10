@@ -206,7 +206,6 @@ exclude_docs: |
   3-Main-SoC-Realtek-RTL8196E/3-Main-SoC-Realtek-RTL8196E/
   backups/
   canari/
-  MEMO-tx-throughput-verdict.md
 
   # Developer notes — readable on github.com but excluded from the site
   3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/MEMO_BOOTLOADER.md

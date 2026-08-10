@@ -304,6 +304,16 @@ void lexra_cache_init(void)
 #ifdef CONFIG_DMA_NONCOHERENT
 	_dma_cache_wback_inv = rlx_dma_cache_wback_inv;
 	_dma_cache_inv = rlx_dma_cache_inv;
+	/*
+	 * Writeback-only resolves to writeback+invalidate.  The dedicated
+	 * primitive exists above (rlx_wback_dcache_range) but is unwired, and
+	 * nothing in this tree calls dma_cache_wback(), so the alias is inert
+	 * today.  A caller added later would silently lose the lines it expects
+	 * to keep cached — wire this to rlx_wback_dcache_range at that point.
+	 * Keeping the buffer warm is not automatically the win it looks like:
+	 * a 1500-byte frame is ~19 % of this 8 KB D-cache, and a measured A/B
+	 * on the TX flush path came out 1.1 % slower that way.
+	 */
 	_dma_cache_wback = rlx_dma_cache_wback_inv;
 #endif
 

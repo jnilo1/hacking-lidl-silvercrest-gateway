@@ -28,8 +28,8 @@ audit history in `AUDIT.md`, throughput history in `PERFORMANCE.md`
 - QoS / multiple queues / netfilter offload / L3-L4 hardware acceleration.
 - Multiple hardware VLANs (single netdev only).
 - Scatter-gather (`NETIF_F_SG` not advertised on the production driver — the
-  HW supports it, see `MEMO-tx-throughput-verdict.md` at the repo root and
-  the `feat/tx-throughput` archive branch for the rejected SG implementation).
+  HW supports it, see "Levers explored" in `PERFORMANCE.md` and the
+  `feat/tx-throughput` archive branch for the rejected SG implementation).
 - XDP.
 
 ## 3. Hardware constraints (isolated in `rtl8196e_hw.*` / `rtl8196e_ring.c`)
@@ -174,7 +174,8 @@ reduction.
     poll **and** at each dequeue-batch boundary (`!netdev_xmit_more()` in
     `start_xmit`), so a descriptor flipped after the TX engine parked is
     never left unkicked past the current burst — even on an RX-silent link.
-  - Coalescing introduced in v3.4.1; cf. `MEMO-tx-throughput-verdict.md`.
+  - Coalescing introduced in v3.4.1; cf. "Levers explored" in
+    `PERFORMANCE.md`.
 - TX reclaim (`rtl8196e_ring_tx_reclaim()`):
   - Called from NAPI poll with `napi_budget > 0` (uses `napi_consume_skb`
     for batched SKB freeing).
