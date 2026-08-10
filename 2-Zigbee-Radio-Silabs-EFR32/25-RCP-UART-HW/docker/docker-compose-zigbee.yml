@@ -50,8 +50,9 @@ services:
       - RCP_PORT=8888
       # ============================================================
       - CPCD_INSTANCE=cpcd_0
-      # Must match the RCP firmware baudrate (default: 460800)
-      - UART_BAUDRATE=460800
+      # No baud setting here: cpcd talks TCP to the gateway's in-kernel
+      # bridge, which arms the UART baud itself from radio.conf (written
+      # by flash_efr32.sh at flash time).
       # Port exposed to Z2M (internal to Docker network)
       - ZIGBEED_PORT=9999
       # Set to 1 for debug logs, 0 for production

@@ -225,7 +225,7 @@ Two variants are built:
 
 | Variant | Output file | Description |
 |---------|-------------|-------------|
-| boot | `boot.bin` | Production flash image (stays in download mode after boot TFTP) |
+| boot | `boot-img/<board>/boot.bin` | Production flash image, per-board slot (stays in download mode after boot TFTP) |
 | ramtest | `btcode/build/test.bin` | RAM-test image with read-back verification |
 
 ### Build pipeline
@@ -246,7 +246,7 @@ start.o
 boot.elf  ->  boot  (raw binary)
   |  cvimg (add Realtek flash header)
   v
-boot.bin        (final flash image)
+boot-img/<board>/boot.bin   (final flash image, per-board slot)
 ```
 
 ### Variables

@@ -1,7 +1,9 @@
 # /etc/inittab - init configuration for busybox init
 #
-# Minimal inittab in squashfs rootfs - boots system and mounts /userdata
-# Full configuration is in /userdata/etc/inittab (loaded after mount)
+# This is the whole init configuration. BusyBox init reads /etc/inittab and
+# nothing else, and it reads it before rcS mounts /userdata, so there is no
+# second inittab on the overlay - only the scripts these three lines run
+# (rcS, and rcK on shutdown) live under /userdata.
 #
 ::sysinit:/etc/init.d/rcS
 ttyS0::respawn:/sbin/getty -L 38400 ttyS0 vt100

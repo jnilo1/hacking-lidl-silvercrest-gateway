@@ -1,8 +1,8 @@
-# Running EmberZNet 8.x on the Lidl Silvercrest Gateway
+# Running EmberZNet 8.x on a Series 1 radio
 
 ## Background: The Series 1 Deprecation Problem
 
-The Lidl Silvercrest Gateway uses a **Silicon Labs EFR32MG1B** chip, which is a **Series 1** device.
+Every board this firmware supports carries a **Silicon Labs Series 1** radio — an **EFR32MG1B** on the Lidl Silvercrest Gateway, an **EFR32MG13P** on the Sengled Smart Hub G4.
 
 In 2024, Silicon Labs discontinued support for Series 1 chips in newer versions of their Zigbee stack:
 
@@ -11,7 +11,7 @@ In 2024, Silicon Labs discontinued support for Series 1 chips in newer versions 
 | Gecko SDK 4.x | 7.5.x | ✅ Last supported |
 | Simplicity SDK 2025.x | 8.x | ❌ Series 2 only |
 
-This means users of Series 1 devices (including the Lidl gateway) are stuck on EmberZNet 7.5.x if running the Zigbee stack directly on the chip using the traditional NCP (Network Co-Processor) architecture.
+This means users of Series 1 devices (which is every gateway here) are stuck on EmberZNet 7.5.x if running the Zigbee stack directly on the chip using the traditional NCP (Network Co-Processor) architecture.
 
 ## The Solution: RCP Architecture
 
@@ -338,7 +338,7 @@ Zigbeed Version: GSDK 8.2.2 - ...
 3. **Baud rate**: 460800 baud is the pre-built firmware default. All
    bauds up to 460800 (POSIX-capped by cpcd) run through the in-kernel
    UART bridge on kernel 6.18 (see
-   [baudrate guide](../README.md#baudrate-and-network-considerations)).
+   [baudrate guide](README.md#baudrate-and-network-considerations)).
 
 ---
 

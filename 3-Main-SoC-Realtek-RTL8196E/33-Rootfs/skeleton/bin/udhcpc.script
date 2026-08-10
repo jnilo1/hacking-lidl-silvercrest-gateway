@@ -6,14 +6,32 @@
 # `deconfig`). It configures the eth0 interface with the assigned IP, sets the
 # default route(s), and generates /etc/resolv.conf with the provided DNS servers.
 #
-# If no lease is obtained it falls back to IP 192.168.1.254 and adds a basic route.
-# A Google DNS server (8.8.8.8) is always appended as backup.
+# If no lease is obtained it falls back to the static configuration in
+# /userdata/etc/eth0.bak (same IPADDR/NETMASK/GATEWAY format as eth0.conf,
+# written with the installed subnet at flash time). A Google DNS server
+# (8.8.8.8) is always appended as backup.
 #
 # Output is logged with emoji markers to align with the rest of the boot log.
 #
 # J. Nilo - May 2025
 #
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
+
+# Convert dotted netmask (255.255.255.0) to CIDR prefix length (24).
+# Same helper as S10network — this script runs standalone, called by udhcpc.
+mask2cidr() {
+    n=0
+    OIFS="$IFS"; IFS='.'
+    for oct in $1; do
+        while [ "$oct" -gt 0 ]; do
+            n=$((n + (oct & 1)))
+            oct=$((oct >> 1))
+        done
+    done
+    IFS="$OIFS"
+    echo "$n"
+}
+
 case "$1" in
 deconfig)
     ip -4 addr flush dev "$interface"
@@ -31,9 +49,15 @@ renew | bound)
 $ip               $HOSTNAME
 HOSTS
     if [ -n "$router" ]; then
-        echo "Checking existing default routes"
-        if ip route show default | grep -q .; then
-            echo "Removing existing default routes"
+        # Same selector caveat as the leasefail branch below: BusyBox ignores
+        # the filter in `ip route show default` and prints the whole table, so
+        # this test used to match the connected route added just above and
+        # announce a removal on every single lease, whether or not there was
+        # anything to remove. Harmless in effect — the delete was already
+        # silenced and the routes end up correct either way — but the boot log
+        # claimed work that never happened. Match a real "default via ..." line.
+        if ip route show | grep -q '^default'; then
+            echo "Removing existing default route"
             ip route del default 2>/dev/null
         fi
         for i in $router; do
@@ -58,15 +82,40 @@ HOSTS
     mv "$tmpfile" "$realconf"
     ;;
 leasefail)
-    # Backup configuration in case of DHCP failure
-    echo "DHCP failed after 3 attempts, falling back to IP 192.168.1.254"
-    ip -4 addr flush dev "$interface"
-    ip addr add 192.168.1.254/24 dev "$interface"
-    echo "192.168.1.254" >/var/run/current_eth0_ip
+    # Backup configuration in case of DHCP failure. Read from
+    # /userdata/etc/eth0.bak, which the flash scripts write with an address in
+    # the subnet the gateway was installed on. The values below are only the
+    # last resort: a fixed 192.168.1.x used to be the ONLY behaviour here, which
+    # left the gateway unreachable on any other LAN — precisely the moment this
+    # fallback exists for.
+    FB_IPADDR=192.168.1.254
+    FB_NETMASK=255.255.255.0
+    FB_GATEWAY=192.168.1.1
+    if [ -f /userdata/etc/eth0.bak ]; then
+        # shellcheck disable=SC1091
+        . /userdata/etc/eth0.bak
+        [ -n "$IPADDR" ]  && FB_IPADDR="$IPADDR"
+        [ -n "$NETMASK" ] && FB_NETMASK="$NETMASK"
+        [ -n "$GATEWAY" ] && FB_GATEWAY="$GATEWAY"
+    fi
+    FB_CIDR=$(mask2cidr "$FB_NETMASK")
 
-    if ! ip route show default | grep -q .; then
-        echo "Adding fallback default route via 192.168.1.1"
-        ip route add default via 192.168.1.1 dev "$interface"
+    echo "DHCP failed after 3 attempts, falling back to IP $FB_IPADDR/$FB_CIDR"
+    ip -4 addr flush dev "$interface"
+    ip addr add "$FB_IPADDR/$FB_CIDR" dev "$interface"
+    echo "$FB_IPADDR" >/var/run/current_eth0_ip
+
+    # Match a real default route instead of trusting the selector: BusyBox's
+    # `ip route show default` ignores it and prints the whole table, so the
+    # previous test saw the connected route added a few lines above, concluded a
+    # default route already existed, and never installed one — leaving a
+    # fallen-back gateway reachable from its own subnet but with no route off
+    # it, while resolv.conf below points at 8.8.8.8. Measured on BusyBox 1.37.0:
+    # filtered and unfiltered output are byte-identical. Both BusyBox and
+    # iproute2 render a default route as "default via X dev Y".
+    if ! ip route show | grep -q '^default'; then
+        echo "Adding fallback default route via $FB_GATEWAY"
+        ip route add default via "$FB_GATEWAY" dev "$interface"
     fi
 
     # Set fallback DNS servers

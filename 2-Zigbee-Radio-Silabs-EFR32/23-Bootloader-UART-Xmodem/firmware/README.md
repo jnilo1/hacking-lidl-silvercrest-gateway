@@ -1,6 +1,15 @@
 # Bootloader Firmware Files
 
-Built firmware files for EFR32MG1B232F256GM48 (Lidl Silvercrest Gateway).
+Built firmware files for the EFR32 radio. Unsuffixed names are the Lidl
+Silvercrest board (EFR32MG1B232F256GM48); other boards carry a `-<board>`
+suffix.
+
+> The Sengled G4 bootloader **is** shipped prebuilt
+> (`bootloader-uart-xmodem-2.4.3-sengled-e39-g8c.gbl`) and has been run on
+> @hlyi's unit (#148). Treat any bootloader flash with care all the same — a
+> bad one is an SWD-only recovery. Note the memory map below is the MG1B case;
+> MG13 boards use the dedicated bootloader region at `0x0FE10000` (see the main
+> [README](../README.md)).
 
 ## Downloads (pre-built v2.4.2)
 

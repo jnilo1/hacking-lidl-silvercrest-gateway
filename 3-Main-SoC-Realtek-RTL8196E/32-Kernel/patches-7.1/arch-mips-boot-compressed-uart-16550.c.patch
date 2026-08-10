@@ -1,0 +1,16 @@
+--- a/arch/mips/boot/compressed/uart-16550.c
++++ b/arch/mips/boot/compressed/uart-16550.c
+@@ -25,6 +25,13 @@
+ #define PORT(offset)	(CKSEG1ADDR(EN75_UART_BASE) + (4 * (offset)))
+ #endif
+ 
++#ifdef CONFIG_REALTEK
++/* RTL8196E UART0 at 0x18002000 (SoC base 0x18000000 + UART0 offset 0x2000)
++ * Registers are 32-bit aligned (reg-shift=2 in DT), so offsets are << 2. */
++#define UART_BASE 0x18002000
++#define PORT(offset) (CKSEG1ADDR(UART_BASE) + ((offset) << 2))
++#endif
++
+ #ifndef IOTYPE
+ #define IOTYPE char
+ #endif

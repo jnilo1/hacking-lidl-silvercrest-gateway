@@ -16,8 +16,9 @@
 #   ./build_ncp.sh --help           # Show this help
 #
 # Output:
-#   firmware/ncp-uart-hw-<EmberVersion>-<BAUD>.gbl  (ready to flash via UART)
-#   firmware/ncp-uart-hw-<EmberVersion>-<BAUD>.s37  (for J-Link/SWD flashing)
+#   firmware/ncp-uart-hw-<EmberVersion>-<BAUD>-<flow>.gbl  (ready to flash via UART)
+#   firmware/ncp-uart-hw-<EmberVersion>-<BAUD>-<flow>.s37  (for J-Link/SWD flashing)
+#   <flow> = hw|sw|none, the board's UART flow-control type (#145).
 #
 # J. Nilo - December 2025; baud parameter added April 2026
 
@@ -32,8 +33,26 @@ PATCHES_DIR="${SCRIPT_DIR}/patches"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SILABS_TOOLS_DIR="${PROJECT_ROOT}/silabs-tools"
 
-# Target chip
-TARGET_DEVICE="EFR32MG1B232F256GM48"
+# Board selection (BOARD=lidl by default). board.env packages the chip OPN
+# and the UART routing to the RTL8196E; see ../boards/README.md.
+BOARDS_DIR="${SCRIPT_DIR}/../boards"
+BOARD="${BOARD:-lidl}"
+BOARD_ENV="${BOARDS_DIR}/${BOARD}/board.env"
+if [ ! -f "${BOARD_ENV}" ]; then
+    echo "Error: unknown BOARD='${BOARD}' (no ${BOARD_ENV})" >&2
+    echo "Available boards: $(cd "${BOARDS_DIR}" && ls -d */ 2>/dev/null | tr -d /)" >&2
+    exit 1
+fi
+# shellcheck source=/dev/null
+. "${BOARD_ENV}"
+. "${BOARDS_DIR}/lib_uart_config.sh"
+
+# Target chip — from the selected board.
+TARGET_DEVICE="${BOARD_TARGET_DEVICE:?board.env must set BOARD_TARGET_DEVICE}"
+
+# Non-default boards get a filename suffix so their artefacts don't overwrite
+# the lidl reference firmware (which keeps its historical name).
+[ "${BOARD}" = "lidl" ] && BOARD_SUFFIX="" || BOARD_SUFFIX="-${BOARD}"
 
 # Default baud — historical NCP default. Override via positional arg.
 DEFAULT_BAUD=115200
@@ -78,6 +97,7 @@ esac
 
 echo "========================================="
 echo "  NCP-UART-HW Firmware Builder"
+echo "  Board:  ${BOARD} (${BOARD_NAME})"
 echo "  Target: ${TARGET_DEVICE}"
 echo "  Baud:   ${BAUD}"
 echo "========================================="
@@ -103,7 +123,7 @@ if ! command -v slc >/dev/null 2>&1; then
     echo "slc (Silicon Labs CLI) not found in PATH"
     echo ""
     echo "Setup options:"
-    echo "  1. Use Docker: docker run -it --rm -v \$(pwd):/workspace lidl-gateway-builder"
+    echo "  1. Use Docker: docker run -it --rm -v \$(pwd):/workspace rtl8196e-gateway-builder"
     echo "  2. Native: cd 1-Build-Environment/12-silabs-toolchain && ./install_silabs.sh"
     exit 1
 fi
@@ -175,7 +195,20 @@ cd "${BUILD_DIR}"
 cp "${PATCHES_DIR}/ncp-uart-hw.slcp" .
 cp "${PATCHES_DIR}/main.c" .
 cp "${PATCHES_DIR}/app.c" .
-echo "  - Copied project files from patches"
+# Point the project's device component at the selected board's MCU. The slcp
+# pins the lidl part; leaving it on another board pulls a second device family's
+# sources (duplicate-symbol link error). For lidl TARGET_DEVICE is the same
+# string, so the slcp is byte-identical.
+sed -i "s/EFR32MG1B232F256GM48/${TARGET_DEVICE}/g" ncp-uart-hw.slcp
+# Point the slcp's flow-control config item at the board's flow type too, so the
+# project file matches the VCOM header that apply_uart_config writes below. The
+# header is what the firmware actually compiles against (and is copied from
+# patches/ + sed'd regardless), so this slcp edit changes no binary — but a
+# stale "usartHwFlowControlCtsAndRts" here on a sw board is misleading (#130).
+# lidl resolves back to the same hw token, so the slcp stays byte-identical.
+NCP_FLOW_TOK="$(flow_control_token usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware)" || exit 1
+sed -i -E "s|(SL_IOSTREAM_USART_VCOM_FLOW_CONTROL_TYPE, value: )[A-Za-z0-9]+|\1${NCP_FLOW_TOK}|" ncp-uart-hw.slcp
+echo "  - Copied project files from patches (device=${TARGET_DEVICE}, flow=${BOARD_UART_FLOW})"
 
 # =========================================
 # Generate project with slc
@@ -193,7 +226,11 @@ cp "${PATCHES_DIR}/sl_iostream_usart_vcom_config.h" config/
 cp "${PATCHES_DIR}/sl_rail_util_pti_config.h" config/
 # Substitute the requested baud into the UART config header
 sed -i "s|^#define SL_IOSTREAM_USART_VCOM_BAUDRATE.*|#define SL_IOSTREAM_USART_VCOM_BAUDRATE              ${BAUD}|" config/sl_iostream_usart_vcom_config.h
-echo "  - Copied UART and PTI config from patches (baud=${BAUD})"
+# Apply the selected board's UART routing — a no-op (byte-identical header)
+# for the lidl reference, the override path for ported boards.
+apply_uart_config config/sl_iostream_usart_vcom_config.h \
+    SL_IOSTREAM_USART_VCOM usartHwFlowControlCtsAndRts usartHwFlowControlNone uartFlowControlSoftware
+echo "  - Copied UART and PTI config from patches (baud=${BAUD}, board=${BOARD}, flow=${BOARD_UART_FLOW})"
 
 echo "  Patching Makefile..."
 ARM_GCC_DIR=$(dirname $(dirname $(which arm-none-eabi-gcc)))
@@ -234,7 +271,10 @@ echo "Copying output files..."
 mkdir -p "${OUTPUT_DIR}"
 
 SRC_BASE="build/debug/ncp-uart-hw"
-OUT_BASE="ncp-uart-hw-${EMBERZNET_VERSION}-${BAUD}"
+# Flow-control type in the filename (#145). NCP honours all three modes, so the
+# as-built flow == board.env's BOARD_UART_FLOW.
+FLOW_TAG="${BOARD_UART_FLOW}"
+OUT_BASE="ncp-uart-hw-${EMBERZNET_VERSION}-${BAUD}-${FLOW_TAG}${BOARD_SUFFIX}"
 
 # Only remove the specific files we're about to rewrite — preserve other baud
 # variants in firmware/ (the matrix lives here side-by-side).

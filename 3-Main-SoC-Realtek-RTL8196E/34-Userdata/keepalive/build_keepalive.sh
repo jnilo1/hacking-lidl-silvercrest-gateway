@@ -4,8 +4,9 @@
 # keepalive: minimal process supervisor. Runs one child, restarts it with
 # backoff on exit, forwards SIGTERM/SIGINT for clean stop. Used by S70otbr to
 # supervise otbr-agent and the otbr-monitor housekeeping loop, so neither a
-# crashed agent nor a busybox-ash SIGSEGV in the monitor leaves OTBR down
-# (issue #109). C, like s40button, so the supervisor never runs ash itself.
+# crashed agent leaves OTBR down. Written when a busybox-ash SIGSEGV in the
+# monitor was the other way it could happen (issue #109 — since root-caused to
+# our own TLB flush and fixed); C still fits a supervisor that forks nothing.
 #
 # See ./src/keepalive.c for the full mechanism documentation.
 #

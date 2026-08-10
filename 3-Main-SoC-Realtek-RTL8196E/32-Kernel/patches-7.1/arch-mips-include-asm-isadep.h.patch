@@ -1,0 +1,11 @@
+--- a/arch/mips/include/asm/isadep.h
++++ b/arch/mips/include/asm/isadep.h
+@@ -10,7 +10,7 @@
+ #ifndef __ASM_ISADEP_H
+ #define __ASM_ISADEP_H
+ 
+-#if defined(CONFIG_CPU_R3000)
++#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_RLX4181)
+ /*
+  * R2000 or R3000
+  */

@@ -2,6 +2,10 @@
 
 This directory contains the writable user partition for the gateway.
 
+> **Board- and kernel-agnostic:** the same `userdata.bin` works for every board
+> (`lidl`, `sengled-e39-g8c`) and kernel line (`6.18`, `7.1`). No `BOARD`/`KERNEL`
+> selection applies here.
+
 ## Overview
 
 Unlike the root filesystem (read-only SquashFS), the userdata partition uses **JFFS2** — a writable, wear-leveling filesystem designed for flash memory.
@@ -26,11 +30,16 @@ Mount /userdata (JFFS2)
 Execute init scripts:
   S05syslog      → Start system logging
   S10network     → Configure network (DHCP or static)
+  S11leds        → Apply LED brightness mode from leds.conf
   S15hostname    → Set hostname, /etc/hosts
   S20time        → Set timezone, start the ntpd daemon
+  S25watchdog    → Feed the hardware watchdog
+  S26panicrec    → Persist a kernel panic post-mortem left in reserved DRAM
   S30dropbear    → Start SSH server
+  S40button      → Front-panel button daemon (long press → recover the radio)
   S50uart_bridge → Arm the in-kernel UART↔TCP bridge (skipped if radio mode = otbr)
   S70otbr        → Start Thread border router (if radio mode = otbr)
+  S80netwatch    → Network-isolation watchdog (OFF unless enabled — see below)
   S90checkpasswd → Warn if default password
 ```
 
@@ -48,18 +57,26 @@ Execute init scripts:
 │   ├── ntp.conf        # NTP server configuration
 │   ├── eth0.bak        # Static IP template (for reference)
 │   ├── radio.conf      # Radio mode: MODE=otbr for Thread (absent = Zigbee)
+│   ├── netwatch.conf   # Network-isolation watchdog (NOT shipped — create to enable)
 │   ├── dropbear/       # Dropbear SSH host keys (generated on first boot)
 │   └── init.d/         # Init scripts (executed by rootfs bootstrap)
 │       ├── S05syslog
 │       ├── S10network
+│       ├── S11leds
 │       ├── S15hostname
 │       ├── S20time
+│       ├── S25watchdog
+│       ├── S26panicrec
 │       ├── S30dropbear
+│       ├── S40button
 │       ├── S50uart_bridge
 │       ├── S70otbr
+│       ├── S80netwatch
 │       └── S90checkpasswd
 ├── ssh/
 │   └── authorized_keys # SSH public keys for passwordless access
+├── netwatch/           # Incident snapshots + reboot budget (created once enabled)
+├── panic/              # Kernel panic post-mortems (created by S26panicrec)
 ├── thread/             # Thread network credentials (created by otbr-agent)
 └── usr/
     ├── bin/            # User applications (nano, otbr-agent, ot-ctl, boothold)
@@ -69,8 +86,8 @@ Execute init scripts:
 
 ## Network Configuration
 
-`flash_userdata.sh` asks for network configuration and radio mode at flash time.
-The settings are baked into `userdata.bin` before flashing.
+`flash_userdata.sh` asks for network configuration at flash time. The settings
+are baked into `userdata.bin` before flashing.
 
 To change the IP after flashing, edit `/userdata/etc/eth0.conf` on the running gateway:
 
@@ -91,9 +108,10 @@ Then restart the network: `/userdata/etc/init.d/S10network restart`
 
 ## Radio Mode
 
-The gateway supports two radio modes, selected at flash time. **Mode is
-controlled by `/userdata/etc/radio.conf`** (managed automatically by
-`flash_efr32.sh` since v3.1):
+The gateway supports two radio modes, selected when the separate EFR32 is
+flashed. **Mode is controlled by `/userdata/etc/radio.conf`**, which
+`flash_efr32.sh` generates or updates automatically after a successful
+application flash:
 
 | Mode | `radio.conf` keys | Init script that wakes up | EFR32 firmware | Use case |
 |------|---------|-------------|----------------|----------|
@@ -113,6 +131,7 @@ See `ot-br-posix/README.md` for Thread-specific documentation.
 | `FIRMWARE` | `ncp`, `rcp`, `otrcp`, `router` | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_VERSION` | e.g. `7.5.1` (NCP, Router only) | (absent) | `flash_efr32.sh` | docs / diagnostics |
 | `FIRMWARE_BAUD` | `115200`, `230400`, `460800`, `691200`, `892857` | `460800` | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
+| `FIRMWARE_FLOW_CTRL` | `none`, `sw`, `hw` | (absent ⇒ devicetree per-board default) | `flash_efr32.sh` — app flashes (#141) | `S50uart_bridge`, `S70otbr` |
 | `BOOTLOADER_VERSION` | e.g. `2.4.2` | (absent) | `flash_efr32.sh` — every flash | docs / diagnostics |
 | `MODE` | `otbr` (or absent) | (absent = Zigbee) | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
 | `BRIDGE_BIND` | `0.0.0.0`, `127.0.0.1` | `0.0.0.0` | (manual) | `S50uart_bridge` |
@@ -161,6 +180,21 @@ If the chip happens to be sitting in the Gecko Bootloader (empty or
 corrupt application slot), `FIRMWARE` may be stale — the actual
 runtime state is detected by `flash_efr32.sh`'s pre-flight probe.
 
+#### `FIRMWARE_FLOW_CTRL` (v4.0.0, #141)
+
+The chip's flow-control mode (`hw` | `sw` | `none`), written on every
+application flash from the selected board's
+`2-Zigbee-Radio-Silabs-EFR32/boards/<board>/board.env`
+(`BOARD_UART_FLOW` — `hw` on the Lidl reference, `sw` on the Sengled G4).
+`S50uart_bridge` writes it verbatim to the bridge's `flow_control` knob;
+`S70otbr` omits the `uart-flow-control` parameter from the spinel URL for
+`none`/`sw` — OpenThread treats that parameter as a presence flag, so any
+value (even `false`) would enable CRTSCTS (#142).
+When the key is absent (a config from before v4.0.0, never reflashed),
+the bridge falls back to the devicetree per-board default and `S70otbr`
+assumes `hw` — the case that used to require adding the key by hand on a
+G4 running OT-RCP.
+
 ### Switching Radio Mode
 
 To switch between modes on a running gateway:
@@ -168,7 +202,7 @@ To switch between modes on a running gateway:
 **Thread → Zigbee:**
 ```bash
 # Reflash EFR32 with NCP firmware (from your workstation)
-./flash_efr32.sh -y ncp                    # default IP 192.168.1.88
+./flash_efr32.sh -y ncp                    # gateway from gateway.env
 # or: ./flash_efr32.sh -y -g 10.0.0.5 ncp  # custom IP
 
 # That's it. The script stops otbr-agent if running, flashes the new
@@ -192,9 +226,9 @@ To switch between modes on a running gateway:
 > handles both the chip flash AND the gateway-side `radio.conf` rewrite
 > in one shot.
 
-Alternatively, reflash the entire userdata partition with
-`flash_userdata.sh` — its prompt sets the radio mode at flash time
-(useful for a fresh install).
+Do not reflash the userdata partition just to change radio mode. Run
+`flash_efr32.sh` so the EFR32 application and its host-side configuration are
+updated together.
 
 ## SSH Passwordless Access
 
@@ -202,11 +236,15 @@ The `/userdata/ssh/authorized_keys` file allows SSH access without a password. A
 
 ```bash
 # On your workstation, copy your public key
-cat ~/.ssh/id_rsa.pub
+cat ~/.ssh/id_ed25519.pub
 
 # Add it to authorized_keys on the gateway
-echo "ssh-rsa AAAA... user@host" >> /userdata/ssh/authorized_keys
+echo "ssh-ed25519 AAAA... user@host" >> /userdata/ssh/authorized_keys
 ```
+
+An RSA user key works just as well — the gateway stopped generating an RSA
+*host* key, which is a different thing. `ssh-copy-id root@<gateway-ip>` does all
+of this for whichever key you already have.
 
 Dropbear is configured to read this file, enabling secure key-based authentication.
 
@@ -217,6 +255,7 @@ Dropbear is configured to read this file, enabling secure key-based authenticati
 | `skeleton/` | Base structure for the user partition |
 | `nano/` | GNU nano text editor build |
 | `ot-br-posix/` | OpenThread Border Router build |
+| `wireguard/` | WireGuard build **and** opt-in payload — NOT shipped, see its README |
 | `build_userdata.sh` | Script to assemble and package the partition |
 
 The Zigbee UART↔TCP bridge is now in-kernel (`rtl8196e-uart-bridge`, part of
@@ -258,6 +297,28 @@ Lightweight text editor for editing configuration files directly on the gateway.
 If your terminal emulator uses a different type, you can add the corresponding terminfo file to `/userdata/usr/share/terminfo/<first-letter>/<name>`.
 
 **Terminal size:** The `profile` automatically runs `resize` at login to detect the terminal dimensions. This ensures nano and other curses applications display at the correct size.
+
+### WireGuard — available, not shipped
+
+**Neither the userdata image nor the shipped kernels carry WireGuard.** The
+complete, working setup — `wg`, `wg-link`, `wireguardctl`, `S60wireguard` and
+the config templates — lives in `wireguard/` and is installed by hand on the
+gateways that want it.
+
+The reason is throughput, not maturity: `CONFIG_WIREGUARD=y` costs **3.7 Mbit/s
+of Ethernet TX** (about 5 %) on this SoC *while never executing*. The option
+links ahead of the whole network stack and its ~71 KiB displace every hot
+symbol downstream, which a 16 KiB I-cache and an 8 KiB D-cache pay for. Padding
+the same link slot with inert bytes reproduces the loss exactly, and the
+symbols WireGuard selects cost nothing on their own — so it really is the
+placement. `CONFIG_WIREGUARD=m` is not an option: `CONFIG_MODULES` is off on
+both kernel lines.
+
+Charging every gateway 5 % of its TX for a feature that defaults to off was not
+worth it. **`wireguard/README.md` carries the measurements and a step-by-step
+install** — rebuild a kernel with the driver, build the tools, copy them into
+`/userdata`, then configure. Note that a hand-install survives reboots but not
+a userdata reflash.
 
 ### In-kernel UART↔TCP bridge (`rtl8196e-uart-bridge`)
 
@@ -307,6 +368,80 @@ socket://<LINUX_IP>:8888
 ```
 
 Source: `../32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/`.
+
+### netwatch — network-isolation watchdog (`S80netwatch`)
+
+**Shipped disabled. It reboots the gateway, so it is never switched on for you.**
+
+The hardware watchdog armed by `S25watchdog` only catches a stopped CPU: the
+feeder is a userspace process, so a kernel hang stops the kicks and the chip
+resets the board. It cannot see the other way a gateway disappears — userspace
+alive, network path dead. The kicks keep coming, the chip stays quiet, and the
+box is simply gone from the LAN until someone power-cycles it.
+
+That blindness costs more than the outage. The power cycle is itself the
+evidence-destroying step: it clears the watchdog reset-reason latch and wipes
+the reserved DRAM page holding any panic record, so `S26panicrec` never gets
+the chance. A remote installation is left with an outage of unknown duration
+and no cause at all.
+
+`netwatch` probes targets with ICMP echo from the only vantage point that still
+works in that state — the box itself. After a long continuous failure **with
+the link carrier still up**, it writes a snapshot to
+`/userdata/netwatch/incidents.log` and reboots. The snapshot is the point; the
+reboot is the by-product. It is on JFFS2, so it survives the reboot, a later
+power cycle, and everything else: reason, action taken, uptime, carrier, the
+probe targets, `operstate`, `/proc/net/dev` counters, routes, the ARP table,
+and the last 8 KB of the kernel ring — which is where the driver's own
+`last reset:` line and any TX-timeout or switch-reset messages live.
+
+**Enabling it.** Create `/userdata/etc/netwatch.conf` — the file is not shipped,
+so its absence is what keeps the daemon inert:
+
+```sh
+cat > /userdata/etc/netwatch.conf <<'EOF'
+ENABLED=1
+TARGETS="192.168.1.1 192.168.1.10"
+EOF
+/userdata/etc/init.d/S80netwatch start
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `ENABLED` | `0` | `1` arms the daemon; anything else leaves it installed and inert |
+| `TARGETS` | default route | extra probe targets, space separated, max 8 |
+| `FAIL_MIN` | `15` | continuous unreachable **minutes** before acting |
+| `POLL_SEC` | `30` | probe period |
+| `MAX_REBOOT` | `3` | reboots allowed per window |
+| `WINDOW_H` | `24` | window for that budget |
+| `DRY_RUN` | `0` | `1` records the decision and never reboots — same snapshot, no reboot |
+
+**Who should enable it.** A gateway you cannot power-cycle yourself: remote,
+unattended, or somewhere an unattended reboot is the lesser evil. On a box
+within arm's reach, `DRY_RUN=1` gives the same forensic record without ever
+rebooting.
+
+Three behaviours worth knowing before you rely on it:
+
+- **Carrier must be up.** Carrier down means the cable is out or the peer switch
+  is off — a physical fault no reboot fixes, and one a human may have caused
+  deliberately. The streak is held at zero so a maintenance unplug can never
+  accumulate into a reboot.
+- **The reboot budget fails closed.** It is persisted in `/userdata` so it
+  survives the reboot it bounds. If it cannot be written, no reboot happens: an
+  unbounded loop on unreachable hardware would be worse than the outage.
+- **Every reset reads as `power-on / pin reset`,** never `watchdog timeout`.
+  The driver only reports the latter when `WDIND` is set, and that bit does not
+  survive the reset it flags — checked on the bench for both a panic-armed
+  reset and a natural counter overflow. A netwatch reboot, a power cycle and a
+  real watchdog bite all look alike on that line; only a panic record proves a
+  watchdog recovery.
+
+It only catches an isolated *network path*. A radio that stops answering while
+Ethernet stays up is invisible to it — that is what the `keepalive` supervisor
+around `otbr-agent` is for.
+
+Source: `netwatch/src/netwatch.c`.
 
 ## Adding Custom terminfo
 

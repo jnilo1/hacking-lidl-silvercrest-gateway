@@ -9,9 +9,9 @@
 #   ./build_otbr.sh [branch/tag/commit]
 #
 # Examples:
-#   ./build_otbr.sh              # Default (pinned commit below)
+#   ./build_otbr.sh              # Default (pinned release tag below)
 #   ./build_otbr.sh main         # Latest development branch
-#   ./build_otbr.sh thread-reference-20250612  # Official release tag
+#   ./build_otbr.sh v2026.06.0   # An earlier upstream release
 #
 # Note: This is a complex project with many dependencies. This script is meant
 # for experimentation and may require adjustments based on your needs.
@@ -27,8 +27,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Project root is 4 levels up: ot-br-posix -> 34-Userdata -> 3-Main-SoC -> project root
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
-# Pinned commit for reproducible builds.
-# This is thread-reference-20250612 + main as of 2026-05-01.
+# Pinned revision for reproducible builds — an upstream release tag since
+# v2026.07.0 (2026-06-25), which supersedes the earlier practice of pinning a
+# main-branch commit (the last one was 717abf0d, 2026-05-01).
 # Compatibility with Home Assistant:
 #   - HA Core >= 2026.5 ships python-otbr-api >= 2.10.0 (PR #244,
 #     merged 2026-04-27).  2.10.0 auto-detects the schema by probing
@@ -44,7 +45,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 # version of 2026.5 AND switches its callers to camelCase.
 # To update: check https://github.com/openthread/ot-br-posix/releases
 #            or test with: ./build_otbr.sh main
-OTBR_DEFAULT="717abf0dc373f9a8effa0411f4811c06a5b7d260"  # 2026-05-01
+OTBR_DEFAULT="v2026.07.0"  # released 2026-07-01, openthread submodule c34311ff5
 BRANCH="${1:-$OTBR_DEFAULT}"
 SOURCE_DIR="${SCRIPT_DIR}/ot-br-posix"
 BUILD_DIR="${SCRIPT_DIR}/build"
@@ -67,8 +68,11 @@ if [ ! -d "$SOURCE_DIR" ]; then
 else
     echo "==> Source directory exists, updating..."
     cd "$SOURCE_DIR"
-    # Drop any HA-compat patches from the previous run so checkout is clean.
+    # Drop the patches from the previous run so checkout is clean — the
+    # submodules too (patch 3 below lands in the openthread submodule, which
+    # `git reset` on the superproject does not touch).
     git reset --hard HEAD
+    git submodule foreach --recursive --quiet 'git reset --hard --quiet HEAD'
     git fetch origin
     git checkout "$BRANCH"
     git submodule update --init --recursive
@@ -132,6 +136,23 @@ if [ -f "$REST_CPP" ] && \
     sed -i -E \
         's#^([[:space:]]*)(mServer\.(Get|Post|Delete|Options|Put|Patch)\(OT_REST_ROUTE_ACTIONS)#\1// PATCHED HA-compat: \2#' \
         "$REST_CPP"
+fi
+
+# Patch 3: software flow control on the RCP UART (discussion #134, @hlyi).
+# Upstream OpenThread only knows hardware flow control: OpenFile() calls
+# cfmakeraw() (which clears IXON/IXOFF) and the sole flow-control URL parameter,
+# uart-flow-control, sets CRTSCTS.  A board that does not wire RTS/CTS (the
+# Sengled G4) runs its OT-RCP with the iostream backend, which DOES emit XON/XOFF
+# — and on a tty without IXON those 0x11/0x13 bytes reach the HDLC decoder as
+# frame data, fail the FCS, and drop the frame.  The patch adds the missing
+# uart-sw-flow-control parameter (IXON|IXOFF), which S70otbr passes when
+# radio.conf says FIRMWARE_FLOW_CTRL=sw.  Authored and field-validated by @hlyi.
+OT_REPO="${SOURCE_DIR}/third_party/openthread/repo"
+SW_FLOW_PATCH="${SCRIPT_DIR}/patches/openthread-uart-sw-flow-control.patch"
+if [ -f "$SW_FLOW_PATCH" ] && \
+   ! grep -q 'uart-sw-flow-control' "${OT_REPO}/src/posix/platform/hdlc_interface.cpp"; then
+    echo "==> Patching OpenThread: uart-sw-flow-control (XON/XOFF) support (#134)..."
+    git -C "$OT_REPO" apply "$SW_FLOW_PATCH"
 fi
 
 # Lexra toolchain (musl 1.2.5)

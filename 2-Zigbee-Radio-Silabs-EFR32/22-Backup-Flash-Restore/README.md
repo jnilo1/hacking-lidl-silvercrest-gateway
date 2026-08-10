@@ -2,10 +2,10 @@
 
 ## Overview
 
-This guide covers the **EFR32MG1B Zigbee radio chip** firmware, not the main Linux system running on the RTL8196E SoC. The Lidl Silvercrest gateway contains two separate processors:
+This guide covers the **EFR32 Zigbee radio chip** firmware, not the main Linux system running on the RTL8196E SoC. Every supported gateway contains two separate processors:
 
 - **RTL8196E** (main SoC): Runs Linux 6.18 with the in-kernel `rtl8196e-uart-bridge` driver exposing the EFR32 UART on TCP:8888
-- **EFR32MG1B232F256GM48** (Zigbee radio): Runs the EmberZNet/EZSP firmware covered here
+- **EFR32** (Zigbee radio): Runs the EmberZNet/EZSP firmware covered here — an EFR32MG1B232F256GM48 on the Lidl Silvercrest board, an EFR32MG13P732F512IM32 on the Sengled Smart Hub G4
 
 Before modifying the Zigbee radio firmware, it is **strongly recommended** to back up the original firmware. This ensures you can recover in case of a failed update or configuration error.
 
@@ -16,7 +16,11 @@ This guide describes two main methods:
 | **Method 1: SWD** | Full backup/restore, recovery from brick | J-Link debugger |
 | **Method 2: UART** | Routine firmware updates | None (network only) |
 
-> **Important**: Backing up the original firmware requires a hardware debugger (Method 1). The software method (Method 2) can only **flash** new firmware, not read or backup existing firmware. If you want to preserve the original Lidl firmware before experimenting, you **must** use a J-Link or compatible SWD debugger.
+> **Important**: Backing up the original firmware requires a hardware debugger
+> (Method 1). The software method (Method 2) can only **flash** new firmware,
+> not read or back up existing firmware. If you want to preserve the original
+> Lidl or Sengled radio firmware before experimenting, you **must** use a J-Link
+> or compatible SWD debugger.
 
 ---
 
@@ -36,7 +40,10 @@ This guide describes two main methods:
 
 ### Requirements
 
-- Lidl Silvercrest gateway with accessible SWD pins
+- An RTL8196E gateway with accessible EFR32 SWD pins: header J1 on the
+  [Lidl Silvercrest board](../../0-Hardware/README.md#j1-pinout),
+  or the annotated debug pads on the back of the
+  [Sengled Smart Hub G4](../../0-Hardware/sengled-e39-g8c/README.md#radio-swdjtag-pads)
 - A J-Link or compatible SWD debugger. I personally use a cheap (less than 5 USD incl shipping) OB-ARM Emulator Debugger Programmer:
   <p align="center"> <img src="./media/image1.png" alt="OB-ARM debugger" width="70%"> </p>
 
@@ -45,7 +52,7 @@ A useful investment! You can also build your own debugger with a Raspberry Pico 
 - [Simplicity Studio V5](https://www.silabs.com/developers/simplicity-studio) with `commander` tool
 - Dupont jumper wires (x4)
 
-### Pinout and Wiring
+### Lidl J1 Pinout and Wiring
 
 | Gateway Pin | Function    | J-Link Pin |
 |-------------|-------------|------------|
@@ -53,6 +60,9 @@ A useful investment! You can also build your own debugger with a Raspberry Pico 
 | 2           | GND         | GND        |
 | 5           | SWDIO       | SWDIO      |
 | 6           | SWCLK       | SWCLK      |
+
+The Sengled G4 does not use the Lidl J1 layout. Use the SWCLK, SWDIO, and GND
+labels in the [annotated Sengled PCB photograph](../../0-Hardware/sengled-e39-g8c/README.md#radio-swdjtag-pads).
 
 ### Backup Procedure
 
@@ -95,18 +105,30 @@ commander gbl flash --device EFR32MG1B232F256GM48 firmware.gbl
 
 ## Method 2: Software-Based Flash via UART
 
-This method uses the in-kernel `rtl8196e-uart-bridge` (6.18 kernel) on the Lidl gateway to expose the EFR32 serial port over TCP, allowing remote firmware updates via the Gecko Bootloader.
+This method uses the in-kernel `rtl8196e-uart-bridge` (6.18 kernel) to expose
+the EFR32 serial port over TCP, allowing remote firmware updates via the Gecko
+Bootloader on both supported gateway families.
 
 > **Limitation**: This method only supports `.gbl` files. For full backup/restore, use Method 1 (SWD).
 
 Use the `flash_efr32.sh` script at the repository root:
 
 ```bash
-./flash_efr32.sh -y ncp                    # default IP 192.168.1.88
+# Lidl Silvercrest (default board)
+./flash_efr32.sh -y ncp                    # gateway from gateway.env
 ./flash_efr32.sh -y ncp 460800             # NCP at non-default baud
 ./flash_efr32.sh -y -g 10.0.0.5 otrcp      # custom gateway IP, OT-RCP
+
+# Sengled Smart Hub G4: NCP at its board-safe default (115200)
+./flash_efr32.sh -y --board sengled-e39-g8c -g 10.0.0.6 ncp
+
 ./flash_efr32.sh --help                    # full CLI reference
 ```
+
+The Sengled command selects the board-specific `-sengled-e39-g8c.gbl` image,
+uses that board's UART flow-control settings, and verifies the live devicetree
+model before flashing. For Sengled RCP or OT-RCP, omit the baud argument to use
+the tested board default of 230400.
 
 Firmware aliases: `bootloader`, `ncp`, `rcp`, `otrcp`, `router` (numeric
 `1`-`5` also accepted). Per-firmware supported bauds are listed in
@@ -307,9 +329,14 @@ Terminal 2: universal-silabs-flasher ...     (works!)
 ### Flash via UART (most common)
 
 ```bash
+# Lidl Silvercrest (default board)
 ./flash_efr32.sh -y ncp                    # NCP @ default baud, default IP
 ./flash_efr32.sh -y ncp 460800             # NCP @ 460800
 ./flash_efr32.sh -y -g 10.0.0.5 otrcp      # OT-RCP, custom IP
+
+# Sengled Smart Hub G4 (board-specific image and safe defaults)
+./flash_efr32.sh -y --board sengled-e39-g8c -g 10.0.0.6 ncp
+
 ./flash_efr32.sh --help                    # full CLI reference
 ```
 

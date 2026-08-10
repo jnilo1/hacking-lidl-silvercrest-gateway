@@ -1,4 +1,4 @@
-# Use case 2 — Multipan (Zigbee + Thread concurrent) — **not supported on this gateway**
+# Use case 2 — Multipan (Zigbee + Thread concurrent) — **not supported on Series 1 radios**
 
 This directory used to hold a `Dockerfile.multiarch` that built an image
 bundling `cpcd`, `zigbeed` and `otbr-agent` into one container, with
@@ -6,14 +6,15 @@ bundling `cpcd`, `zigbeed` and `otbr-agent` into one container, with
 on IID=2 — the classic "multi-PAN host" pattern.
 
 The Dockerfile and its companion compose file were removed from the repo
-because **concurrent Zigbee + Thread is not achievable on the Lidl
-Silvercrest gateway's radio**, and this project is hardware-locked to
-that gateway. Keeping unreachable infrastructure in the tree was only
-going to mislead future readers.
+because **concurrent Zigbee + Thread is not achievable on a Series 1
+EFR32**, and every board this firmware supports carries one. Keeping
+unreachable infrastructure in the tree was only going to mislead future
+readers.
 
 ## Why it cannot work here
 
-The gateway's Zigbee radio is the **EFR32MG1B** (Silicon Labs Series 1).
+The Zigbee radio is an **EFR32MG1B** on the Lidl board and an **EFR32MG13P**
+on the Sengled G4 — both Silicon Labs **Series 1**.
 Concurrent Zigbee + Thread over a single RCP requires Silicon Labs'
 **Concurrent Multiprotocol (CMP)**, which is a **Series 2-only** feature
 (EFR32MG21 / MG24). On Series 1, RAIL only supports **Dynamic Multiprotocol
@@ -35,12 +36,12 @@ different scenario (two simultaneous Zigbee networks on the same channel).
 
 ## What to do instead
 
-On this gateway, run **one protocol at a time** by reflashing the EFR32
+On these gateways, run **one protocol at a time** by reflashing the EFR32
 with the appropriate single-protocol firmware:
 
 | I want… | Flash | Host docker |
 |---|---|---|
-| Zigbee (EmberZNet 8.2.2, EZSP v18) | `rcp-uart-802154.gbl` | [`../docker-compose-zigbee.yml`](../docker-compose-zigbee.yml) |
-| Thread / Matter-over-Thread | `../../../26-OT-RCP/firmware/ot-rcp.gbl` | `../../../26-OT-RCP/docker/docker-compose-otbr-host.yml` |
+| Zigbee (EmberZNet 8.2.2, EZSP v18) | `./flash_efr32.sh rcp` | [`../docker-compose-zigbee.yml`](../docker-compose-zigbee.yml) |
+| Thread / Matter-over-Thread | `./flash_efr32.sh otrcp` | `../../../26-OT-RCP/docker/docker-compose-otbr-host.yml` |
 
 Swapping is ~30 s via `flash_efr32.sh` from the repo root.

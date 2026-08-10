@@ -9,36 +9,79 @@
 #   docker-compose-otbr-host.yml    — Use case 2: OTBR on host
 #
 # Prerequisites:
-#   1. Flash ot-rcp.gbl to the EFR32
+#   1. Flash the OT-RCP firmware: ./flash_efr32.sh otrcp   (from the repo root)
 #   2. Flash userdata in Thread mode (flash_userdata.sh → select "Thread")
 #   3. Verify OTBR is running: curl http://<GATEWAY_IP>:8081/node
 #
 # Usage:
-#   1. Edit GATEWAY_IP below
-#   2. docker compose -f docker-compose-otbr-gateway.yml up -d
-#   3. Open Home Assistant at http://localhost:8123
-#   4. Add integrations:
-#      - OTBR: http://<GATEWAY_IP>:8081  (NOT localhost — it runs on the gateway)
-#      - Matter: ws://localhost:5580/ws
-#   5. Commission Matter devices via Settings → Devices → Add Device → Matter
+#   1. docker compose -f docker-compose-otbr-gateway.yml up -d
+#   2. Open Home Assistant at http://<HOST_IP>:8123
+#   3. Add integrations:
+#      - Thread / OTBR:  http://<GATEWAY_IP>:8081   (the gateway, NOT localhost)
+#      - Matter:         ws://localhost:5580/ws
+#   4. Commission Matter devices via Settings → Devices → Add Device → Matter
+#
+# ---------------------------------------------------------------------------
+# Matter Server: matter.js, not python-matter-server
+#
+# The Matter server was rewritten on matter.js and moved to a new image
+# (ghcr.io/matter-js/matterjs-server) — this is what the current Home Assistant
+# "Matter Server" add-on packages. It is a drop-in replacement: same WebSocket API on
+# :5580/ws, plus a web dashboard on :5580/. The old ghcr.io/matter-js/python-matter-server
+# is frozen at 8.1.2 and no longer updated.
+#
+# This file mounts a NEW volume (matterjs_data) and leaves the legacy volume (matter_data)
+# declared but unmounted, so a rollback is just putting the old image and volume names
+# back. Consequence of starting on an empty volume: a fresh Matter fabric — every device
+# has to be re-commissioned.
+#
+# To migrate the existing fabric instead of starting fresh, copy the old volume over
+# BEFORE the first start — the storage format is upgraded on first run, one way only:
+#
+#   docker compose -f docker-compose-otbr-gateway.yml down
+#   docker volume ls | grep matter     # volumes carry the compose project name as prefix
+#   docker run --rm -v <project>_matter_data:/from -v <project>_matterjs_data:/to alpine \
+#       sh -c 'cp -a /from/. /to/ && chown -R 1000:1000 /to'
+#
+#   Background on the rewrite:
+#     https://github.com/home-assistant/addons/blob/master/matter_server/MIGRATION_FAQ.md
+#     https://github.com/matter-js/matterjs-server/blob/main/docs/docker.md
+# ---------------------------------------------------------------------------
 
 services:
-  # Python Matter Server — Matter fabric controller
-  # Needs D-Bus for BLE commissioning
+  # Matter Server (matter.js) — Matter fabric controller
   matter-server:
     container_name: matter-server
-    image: ghcr.io/matter-js/python-matter-server:stable
-    network_mode: host
+    # Pinned to a release tag for reproducibility. 1.3.3 == stable == latest as of
+    # 2026-07-31, digest:
+    #   sha256:ac537ba44a2edaaf785b818f8b7ce75cdf736539401462046f0042670bee4063
+    # Switch to :stable to follow upstream instead.
+    image: ghcr.io/matter-js/matterjs-server:1.3.3
+    network_mode: host        # required — mDNS and Matter device discovery
     restart: unless-stopped
-    privileged: true
-    security_opt:
-      - apparmor=unconfined
+    # The image runs unprivileged (uid 1000) and creates /data already owned by 1000:1000,
+    # so a fresh NAMED volume inherits the right ownership: no privileged, no apparmor
+    # exception, no /sys/fs/cgroup mount, no manual chown. (A bind-mount instead of a named
+    # volume WOULD need `chown -R 1000:1000 <dir>` — Docker does not adjust bind-mounts.)
     volumes:
-      - matter_data:/data
-      - /run/dbus:/run/dbus:ro
-      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - matterjs_data:/data
     environment:
       - TZ=Europe/Paris
+      # The WebSocket API on :5580 is the Matter fabric's control plane — list, commission,
+      # decommission, command — and it takes no credentials; the dashboard on :5580/ drives
+      # the same API. With network_mode: host the server would otherwise bind every
+      # interface and hand that to the whole LAN. Home Assistant sits in this same file, on
+      # the same host, and reaches it over loopback, so restricting costs nothing here.
+      # Remove or set to a reachable address if you move HA to another machine, or if you
+      # want the dashboard from another one (`ssh -L 5580:127.0.0.1:5580 <host>` also works).
+      # Matter/Thread traffic is unaffected: devices are reached over IPv6/mDNS and OTBR,
+      # never through this port.
+      - LISTEN_ADDRESS=127.0.0.1
+    # BLE commissioning from this container is deliberately not enabled: with the HA
+    # Companion app the phone's Bluetooth carries the commissioning, so the server needs
+    # no radio of its own. To enable it anyway (host BlueZ running, adapter powered), add
+    # NOBLE_BINDINGS=dbus + BLUETOOTH_ADAPTER=0 and mount /run/dbus:/run/dbus:ro — see
+    # docs/docker.md in the matterjs-server repo.
 
   # Home Assistant — UI for commissioning and device management
   homeassistant:
@@ -54,5 +97,6 @@ services:
       - TZ=Europe/Paris
 
 volumes:
-  matter_data:
+  matterjs_data:   # matter.js Matter Server — current
+  matter_data:     # legacy python-matter-server — declared but unmounted, kept for rollback
   ha_config:

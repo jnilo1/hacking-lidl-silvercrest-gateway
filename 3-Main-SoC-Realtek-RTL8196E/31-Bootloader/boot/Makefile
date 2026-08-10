@@ -30,16 +30,22 @@ OUTDIR   = build
 # actual build moment of the current B_VERSION; update it together with
 # B_VERSION (include/ver.h) whenever the bootloader is rebuilt for a release.
 
-BOOT_CODE_TIME ?= 2026.05.27-14:54+0200
+BOOT_CODE_TIME ?= 2026.06.20-23:51+0200
 ifneq ($(BOOT_CODE_TIME_OVERRIDE),)
 BOOT_CODE_TIME := $(BOOT_CODE_TIME_OVERRIDE)
 endif
+
+# --- Board selection ---------------------------------------------------------
+# Per-board constants (DRAM size/top, DDR bring-up) live in
+# ../boards/$(BOARD)/board.h — see ../boards/README.md.
+
+BOARD ?= lidl
 
 # --- Compiler / linker flags ------------------------------------------------
 
 CFLAGS   = -g -O -G 0 \
            -fomit-frame-pointer -fno-pic -mno-abicalls \
-           -I. -I./include \
+           -I. -I./include -I../boards/$(BOARD) \
            -D__KERNEL__ -Dlinux \
            -DBOOT_CODE_TIME='"$(BOOT_CODE_TIME)"'
 

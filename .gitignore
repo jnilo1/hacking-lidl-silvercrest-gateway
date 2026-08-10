@@ -16,12 +16,14 @@ node_modules/
 # are produced as side-effects of the build and not useful for end-users.
 !2-Zigbee-Radio-Silabs-EFR32/*/firmware/*.gbl
 !2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-*-combined.s37
-# Exception: bootloader flash image
-!3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot.bin
+# Exception: shipped pre-built bootloader images, one per board
+# (boot-img/<board>/boot.bin — see 31-Bootloader/build_bootloader.sh).
+!3-Main-SoC-Realtek-RTL8196E/31-Bootloader/boot-img/**
 *.img
 *.img.gz
-# Exception: shipped kernel flash image
-!3-Main-SoC-Realtek-RTL8196E/32-Kernel/kernel-6.18.img
+# Exception: shipped pre-built kernel images, one per (board, kernel) pair
+# (kernel-img/<board>/kernel-<line>.img — see 32-Kernel/build_kernel.sh).
+!3-Main-SoC-Realtek-RTL8196E/32-Kernel/kernel-img/**
 
 # Build directories
 build/
@@ -85,18 +87,40 @@ system.map
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/IRAM-DMEM-MIPS16.md
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/OPUS_REVIEW_PROMPT.md
 3-Main-SoC-Realtek-RTL8196E/32-Kernel/test_rtl8196e_eth.sh
+3-Main-SoC-Realtek-RTL8196E/32-Kernel/issue99/
 
-# Compiled binaries in skeleton (busybox and dropbearmulti tracked in git)
+# Compiled binaries in skeleton (busybox and dropbearmulti tracked in git).
+# The src/ copies are build intermediates — the shipped binary is the one
+# installed under skeleton/usr/{bin,sbin}/, which is tracked.
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton/usr/bin/nano
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/boothold/src/boothold
 3-Main-SoC-Realtek-RTL8196E/34-Userdata/s40button/src/s40button
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/keepalive/src/keepalive
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/linkwatch/src/linkwatch
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/netwatch/src/netwatch
+3-Main-SoC-Realtek-RTL8196E/34-Userdata/otbr-monitor/src/otbr-monitor
+
+# Local diagnostic tooling for bench campaigns (shell/C canaries, samplers).
+# Not release artefacts — see canari/README.md.
+canari/
 
 # packages
 packages/
 
-# CLAUDE.md files: tracked in `private`, stripped at release time before
+# CLAUDE.md and AGENTS.md files: tracked in `private`, stripped at release time before
 # pushing to `origin` (public). See feedback_public_private_workflow memory.
 
 # MkDocs documentation site
 site/
 .venv-docs/
+
+# Host-side gateway configuration (see gateway.env.example, tracked).
+# gateway.env is hand-written and personal; .gateway-state is written by the
+# flash scripts to remember the address they last provisioned or reached.
+gateway.env
+.gateway-state
+.gateway-state.*
+
+# Docker .env rendered by flash_userdata.sh with the gateway's address, so the
+# compose files stay generic and the working tree stays clean.
+2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/.env

@@ -63,17 +63,28 @@ fi
 # Execute user init scripts from /userdata
 if [ -d /userdata/etc/init.d ]; then
     echo ""
-    echo "===== Launching userdata init scripts ====="
+    echo "===== Launching userdata services ====="
     for i in /userdata/etc/init.d/S??*; do
         if [ -x "$i" ]; then
-            echo "Starting $i"
+            echo "Starting ${i##*/}"
             "$i" start
         fi
     done
-    echo "Userdata init completed"
+    echo "Userdata services started"
 else
     echo "WARNING: /userdata/etc/init.d not found"
 fi
 
 echo ""
 echo "===== System ready ====="
+
+# Quiet the runtime console. Boot is finished and klogd (S05syslog) is now
+# capturing the kernel ring buffer into /var/log/messages, so lower the
+# console loglevel to 5: late, low-priority kernel notices — notably the
+# ~11 s "random: crng init done" (KERN_NOTICE, level 5) — no longer
+# interleave with the "login:" prompt that getty is about to print.
+# Warnings and errors (level < 5) still reach the console; klogd keeps
+# every message in /var/log/messages regardless of this setting.
+# Writing a single value updates only console_loglevel (field 1), leaving
+# the message/minimum/default fields untouched.
+[ -w /proc/sys/kernel/printk ] && echo 5 > /proc/sys/kernel/printk

@@ -1,380 +1,194 @@
-# Main SoC — Realtek RTL8196E
+# RTL8196E Linux System
 
-This section covers the **main processor** running Linux on the gateway.
+This subtree contains everything that runs on the gateway's main Realtek
+RTL8196E processor: bootloader, Linux kernel, read-only root filesystem,
+persistent userdata, and install/upgrade tooling.
 
-## What Does the Linux System Do?
+This is a component reference, not the first-install walkthrough:
 
-The Linux system acts as a **bridge** between the Zigbee coprocessor (Silabs EFR32) and your home automation host (Zigbee2MQTT, Home Assistant, etc.).
+- new gateway: [First installation](../docs/getting-started.md);
+- existing installation: [Upgrade guide](../docs/upgrading.md);
+- day-to-day administration: [Using the gateway](../docs/using-the-gateway.md);
+- failures: [Troubleshooting](../docs/troubleshooting.md).
 
+## Role in the gateway
+
+The RTL8196E owns Ethernet, persistent storage, Linux services, and the host
+side of the EFR32 radio link:
+
+```text
+Zigbee2MQTT / ZHA / host services
+                 |
+              Ethernet
+                 |
+        RTL8196E Linux system
+        |                    |
+  TCP UART bridge       native otbr-agent
+        |                    |
+        +-------- UART1 -----+
+                 |
+         Silabs EFR32 radio
 ```
-+-------------------------------------------------------------------+
-|                         Lidl Gateway                              |
-|                                                                   |
-|   +--------------+             +--------------+                   |
-|   |   RTL8196E   |    serial   |    Silabs    |                   |
-|   |   (Linux)    |<----------->|    EFR32     |  ))) Zigbee       |
-|   |              |             |              |                   |
-|   |    ttyS1     |             |    ttyS0     |                   |
-|   +------+-------+             +--------------+                   |
-|          | eth0                                                   |
-+----------+--------------------------------------------------------+
-           |
-           | TCP/IP
-           v
-    +--------------+
-    |   Z2M / HA   |
-    |  (your host) |
-    +--------------+
-```
 
-The **in-kernel UART↔TCP bridge** (`rtl8196e-uart-bridge`, part of the 6.18 kernel) exposes the Zigbee serial port over TCP, allowing remote hosts to communicate with the Zigbee radio. It replaces the former `serialgateway` userspace daemon from v3.0.
+In normal Zigbee mode, the in-kernel `rtl8196e-uart-bridge` exposes UART1 on
+TCP port 8888. In native Thread mode, `otbr-agent` owns UART1 directly instead.
+`/userdata/etc/radio.conf`, maintained by `flash_efr32.sh`, selects the service,
+baud, and flow-control state.
 
----
+## Flash layout
 
-## Quick Start
+The supported gateways use a 16 MiB SPI NOR flash:
 
-### Get the Project
+| Offset | Size | Partition | Purpose |
+| --- | --- | --- | --- |
+| `0x000000` | 128 KiB | boot + config | Board-specific Realtek bootloader |
+| `0x020000` | 1.875 MiB | linux | Board/kernel-specific Linux image |
+| `0x200000` | 2 MiB | rootfs | Read-only SquashFS base system |
+| `0x400000` | 12 MiB | userdata | Writable JFFS2 configuration and apps |
+
+The top-level `build_fullflash.sh` assembles these four partitions into a
+verified 16 MiB image. `flash_install_rtl8196e.sh` is the normal full-system
+install and upgrade entry point.
+
+## Component map
+
+| Directory | Responsibility | Read this when |
+| --- | --- | --- |
+| [30-Backup-Restore](./30-Backup-Restore/README.md) | Full-flash backup, split, restore | Before flashing or during recovery |
+| [31-Bootloader](./31-Bootloader/README.md) | DRAM bring-up, TFTP, auto-flash, `boothold` | Working on boot or recovery |
+| [32-Kernel](./32-Kernel/README.md) | Linux 6.18/7.1, devicetree, platform drivers | Building or modifying Linux |
+| [33-Rootfs](./33-Rootfs/README.md) | BusyBox, Dropbear, read-only base | Modifying core userspace |
+| [34-Userdata](./34-Userdata/README.md) | Persistent config, init scripts, applications | Operating or extending services |
+| [35-Migration](./35-Migration/README.md) | Script and compatibility reference | Advanced install/upgrade cases |
+
+## Supported image matrix
+
+The full image contains board-specific bootloader and kernel files:
+
+| `BOARD` | Hardware | Kernels |
+| --- | --- | --- |
+| `lidl` (default) | Lidl Silvercrest / Tuya reference board | 6.18 default, 7.1 alternate |
+| `sengled-e39-g8c` | Sengled Smart Hub G4 | 6.18 default, 7.1 alternate |
+
+Rootfs and userdata are shared across boards and kernel lines. Never flash a
+full image for the wrong board: the bootloader initializes DRAM with
+board-specific values. Upgrade scripts compare `BOARD` with the live
+devicetree model and refuse a clear mismatch.
+
+Examples:
 
 ```bash
-git clone https://github.com/jnilo1/rtl8196e-gateway.git
-cd rtl8196e-gateway/3-Main-SoC-Realtek-RTL8196E
+# Normal Lidl install/upgrade image
+./flash_install_rtl8196e.sh <gateway-ip>
+
+# Sengled G4
+BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh <gateway-ip>
+
+# Alternate kernel line
+KERNEL=7.1 ./flash_install_rtl8196e.sh <gateway-ip>
 ```
 
-### Choose Your Path
+Run those commands from the repository root. A stock gateway requires the
+hardware and bootloader procedure described in the
+[first-install guide](../docs/getting-started.md).
 
-| | Option 1: Flash Pre-built Images | Option 2: Build from Source |
-|---|---|---|
-| **For** | Most users | Developers / Hackers |
-| **Time** | ~5 minutes | ~1 hour |
-| **Requires** | Serial adapter + TFTP | Docker or Ubuntu 22.04 |
-| **Use case** | Just want a working Zigbee bridge | Customize the system |
+## Normal installation and upgrade path
 
----
+### Full system
 
-## Option 1: Flash Pre-built Images
-
-**Pre-built images are ready to flash.** No compilation needed.
-
-### Images Location
-
-| Image | File | Size | Description |
-|-------|------|------|-------------|
-| Kernel | [`32-Kernel/kernel-6.18.img`](./32-Kernel/README.md) | ~1.2 MB | Linux 6.18 kernel |
-| Root FS | [`33-Rootfs/rootfs.bin`](./33-Rootfs/README.md) | ~900 KB | Base system (BusyBox, Dropbear) |
-| Userdata | [`34-Userdata/userdata.bin`](./34-Userdata/README.md) | ~12 MB | Apps (nano, otbr-agent, boothold) |
-
-> **Note:** The userdata image is 12 MB because it must fill the entire JFFS2 partition to avoid filesystem errors at boot. The actual data is only ~1 MB.
-
-### Flashing
-
-1. Connect to the gateway via serial (38400 8N1) — only needed for initial install with original Tuya bootloader
-2. Run the install script **from the repository root**:
+Use `flash_install_rtl8196e.sh` for ordinary work. It builds the complete image,
+preserves configuration on upgrades, performs board checks, reboots through
+`boothold` when available, and flashes by TFTP.
 
 ```bash
-./flash_install_rtl8196e.sh      # Build fullflash.bin and install
+# Gateway already running custom firmware
+./flash_install_rtl8196e.sh -y <gateway-ip>
 ```
 
-The script auto-detects the gateway state:
-- **Custom firmware running (SSH:22)** — automatic boothold + reboot + TFTP upload
-- **V2 bootloader** — automatic TFTP upload + auto-flash + reboot
-- **Old bootloader (Tuya/V1.2)** — TFTP upload + guided FLW on serial console
+Without a gateway IP, the command expects a first-install gateway already at
+the `<RealTek>` serial bootloader prompt.
 
-To flash individual partitions (developers), use the scripts in each subdirectory:
+### One partition
+
+`flash_remote.sh` and each component's `flash_*.sh` are developer tools.
+`flash_remote.sh` uses SSH and `boothold`; the individual scripts expect the
+gateway to be in bootloader mode already.
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
-31-Bootloader/flash_bootloader.sh
-32-Kernel/flash_kernel.sh
-33-Rootfs/flash_rootfs.sh
-34-Userdata/flash_userdata.sh
+./flash_remote.sh -y kernel <gateway-ip>
+./flash_remote.sh -y rootfs <gateway-ip>
+
+# Sengled G4 kernel partition: selects and verifies the G4 image
+./flash_remote.sh -y --board sengled-e39-g8c kernel <g4-ip>
 ```
 
-#### Remote Flashing (no serial console)
+A raw userdata flash can erase passwords, SSH keys, network settings, radio
+state, and Thread credentials. Prefer the full installer unless deliberately
+testing a partition.
 
-`flash_remote.sh` handles everything over the network: SSH into the gateway, reboot to bootloader, wait, and flash — no serial console needed.
+The full command/environment reference is in
+[Install and upgrade reference](./35-Migration/README.md).
+
+## Runtime administration
+
+| Surface | Default |
+| --- | --- |
+| Serial console | 38400 8N1 on RTL8196E UART0 |
+| SSH | Dropbear on TCP 22 |
+| Initial account | `root` / `root`; change immediately |
+| Zigbee UART bridge | TCP 8888, one client |
+| Persistent configuration | `/userdata/etc` |
+| Persistent applications/data | `/userdata` |
+
+The rootfs is read-only. Most `/etc` paths are symlinks into `/userdata`, so
+normal configuration survives a rootfs or full-system upgrade. Use
+[Using the gateway](../docs/using-the-gateway.md) for common operations and the
+[Userdata reference](./34-Userdata/README.md) for every service/key.
+
+The TCP:8888 radio protocol has no application authentication. Keep it on a
+trusted LAN or bind the bridge to loopback and tunnel over SSH; see the
+[security guide](./32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/SECURITY.md).
+
+## Build from source
+
+Pre-built files are committed for supported boards. Source builds require the
+Lexra toolchain and packaging tools from
+[1-Build-Environment](../1-Build-Environment/README.md).
+
+Build the complete RTL8196E side:
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
-./flash_remote.sh rootfs 192.168.1.88                    # Flash rootfs remotely
-./flash_remote.sh kernel 192.168.1.88                    # Flash kernel (auto-reboots)
-./flash_remote.sh bootloader 192.168.1.88                # Flash bootloader
-./flash_remote.sh userdata 192.168.1.88                  # Flash userdata (defaults: static IP, Zigbee)
+./build_rtl8196e.sh
+BOARD=sengled-e39-g8c ./build_rtl8196e.sh
+KERNEL=7.1 ./build_rtl8196e.sh
 ```
 
-Override defaults via environment variables:
+Or work in a component directory:
 
 ```bash
-./flash_remote.sh userdata 192.168.1.88                              # Static IP, Zigbee
-RADIO_MODE=thread ./flash_remote.sh userdata 192.168.1.88            # Static IP, Thread/OTBR
-IPADDR=10.0.0.50 ./flash_remote.sh userdata 192.168.1.88             # Custom IP, Zigbee
-NET_MODE=dhcp RADIO_MODE=thread ./flash_remote.sh userdata 192.168.1.88  # DHCP, Thread/OTBR
+31-Bootloader/build_bootloader.sh
+32-Kernel/build_kernel.sh
+33-Rootfs/build_rootfs.sh
+34-Userdata/build_userdata.sh
 ```
 
-The individual flash scripts also support non-interactive use directly:
-
-```bash
-CONFIRM=y ./flash_rootfs.sh                             # Skip "Proceed?" prompt
-NET_MODE=static RADIO_MODE=zigbee CONFIRM=y ./flash_userdata.sh  # Full non-interactive
-```
-
-| Variable | Values | Default | Script |
-|----------|--------|---------|--------|
-| `CONFIRM` | `y` | *(interactive prompt)* | all |
-| `NET_MODE` | `static`, `dhcp` | *(interactive prompt)* | flash_userdata.sh |
-| `RADIO_MODE` | `zigbee`, `thread` | *(interactive prompt)* | flash_userdata.sh |
-| `IPADDR` | IP address | `192.168.1.88` | flash_userdata.sh |
-| `NETMASK` | Netmask | `255.255.255.0` | flash_userdata.sh |
-| `GATEWAY` | Gateway IP | `192.168.1.1` | flash_userdata.sh |
-
-### After Flashing
-
-| Access | Details |
-|--------|---------|
-| Serial console | 38400 8N1 on `/dev/ttyUSB0` |
-| SSH | Port 22 (Dropbear) |
-| Default user | `root` (password: `root`) |
-| Zigbee bridge | TCP port 8888 (in-kernel `rtl8196e-uart-bridge`) |
-
-### Configuration
-
-After flashing, tune the configuration to fit your needs. Use `nano` to edit configuration files.
-
-#### 1. Change Root Password (mandatory)
-
-```bash
-passwd
-```
-
-#### 2. Network Configuration
-
-`flash_userdata.sh` asks for network configuration (static IP or DHCP) at flash time.
-The IP is baked into `userdata.bin` before flashing — no manual step needed.
-
-To change the IP after flashing:
-
-```bash
-nano /etc/eth0.conf    # Edit IP, netmask, gateway
-/userdata/etc/init.d/S10network restart
-```
-
-Format:
-```
-IPADDR=192.168.1.88
-NETMASK=255.255.255.0
-GATEWAY=192.168.1.1
-```
-
-#### 3. Timezone
-
-```bash
-nano /etc/TZ
-```
-
-Default is Central European Time. Format is POSIX TZ string. Find yours at [tz.cablemap.pl](https://tz.cablemap.pl/). 
-
-For examples:
-- `CET-1CEST,M3.5.0/2,M10.5.0/3` — Central Europe (Paris, Berlin)
-- `GMT0BST,M3.5.0/1,M10.5.0` — UK
-- `EST5EDT,M3.2.0,M11.1.0` — US Eastern
-- `PST8PDT,M3.2.0,M11.1.0` — US Pacific
-
-#### 4. NTP Servers
-
-```bash
-nano /etc/ntp.conf
-```
-
-#### 5. Hostname
-
-```bash
-nano /etc/hostname
-```
-
-#### 6. SSH Passwordless Login
-
-```bash
-nano ~/.ssh/authorized_keys
-# Paste your public key (from ~/.ssh/id_rsa.pub on your PC)
-```
-
-#### 7. LED Brightness
-
-The gateway supports three LED modes. Set the mode in `/userdata/etc/leds.conf`:
-
-| Mode | LAN LED | STATUS LED |
-|------|---------|------------|
-| `bright` | Full brightness (default) | 255 |
-| `dim` | Reduced (~25%) | 60 |
-| `off` | Completely off | 0 |
-
-Switch modes without rebooting:
-```bash
-# All LEDs off
-echo MODE=off > /userdata/etc/leds.conf
-/userdata/etc/init.d/S11leds start
-
-# Dim mode
-echo MODE=dim > /userdata/etc/leds.conf
-/userdata/etc/init.d/S11leds start
-
-# Full brightness (default)
-echo MODE=bright > /userdata/etc/leds.conf
-/userdata/etc/init.d/S11leds start
-```
-
-The setting is applied automatically at every boot. The `S50uart_bridge` init
-script (Zigbee mode) and `otbr-agent` (Thread mode) read the mode automatically
-when they turn the STATUS LED on.
-
-#### 8. Radio / UART bridge (`/userdata/etc/radio.conf`)
-
-`flash_efr32.sh` keeps the chip-side identity (`FIRMWARE`,
-`FIRMWARE_VERSION`, `FIRMWARE_BAUD`) and the daemon-routing key (`MODE`)
-in sync with the firmware flashed on the EFR32, so most users never need
-to touch this file. Edit it manually only to:
-- change the bind address (`BRIDGE_BIND`)
-- switch an OT-RCP chip between Zigbee bridge mode (cases 1 & 2) and
-  Thread mode (case 3) without reflashing — see
-  [`2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/README.md`](../2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/README.md#switching-radio-mode-no-efr32-reflash-needed)
-
-| Key | Values | Default | Written by | Read by |
-|-----|--------|---------|------------|---------|
-| `FIRMWARE` | `ncp`, `rcp`, `otrcp`, `router` | (absent) | `flash_efr32.sh` | docs / diagnostics |
-| `FIRMWARE_VERSION` | e.g. `7.5.1` (NCP, Router only) | (absent) | `flash_efr32.sh` | docs / diagnostics |
-| `FIRMWARE_BAUD` | `115200`, `230400`, `460800`, `691200`, `892857` | `460800` | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
-| `BOOTLOADER_VERSION` | e.g. `2.4.2` | (absent) | `flash_efr32.sh` — every flash | docs / diagnostics |
-| `MODE` | `otbr` (or absent) | absent = Zigbee | `flash_efr32.sh` | `S50uart_bridge`, `S70otbr` |
-| `BRIDGE_BIND` | `0.0.0.0`, `127.0.0.1` | `0.0.0.0` | (manual) | `S50uart_bridge` |
-
-`FIRMWARE_BAUD` is the single source of truth for the EFR32 UART baud:
-both ends of the link must agree, so the chip-side value (set at flash
-time) is the value the host-side daemons (`S50uart_bridge`, `S70otbr`)
-read. Letting `cat /userdata/etc/radio.conf` tell you what's on the chip
-without an `universal-silabs-flasher probe`. Full reference + the rationale
-for why there is no `FIRMWARE=bootloader` value:
-[`34-Userdata/README.md`](./34-Userdata/README.md#radioconf-keys-full-reference).
-
-`BRIDGE_BIND=127.0.0.1` restricts the Zigbee TCP bridge to loopback so it
-can only be reached through an SSH tunnel — see
-[`drivers/net/rtl8196e-uart-bridge/SECURITY.md`](./32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/SECURITY.md)
-for the rationale and the tunnel recipe.
-
-`FIRMWARE_BAUD` must match the baud the EFR32 firmware was built at.
-**`flash_efr32.sh` handles this automatically**: when you flash e.g.
-`ncp 460800`, the script writes `FIRMWARE_BAUD=460800`. Per-firmware
-supported baud sets (NCP 5 values, RCP 3 POSIX-only values, OT-RCP 460800
-only, Router 115200 only) are documented in
-[`2-Zigbee-Radio-Silabs-EFR32/README.md`](../2-Zigbee-Radio-Silabs-EFR32/README.md#gateway-side-runtime-configuration).
-
-Apply changes without rebooting:
-```bash
-/userdata/etc/init.d/S50uart_bridge restart   # Zigbee mode
-/userdata/etc/init.d/S70otbr        restart   # Thread mode
-```
-
-### Connect to Zigbee2MQTT
-
-In your Zigbee2MQTT configuration:
-
-```yaml
-serial:
-  port: tcp://<LINUX_IP>:8888
-```
-
-Replace `<LINUX_IP>` with the IP assigned to your gateway (check via DHCP or serial console).
-
----
-
-## Option 2: Build from Source
-
-**For developers who want to modify and rebuild the system.**
-
-### Prerequisites
-
-First, set up the build environment. See [1-Build-Environment](../1-Build-Environment/README.md) for detailed instructions.
-
-**Quick setup:**
-
-```bash
-# Using Docker (any OS)
-cd ../1-Build-Environment
-docker build -t lidl-gateway-builder .
-
-# Or native Ubuntu 22.04 / WSL2
-cd ../1-Build-Environment
-sudo ./install_deps.sh
-cd 10-lexra-toolchain && ./build_toolchain.sh && cd ..
-cd 11-realtek-tools && ./build_tools.sh && cd ..
-```
-
-### Build with Docker
-
-```bash
-# From project root
-docker run -it --rm -v $(pwd):/workspace lidl-gateway-builder \
-    /workspace/3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
-
-# Or run interactively
-docker run -it --rm -v $(pwd):/workspace lidl-gateway-builder
-```
-
-### Build Natively (Ubuntu 22.04 / WSL2)
-
-```bash
-# The build scripts auto-detect the toolchain in the project directory
-# Or set it manually:
-# export PATH="<project>/x-tools/mips-lexra-linux-musl/bin:$PATH"
-
-# Build rootfs components
-./33-Rootfs/busybox/build_busybox.sh
-./33-Rootfs/dropbear/build_dropbear.sh
-./33-Rootfs/build_rootfs.sh
-
-# Build userdata components
-./34-Userdata/nano/build_nano.sh
-./34-Userdata/build_userdata.sh
-
-# Build kernel
-./32-Kernel/build_kernel.sh
-```
-
-After building, flash the images as described in [Option 1](#flashing).
-
----
-
-## Project Structure
-
-| Directory | Description |
-|-----------|-------------|
-| [1-Build-Environment](../1-Build-Environment/README.md) | Toolchain, tools, and build setup |
-| [30-Backup-Restore](./30-Backup-Restore/README.md) | Backup and restore the flash memory |
-| [31-Bootloader](./31-Bootloader/README.md) | Realtek bootloader analysis |
-| [32-Kernel](./32-Kernel/README.md) | Linux 6.18 kernel with patches |
-| [33-Rootfs](./33-Rootfs/README.md) | Root filesystem (BusyBox, Dropbear SSH) |
-| [34-Userdata](./34-Userdata/README.md) | User partition (nano, otbr-agent, boothold) |
-
----
-
-## Features
-
-- **Linux 6.18** kernel with full RTL8196E support
-- **BusyBox** with 100+ applets (ash, vi, wget, etc.)
-- **Dropbear** SSH server for remote access
-- **nano** text editor for easy configuration
-- **In-kernel UART↔TCP bridge** (`rtl8196e-uart-bridge`) to expose Zigbee UART over TCP:8888
-- **JFFS2** writable userdata partition
-- **NTP** time synchronization
-- **Terminfo** support for proper terminal handling
-
----
-
-## Technical Background
-
-The RTL8196E is a MIPS-based SoC with a Lexra core (a MIPS variant without certain instructions like `lwl`, `lwr`, `swl`, `swr`). The stock firmware runs Linux 3.10 with proprietary Realtek SDK components.
-
-This project provides a **modern Linux 6.18 system** built entirely from source:
-
-- Custom toolchain supporting the Lexra architecture
-- Patched kernel with full RTL8196E support
-- Minimal root filesystem with essential tools
-- Writable user partition for additional applications
+Read the component guide and its local development instructions before
+changing bootloader, kernel, rootfs, or userdata behaviour.
+
+## Platform summary
+
+- Realtek RTL8196E, 400 MHz Lexra RLX4181
+- 32 MiB RAM on Lidl, 64 MiB on Sengled G4, and 16 MiB SPI NOR
+- Linux 6.18 production line and Linux 7.1 alternate line
+- modern devicetree platform support and custom Ethernet/UART/SPI/GPIO drivers
+- BusyBox + musl read-only rootfs
+- Dropbear SSH
+- 12 MiB writable JFFS2 userdata
+- in-kernel UART-to-TCP bridge for EFR32 protocols
+- native OpenThread Border Router option
+
+The Lexra core lacks normal MIPS unaligned-access instructions and uses
+non-coherent DMA. A stock MIPS compiler or generic platform driver is not a safe
+substitute for the project toolchain and platform code.

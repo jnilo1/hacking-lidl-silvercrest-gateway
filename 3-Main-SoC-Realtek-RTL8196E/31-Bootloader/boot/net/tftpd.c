@@ -387,11 +387,52 @@ SIGN_T sign_tbl[] = { //  signature, name, sig_len, skip, maxSize, reboot
 #define MAX_SIG_TBL (sizeof(sign_tbl) / sizeof(SIGN_T))
 int autoBurn = 1;
 
+/* swCore.c — full switch-core reset (active_swcore toggle), used to flush any
+ * in-flight CPU-port DMA before a kernel handoff / watchdog reset. */
+extern void FullAndSemiReset(void);
+
 void autoreboot()
 {
+	volatile unsigned int d;
+
+	/*
+	 * Let the just-queued post-flash "OK" notification (sent by the caller
+	 * via tftpd_send_notify) physically drain out before we tear the PHY
+	 * down below — otherwise the PHY-disable drops the in-flight packet and
+	 * the flash tool reports a spurious "no notification" on every success.
+	 * Use a bounded busy-loop, NOT delay_ms(): the SPI flash write that just
+	 * ran can leave the jiffy timer stopped, so delay_ms() spins forever
+	 * (observed: the box never reboots after a kernel flash). This loop is
+	 * timer/IRQ-independent and cannot hang; ~tens of ms at 400 MHz is far
+	 * more than a tiny UDP frame needs to leave the switch.
+	 */
+	for (d = 0; d < 4000000; d++)
+		;
+
 	jumpF = (void *)(0xbfc00000);
 	outl(0, GIMR0); // mask all interrupt
 	cli();
+	/*
+	 * Quiesce the Ethernet switch before the watchdog reset. The watchdog
+	 * reset preserves DRAM (that is how the boothold flag survives across it)
+	 * and does NOT reset the switch DMA engine — so a flash that has just
+	 * finished a large TFTP transfer can leave the switch DMAing incoming
+	 * frames into DRAM across the reset and into early kernel boot, corrupting
+	 * it (the intermittent post-flash boot loop). Turning the PHY interface
+	 * off stops new ingress but NOT an already-armed DMA — which is why a
+	 * ~1.4 MiB kernel flash recovered yet a 16 MiB full-flash still looped.
+	 * So first stop the CPU-port DMA engine and hard-reset the switch core
+	 * (the same active_swcore reset swCore_init() runs on every boot, which
+	 * aborts any in-flight transfer), THEN hold the PHY interface off (the
+	 * reset re-defaults PCRP, so PHY-off must come after it).
+	 */
+	WRITE_MEM32(CPUICR, 0); /* stop CPU-port RX/TX DMA (clears TXCMD|RXCMD) */
+	FullAndSemiReset();	/* hard-reset switch core — flush in-flight DMA */
+	WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP3, (READ_MEM32(PCRP3) & (~EnablePHYIf)));
+	WRITE_MEM32(PCRP4, (READ_MEM32(PCRP4) & (~EnablePHYIf)));
 	flush_cache();
 	prom_printf("\nreboot.......\n");
 	/* enable watchdog reset */

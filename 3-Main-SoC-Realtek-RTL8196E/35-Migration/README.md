@@ -1,247 +1,334 @@
-# Migration Guide
+# Install and Upgrade Reference
 
-Migrate a Lidl/Silvercrest Zigbee Gateway from Tuya firmware to custom Linux system.
+This page is the detailed command and compatibility reference for
+`flash_install_rtl8196e.sh`, full-flash assembly, and developer partition
+updates.
 
-> **IMPORTANT: Backup First!**
->
-> Before any migration, make a complete backup of all original partitions (bootloader, kernel, rootfs, userdata). This allows full recovery if something goes wrong.
->
-> See **[30-Backup-Restore](../30-Backup-Restore/README.md)** for detailed backup procedures.
+For a guided workflow, start elsewhere:
 
-## Flash Scripts
+- [First installation from stock firmware](../../docs/getting-started.md)
+- [Upgrade an existing installation](../../docs/upgrading.md)
+- [Troubleshooting](../../docs/troubleshooting.md)
 
-### `flash_install_rtl8196e.sh` — Full firmware install (recommended)
+## Choose the entry point
 
-Builds a complete 16 MiB flash image and installs it on the gateway. This is the
-recommended script for both first-time installs and upgrades.
+| Gateway state | Recommended command | Serial required? | Configuration preserved? |
+| --- | --- | --- | --- |
+| Stock gateway at `<RealTek>` prompt | `./flash_install_rtl8196e.sh` | Yes | No; new config is prompted |
+| Stock Tuya Linux with known root access | `./backup_gateway.sh`, then enter serial bootloader and run installer without IP | Yes | Original backup only |
+| Custom Linux running | `./flash_install_rtl8196e.sh -y <LINUX_IP>` | Normally no | Yes |
+| Custom bootloader already waiting | `./flash_install_rtl8196e.sh` | Only to reach/observe prompt | No automatic import |
+| One component under development | `3-Main-SoC-Realtek-RTL8196E/flash_remote.sh` | No with supported custom bootloader | Depends on component |
+
+Commands in this page assume the repository root unless a `cd` is shown.
+
+## Full installer
 
 ```bash
-./flash_install_rtl8196e.sh [-y] [--boot-ip <IP>] [LINUX_IP]
+./flash_install_rtl8196e.sh [OPTIONS] [LINUX_IP]
 ```
 
-**First flash** (no argument) — the gateway must already be in bootloader mode:
-- Connect a serial console (3.3V UART, 38400 8N1, line wrap ON)
-- Power cycle the gateway, press ESC to get the `<RealTek>` prompt
-- Then run `./flash_install_rtl8196e.sh`
-- User config cannot be saved — you will be prompted for network (static IP or
-  DHCP) and radio mode (Zigbee or Thread)
+Important options:
 
-**Upgrade** (with `LINUX_IP`) — the gateway must be running Linux:
-- Run `./flash_install_rtl8196e.sh 192.168.1.88` (replace with your gateway IP)
-- The script connects via SSH, saves user config (network, password, SSH keys,
-  radio mode, Thread credentials), then triggers boothold + reboot to bootloader
-- Saved config is injected into the new image — no prompts needed
+| Option | Purpose |
+| --- | --- |
+| `-y`, `--yes` | Skip interactive confirmations; intended for known upgrade flows |
+| `--boot-ip <IP>` | Select the bootloader/TFTP address instead of `192.168.1.6` |
+| `--force` | Override a clear board mismatch; dangerous and rarely appropriate |
+| `--help` | Show current script syntax and environment variables |
 
-**Fully automated upgrade** (firmware >= v2.0.0) — no prompts, no serial needed:
-- Run `./flash_install_rtl8196e.sh -y 192.168.1.88`
-- The `-y` flag skips all confirmation prompts
-- Auto-flash + UDP notification: the script uploads, waits for the bootloader to
-  confirm, and reports success — no serial console required
+The two top-level image selectors are:
 
-The script:
-1. Detects firmware type via SSH (custom vs Tuya, using `devmem` presence)
-2. Saves user config if custom firmware is running
-3. Builds `fullflash.bin` via `build_fullflash.sh` (assembles all 4 partitions)
-4. Uploads fullflash.bin via TFTP
-5. Firmware >= v2.0.0: auto-flashes and reboots automatically
-6. Older firmware / Tuya: guides you through FLW on the serial console
+| Variable | Values | Default |
+| --- | --- | --- |
+| `BOARD` | `lidl`, `sengled-e39-g8c` | `lidl` |
+| `KERNEL` | `6.18`, `7.1` | `6.18` |
 
-Environment variables for non-interactive use:
+Examples:
+
 ```bash
-NET_MODE=static RADIO_MODE=zigbee ./flash_install_rtl8196e.sh -y
+# First install, Lidl, gateway already at the serial bootloader prompt
+./flash_install_rtl8196e.sh
+
+# Normal unattended upgrade
+./flash_install_rtl8196e.sh -y 192.168.1.88
+
+# Sengled G4 first install
+BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh
+
+# Sengled G4 upgrade
+BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh -y <g4-ip>
+
+# Alternate kernel line
+KERNEL=7.1 ./flash_install_rtl8196e.sh -y <gateway-ip>
 ```
 
-**LAN not on the `192.168.1.x` subnet** — the bootloader's download-mode /
-TFTP server IP defaults to `192.168.1.6`. Override it with `--boot-ip` (or the
-`BOOT_IP` env var; the flag wins). The `--boot-ip` flag is available from
-**v3.7.0**; handing the address to the bootloader over `boothold` needs
-bootloader **V2.7+** on the gateway, so no serial `IPCONFIG` is needed:
+Do not select another board casually. A full image includes the bootloader, and
+the bootloader's DRAM initialization is board-specific. On the SSH upgrade
+path, the installer reads `/proc/device-tree/model` and refuses a known
+mismatch unless `--force` is supplied.
+
+## What the installer does
+
+### First install or bootloader-only path
+
+With no `LINUX_IP`, the script expects the bootloader TFTP service to be ready:
+
+1. validates host packages and selected pre-built images;
+2. verifies direct L2 reachability to `BOOT_IP`;
+3. checks that a TFTP server is actually present;
+4. prompts for DHCP/static networking;
+5. builds a verified `fullflash.bin`;
+6. uploads it over TFTP;
+7. detects auto-flash behaviour or prints the stock/manual `FLW` command;
+8. observes the available success channels and waits for reboot.
+
+No running Linux configuration can be imported in this path. Back up first and
+answer the network prompt deliberately. Radio selection is a separate second
+step: once Linux is reachable, `flash_efr32.sh` installs the chosen EFR32
+application and writes the matching `radio.conf` automatically.
+
+### SSH upgrade path
+
+With `LINUX_IP`, the script probes SSH and tests for the `boothold` capability:
+
+1. authenticates once and reuses the SSH connection;
+2. verifies the live board when the devicetree model is readable;
+3. saves persistent configuration and additional userdata files;
+4. injects them into a temporary copy of the new userdata skeleton;
+5. builds and confirms the full image while Linux is still healthy;
+6. calls `boothold <BOOT_IP>` and reboots;
+7. waits for SSH to stop and for a real TFTP server to appear;
+8. uploads, flashes, and waits for the new Linux image.
+
+The saved set includes network configuration, MAC address, password database,
+SSH keys and host keys, timezone/hostname, radio state, Thread credentials, and
+files under `/userdata` that are not supplied by the new skeleton.
+
+If `boothold` is unavailable — stock Tuya or very old custom firmware — the
+script does not pretend it can enter the bootloader. It stops with serial
+instructions. Nothing is written at that point.
+
+## Authentication modes
+
+An SSH public key is the simplest recurring setup:
+
 ```bash
-# Upgrade a gateway on a 192.168.0.x LAN
-./flash_install_rtl8196e.sh --boot-ip 192.168.0.6 192.168.0.88
-
-# First flash (gateway already at the bootloader prompt), unattended
-./flash_install_rtl8196e.sh -y --boot-ip 192.168.0.6
+ssh-copy-id root@<gateway-ip>
 ```
 
-#### Pre-v3.0 → v3.x : non-default radio configurations
+Interactive password or encrypted-key prompts also work. The script opens one
+SSH ControlMaster session, so it should prompt only once.
 
-The upgrade preserves `/userdata/etc/radio.conf` if it exists. When it
-**doesn't** exist (the v2.x default — pre-v3.0 firmware shipped
-`serialgateway` and didn't use this file), the script auto-seeds the
-v2.x default state in the new userdata:
+For non-interactive password authentication:
 
+```bash
+sudo apt install sshpass
+SSH_PASSWORD='<password>' ./flash_install_rtl8196e.sh -y <gateway-ip>
 ```
+
+Avoid putting a real password in shell history, process listings, committed
+files, or shared logs.
+
+## LAN not on the 192.168.1.x subnet
+
+The bootloader/TFTP address is `192.168.1.6` on a first install: the gateway is
+already sitting at a bootloader, which answers on its compiled-in address and
+cannot be told to move. That address does not follow your LAN. The computer must
+reach it directly on the same L2 segment; a route through another gateway is not
+sufficient.
+
+On an upgrade the picture differs: `flash_remote.sh` and `flash_install_rtl8196e.sh`
+reboot the gateway into the bootloader themselves and hand it an address, which
+by default is derived from the subnet of the machine running them — so no extra
+address is needed on a LAN that is not `192.168.1.x`.
+
+With custom bootloader V2.7 or newer, choose an unused address on the local
+subnet:
+
+```bash
+./flash_install_rtl8196e.sh -y \
+  --boot-ip 192.168.0.6 192.168.0.88
+```
+
+`BOOT_IP=192.168.0.6` is the equivalent environment form; the command-line
+flag takes precedence.
+
+For a first install already at the stock bootloader prompt:
+
+```bash
+./flash_install_rtl8196e.sh --boot-ip 192.168.0.6
+```
+
+The old loader may still need this serial command before the script can reach
+it:
+
+```text
+IPCONFIG 192.168.0.6
+```
+
+Pre-V2.7 `boothold` ignores the IP argument and returns at the compiled
+`192.168.1.6`. Put the host on that subnet and retry without a custom address.
+
+## Pre-v3.0 → v3.x: non-default radio configurations { #pre-v30--v3x--non-default-radio-configurations }
+
+The upgrader preserves `/userdata/etc/radio.conf` when it exists. Firmware
+before v3.0 normally used the old `serialgateway` daemon and may not have this
+file. In that case, the migration seeds the historical default:
+
+```text
 FIRMWARE=ncp
 FIRMWARE_BAUD=115200
 ```
 
-This is right for the vast majority of v2.x installs (NCP-UART-HW @
-115200 was the v2.x default). **If your v2.x gateway runs a non-default
-firmware** (e.g., OT-RCP for Thread/Matter, or a custom-built NCP at a
-non-default baud), create `/userdata/etc/radio.conf` on the gateway
-**before** running `flash_install_rtl8196e.sh` — the upgrade will pick
-it up via the normal save/restore path and the auto-seed is skipped.
+That is correct for the normal v2.x NCP installation. If the old gateway runs
+OT-RCP, RCP, or a custom NCP baud, create the truthful file before upgrading.
 
-Recipe per v2.x firmware:
+OT-RCP at 115200 with native OTBR:
 
 ```bash
-# OT-RCP @ 115200 (Thread Border Router, v2.x)
-ssh root@192.168.1.88 'cat > /userdata/etc/radio.conf <<EOF
+ssh root@<gateway-ip> 'cat > /userdata/etc/radio.conf <<EOF
 FIRMWARE=otrcp
 FIRMWARE_BAUD=115200
 MODE=otbr
 EOF'
+```
 
-# RCP @ 115200 (Multi-PAN, v2.x)
-ssh root@192.168.1.88 'cat > /userdata/etc/radio.conf <<EOF
+RCP at 115200:
+
+```bash
+ssh root@<gateway-ip> 'cat > /userdata/etc/radio.conf <<EOF
 FIRMWARE=rcp
 FIRMWARE_BAUD=115200
 EOF'
+```
 
-# NCP at a non-default baud you built yourself
-ssh root@192.168.1.88 'cat > /userdata/etc/radio.conf <<EOF
+Custom NCP at 460800:
+
+```bash
+ssh root@<gateway-ip> 'cat > /userdata/etc/radio.conf <<EOF
 FIRMWARE=ncp
 FIRMWARE_BAUD=460800
 EOF'
 ```
 
-**v3.0 → v3.2+** : `radio.conf` already exists on v3.0/v3.1 (with at
-least `BRIDGE_BAUD` or `MODE`/`OTBR_BAUD`); it's preserved as-is. The
-init scripts in v3.2+ read the canonical `FIRMWARE_BAUD` first and fall
-back to the legacy `BRIDGE_BAUD`/`OTBR_BAUD` if it's absent, so old
-configs keep working unchanged. The next `flash_efr32.sh` invocation
-strips the legacy keys and writes only `FIRMWARE_BAUD`. Optional: tidy
-up by hand using the recipes above.
+From v3.0 onward, `radio.conf` is already present. New init scripts accept
+legacy `BRIDGE_BAUD` / `OTBR_BAUD` as fallbacks, while the next successful
+`flash_efr32.sh` run converges the file on `FIRMWARE_BAUD`.
 
-### `build_fullflash.sh` — Build the flash image
+## Non-interactive first-install variables
 
-Assembles bootloader, kernel, rootfs and userdata into a single verified 16 MiB
-image. Called automatically by `flash_install_rtl8196e.sh`, but can also be used
-standalone.
+The following variables answer image-configuration prompts:
+
+| Variable | Values / meaning |
+| --- | --- |
+| `NET_MODE` | `static` or `dhcp` |
+| `IPADDR` | Static Linux address. Unset: an address in the subnet of the machine running the install, host part 88 |
+| `NETMASK` | Static netmask. Unset: the netmask of that machine |
+| `GATEWAY` | Static default gateway. Unset: that machine's default route |
+| `CONFIRM=y` | Equivalent to `-y` |
+
+Example:
 
 ```bash
-./build_fullflash.sh
+NET_MODE=static IPADDR=192.168.1.88 \
+  ./flash_install_rtl8196e.sh -y
 ```
 
-| Partition | Flash offset | Source | Header handling |
-|-----------|-------------|--------|-----------------|
-| boot+cfg | 0x000000 | `31-Bootloader/boot.bin` | Strip cvimg header |
-| kernel | 0x020000 | `32-Kernel/kernel-6.18.img` | Keep cs6c header |
-| rootfs | 0x200000 | `33-Rootfs/rootfs.bin` | Strip cvimg header |
-| userdata | 0x400000 | `34-Userdata/userdata.bin` | Strip cvimg header |
+Use this only after the gateway is deliberately placed at the bootloader prompt
+and the chosen values have been reviewed. Automation does not remove the first
+install's physical UART requirement.
 
-### `flash_remote.sh` — Per-partition flash (for developers)
+## `build_fullflash.sh`
 
-Flashes a single partition via SSH + boothold + TFTP. Connects to the running
-gateway, sends it to bootloader mode, waits, then runs the appropriate flash
-script. No serial console needed. Requires custom firmware >= v2.1.1 (with
-the `boothold` binary). Does NOT work on Tuya/stock firmware or v1.0 — use
-`flash_install_rtl8196e.sh` for those.
+The installer calls this automatically. Direct use is mainly for inspecting or
+distributing an assembled image:
 
-For **userdata**, the script saves user config via SSH before flashing (eth0.conf,
-mac_address, radio.conf, passwd, TZ, hostname, dropbear host keys, SSH keys,
-Thread credentials). The config is injected into the new image so it survives
-the reflash — no prompts needed.
+```bash
+# Lidl / Linux 6.18 (defaults)
+./build_fullflash.sh
+
+# Sengled G4 / Linux 6.18
+BOARD=sengled-e39-g8c ./build_fullflash.sh
+
+# Sengled G4 / alternate Linux 7.1 line
+BOARD=sengled-e39-g8c KERNEL=7.1 ./build_fullflash.sh
+```
+
+| Partition | Offset | Input | Header handling |
+| --- | --- | --- | --- |
+| boot + config | `0x000000` | `31-Bootloader/boot-img/<board>/boot.bin` | Strip outer `cvimg` header |
+| kernel | `0x020000` | `32-Kernel/kernel-img/<board>/kernel-<line>.img` | Keep kernel header |
+| rootfs | `0x200000` | `33-Rootfs/rootfs.bin` | Strip outer `cvimg` header |
+| userdata | `0x400000` | `34-Userdata/userdata.bin` | Strip outer `cvimg` header |
+
+The builder verifies component sizes and the final 16 MiB layout.
+
+## `flash_remote.sh` for developers
+
+This script updates one RTL8196E partition through SSH, `boothold`, and TFTP:
 
 ```bash
 cd 3-Main-SoC-Realtek-RTL8196E
-./flash_remote.sh [-y] [--boot-ip <IP>] <bootloader|kernel|rootfs|userdata> <LINUX_IP>
+./flash_remote.sh -y [--boot-ip <IP>] \
+  <bootloader|kernel|rootfs|userdata> <LINUX_IP>
+
+# Concrete example: update the Sengled G4 kernel with its 6.18 image
+./flash_remote.sh -y --board sengled-e39-g8c kernel <g4-ip>
 ```
 
-Environment variables: `BOOT_IP` (default: 192.168.1.6), `SSH_TIMEOUT`,
-`SSH_PASSWORD`, `NET_MODE`, `RADIO_MODE`, `CONFIRM`.
+It requires a custom firmware/bootloader combination with `boothold`; it does
+not convert stock firmware.
 
-If your LAN is not on the `192.168.1.x` subnet, set `BOOT_IP` (env) or pass
-`--boot-ip <IP>` (e.g. `--boot-ip 192.168.0.6`) to an address on your subnet.
-The `--boot-ip` flag is available from **v3.7.0**. With bootloader V2.7+, the
-script hands this address to `boothold`, so the gateway comes up on it in
-download mode — no serial console or `IPCONFIG` needed, and the "same subnet"
-TFTP requirement below is satisfied automatically. On older bootloaders the
-argument is ignored and the download-mode IP stays at the compiled default
-`192.168.1.6`.
+The userdata path preserves known configuration and carries forward additional
+files that are not supplied by the new skeleton. A direct
+`34-Userdata/flash_userdata.sh` does not provide the same deployed-system safety
+and can wipe live configuration.
 
-The individual flash scripts (`flash_bootloader.sh`, `flash_kernel.sh`, etc.)
-can also be used directly when the gateway is already in bootloader mode.
+Individual `flash_*.sh` scripts expect the gateway to be in bootloader mode
+already. Read the component guide before using them.
 
-### `flash_efr32.sh` — Silabs EFR32 radio (OTA via SSH)
+## `flash_efr32.sh` — Silabs EFR32 radio (OTA via SSH)
 
-Flashes firmware to the EFR32MG1B Zigbee/Thread radio over the network.
-The gateway must be running with SSH access (custom firmware already installed).
+The separate radio is flashed after Linux is running:
 
 ```bash
-./flash_efr32.sh -y ncp                    # default IP 192.168.1.88
-./flash_efr32.sh -y ncp 460800             # NCP at 460800 baud
-./flash_efr32.sh -y -g 10.0.0.5 otrcp      # custom IP, OT-RCP
-./flash_efr32.sh --help                    # full CLI reference
+./flash_efr32.sh -y -g <gateway-ip> ncp
 ```
 
-Firmware aliases: `bootloader`, `ncp`, `rcp`, `otrcp`, `router`
-(numeric `1`-`5` also accepted).
+The script handles chip reset, UART bridge flash mode, protocol probing,
+Gecko-bootloader upload, persistent `radio.conf` state, and reboot. Firmware
+selection belongs in [Choose a radio mode](../../docs/radio-options.md); the
+low-level implementation is documented in the
+[EFR32 backup/flash guide](../../2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md).
 
-The script:
-1. Pulses `nRST` (sysfs knob) to start the chip from a known-clean state
-2. Installs `universal-silabs-flasher` in a venv if needed (auto-reinstalls if probe-methods patch changes)
-3. SSHes into the gateway, stops radio daemons, switches the in-kernel UART bridge to flash mode (`flow_control=0`)
-4. Probes the running app (or the Gecko Bootloader if the chip is already there), flashes the selected firmware via EZSP/CPC/Spinel + Xmodem over `socket://IP:8888`
-5. Writes the chip identity (`FIRMWARE`, `FIRMWARE_VERSION`, `FIRMWARE_BAUD`) and daemon-routing key (`MODE`) to `/userdata/etc/radio.conf` so init scripts arm correctly on next boot AND a future reader can tell what's on the chip without probing
-6. Reboots the gateway
+## Host prerequisites
 
-| Firmware | Location | Description | `radio.conf` after flash |
-|----------|----------|-------------|--------------------------|
-| `bootloader-uart-xmodem-2.4.2.gbl` | `23-Bootloader-UART-Xmodem/firmware/` | Gecko Bootloader stage 2 | unchanged (bootloader update doesn't change the app slot) |
-| `ncp-uart-hw-<EmberVersion>-<BAUD>.gbl` | `24-NCP-UART-HW/firmware/` | Zigbee NCP for Z2M / ZHA (EZSP) | `FIRMWARE=ncp` + `FIRMWARE_VERSION=<v>` + `FIRMWARE_BAUD=<BAUD>` |
-| `rcp-uart-802154-<BAUD>.gbl` | `25-RCP-UART-HW/firmware/` | Multi-PAN RCP for Z2M (EmberZNet 8.x via cpcd) | `FIRMWARE=rcp` + `FIRMWARE_BAUD=<BAUD>` |
-| `ot-rcp-<BAUD>.gbl` | `26-OT-RCP/firmware/` | OpenThread RCP — 3 use cases via `radio.conf` | `FIRMWARE=otrcp` + `FIRMWARE_BAUD=<BAUD>` + `MODE=otbr` (case 3 default; remove `MODE` for cases 1/2) |
-| `z3-router-<EmberVersion>-<BAUD>.gbl` | `27-Router/firmware/` | Zigbee 3.0 standalone router | `FIRMWARE=router` + `FIRMWARE_VERSION=<v>` + `FIRMWARE_BAUD=115200` |
+For pre-built full-system images on Ubuntu:
 
-> Pre-built GBL filenames embed the EmberZNet version (where applicable) and
-> the UART baud. `flash_efr32.sh` resolves the right file via a glob, so
-> you don't need to track exact filenames after firmware bumps. See
-> [`2-Zigbee-Radio-Silabs-EFR32/README.md`](../../2-Zigbee-Radio-Silabs-EFR32/README.md)
-> for the per-firmware supported baud sets.
-
-## Prerequisites
-
-### Hardware
-
-- **Serial adapter** connected to gateway (38400 8N1) — required for initial RTL8196E flash;
-  not needed for subsequent updates via `flash_remote.sh`
-- **Ethernet connection** between PC and gateway (same L2 segment for TFTP)
-
-### Software
-
-- **tftp-hpa** and **netcat** — for RTL8196E flash:
-  ```bash
-  sudo apt install tftp-hpa netcat-openbsd
-  ```
-- **Python 3 + venv** — for EFR32 flash (universal-silabs-flasher is installed automatically)
-
-## Partition Layout
-
-```
-0x000000-0x020000  mtd0  boot+cfg     (128 KB)   - Bootloader
-0x020000-0x200000  mtd1  linux        (1.9 MB)   - Linux kernel
-0x200000-0x400000  mtd2  rootfs       (2 MB)     - Root filesystem
-0x400000-0x1000000 mtd3  jffs2-fs     (12 MB)    - User partition
+```bash
+sudo apt install fakeroot gcc mtd-utils squashfs-tools tftp-hpa \
+  netcat-openbsd iproute2 iputils-ping openssh-client
 ```
 
-## Troubleshooting
+`flash_efr32.sh` additionally needs `python3`, `python3-venv`, and `patch`; it
+creates a pinned virtual environment and applies the repository's probe-methods
+patch when needed. `xxd` is not required: both image and radio verification use
+`od` from the base `coreutils` package.
 
-### RTL8196E (TFTP flash)
+The complete cross-compilation environment is separate and documented in
+[Build Environment](../../1-Build-Environment/README.md).
 
-- **Cannot enter bootloader** — verify serial 38400 8N1, press ESC on power-on
-- **TFTP transfer fails** — check firewall (UDP 69), verify same subnet, no other TFTP server
-- **"Flash Write Successed!" doesn't appear** — wait longer (userdata takes 1-2 min)
-- **SSH refused after reboot** — wait 30s, check IP on serial console (`ip addr`)
+## Failure and rollback rules
 
-### EFR32 (OTA flash)
+- A host prerequisite, board check, image build, confirmation, or TFTP-path
+  failure before reboot leaves the running system untouched.
+- A `boothold` failure before flash can normally be escaped with a power cycle.
+- Do not cut power once a flash write has begun.
+- A first boot loop after replacing a pre-V2.9 bootloader requires one cold
+  power cycle.
+- Restore a verified `fullflash.bin` from the serial bootloader when the new
+  system cannot boot.
 
-- **SSH timeout** — the script retries 3 times; check gateway is reachable
-- **USF probe fails** — check `cat /sys/module/rtl8196e_uart_bridge/parameters/flow_control` on the gateway (should be `0` during flash); reboot and retry
-- **No progress bar** — only happens when flashing the bootloader (output is captured for error detection)
-
-## Rollback
-
-To restore original firmware, flash the backed-up images from the `<RealTek>` prompt.
-See **[30-Backup-Restore](../30-Backup-Restore/README.md)** for detailed restore procedures.
+See [Backup and restore](../30-Backup-Restore/README.md) and the central
+[troubleshooting guide](../../docs/troubleshooting.md).

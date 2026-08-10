@@ -1,0 +1,22 @@
+diff --git a/src/posix/platform/hdlc_interface.cpp b/src/posix/platform/hdlc_interface.cpp
+index afe0842ef..f00c409ba 100644
+--- a/src/posix/platform/hdlc_interface.cpp
++++ b/src/posix/platform/hdlc_interface.cpp
+@@ -600,6 +600,17 @@ int HdlcInterface::OpenFile(const Url::Url &aRadioUrl)
+         {
+             tios.c_cflag |= CRTSCTS;
+         }
++        else if (aRadioUrl.HasParam("uart-sw-flow-control"))
++        {
++            // XON/XOFF flow control, for a board that does not wire RTS/CTS.
++            // IXON honors the radio's XOFF (and consumes the 0x11/0x13 so they
++            // never reach the HDLC decoder as data); IXOFF lets the tty throttle
++            // the radio in return. Safe on a spinel link because the HDLC encoder
++            // escapes 0x11/0x13 (hdlc.cpp, HdlcByteNeedsEscape), so no payload
++            // byte can be mistaken for a flow character in either direction.
++            tios.c_cflag &= ~CRTSCTS;
++            tios.c_iflag |= (IXON | IXOFF);
++        }
+         else if (aRadioUrl.HasParam("uart-init-deassert"))
+         {
+             // When flow control is disabled, deassert DTR and RTS on init

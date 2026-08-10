@@ -1,8 +1,1898 @@
-# Changelog — RTL8196E Platform (Lidl Silvercrest Gateway)
+# Changelog — RTL8196E Platform
 
 All notable changes to the RTL8196E firmware distribution are documented here.
 A version covers the complete set of components: bootloader (31-), kernel (32-),
 rootfs (33-), and userdata (34-).
+
+---
+
+## [4.0.0] - 2026-08-10
+
+_The release the whole 4.0.0-rc series was working towards, and it turned into
+more than a driver release. The **independent driver audits** land in full
+(Ethernet, UART1, IRQ/GPIO, watchdog, LED-PWM, UART bridge), the **TC0
+clockevent** stops being re-armed the way that could wedge it, the LAN LED
+finally goes **truly off**, and the UART bridge gains a real
+**client-replacement lifecycle** instead of an advertised one that was dead
+code. Around them: `otbr-agent` learns **software flow control** for boards
+without RTS/CTS (#134), the Thread BorderAgent identifies itself **per board**
+(#144), and the third-party stack moves up — **Dropbear 2026.94**, **OTBR
+v2026.07.0**, **Linux 6.18.41**. The three code bodies every packet passes
+through — the checksum routine and the two assembly copy cores — **move into
+on-chip SRAM**, each priced by its own paired series at 1 to 2 Mbit/s in both
+directions. The shipped image benches at **70.7 Mbit/s TX and 92.8 Mbit/s RX**
+on the 6.18 line, where the same suite read 68.5 / 89.5 before.
+
+One new capability stays off until asked for: **netwatch**, which reboots and —
+above all — records a gateway isolated on a live link. The gateway also stops
+being addressed by a hardcoded `192.168.1.88`: **addresses are resolved**, from
+your own network if nothing else says otherwise. And the project finally says what it is —
+**renamed** `rtl8196e-gateway`, with **five new user guides** replacing a
+reference that was organised by subsystem rather than by what a reader is
+trying to do._
+
+<!-- New capabilities -->
+
+### New: `netwatch` — recover, and above all record, a gateway isolated on a live link
+
+The hardware watchdog armed by `S25watchdog` only catches a stopped CPU: the
+feeder is a userspace process, so a kernel hang stops the kicks and the chip
+resets the board inside the ~60 s timeout. It is blind to the other way a
+gateway disappears — userspace alive, network path dead. The kicks keep coming,
+the chip stays quiet, and the box is simply gone from the LAN until a human
+power-cycles it.
+
+That blindness costs more than the outage. The power cycle is itself the
+evidence-destroying step: it clears the watchdog reset-reason latch and wipes
+the reserved DRAM page holding any panic record, so `S26panicrec` — which only
+persists a record after a *successful* boot — never gets the chance. A remote
+installation therefore yields an outage of unknown duration and no cause at
+all. That is exactly what happened to a field gateway on 2026-07-31, and why
+this exists.
+
+`netwatch` (34-Userdata/netwatch, C, static, ~138 KB) probes targets with ICMP
+echo from the only vantage point that still works in that state — the box
+itself. After a long continuous failure window **with the link carrier still
+up**, it writes a snapshot into `/userdata/netwatch/incidents.log` and reboots.
+The snapshot is the point; the reboot is the by-product. It lands on JFFS2, so
+it survives the reboot, a later power cycle, and everything else: reason,
+uptime, carrier, `operstate`, `/proc/net/dev` counters, routes, the ARP table,
+and the last 8 KB of the kernel ring — which is where the driver's own
+`last reset:` line and any TX-timeout or switch-reset messages live.
+
+Three decisions carry the design, each because this box may be physically
+unreachable for weeks:
+
+- **Carrier must be up.** Carrier down means the cable is out or the peer
+  switch is off — a physical fault no reboot fixes, and one a human may have
+  caused deliberately. Carrier up with nothing reachable is the signature
+  wanted: the link is electrically fine and the stack is not answering.
+- **The reboot goes through `/sbin/reboot`, never `reboot(2)`.** BusyBox init
+  runs the `::shutdown` entry, reaching `S10network stop` and its
+  `ip link set eth0 down`; that calls `ndo_stop`, which clears `TXCMD|RXCMD` in
+  CPUICR and deasserts TRXRDY — the CPU-port DMA engine stops. Worth stating
+  precisely, because it is easy to claim more than it does: that is **one** of
+  the three steps the bootloader performs before its own resets (V2.9 also
+  hard-resets the switch core — the step that aborts an *already-armed*
+  transfer — and holds the five PHY interfaces off). The driver does neither of
+  those, and `realtek_machine_restart()` adds nothing: it disables IRQs and
+  writes the watchdog register, and the platform driver has no `.shutdown` hook
+  for `device_shutdown()` to call. So this is not a full quiesce. It is strictly
+  more than `reboot(2)` would leave — a board reset with the DMA engine still
+  armed — which is exactly the state a watchdog timeout on a hung CPU produces.
+
+  Note also what the V2.9 entry actually attributes the safety of an ordinary
+  reboot to: *"a plain reboot never tripped it because the link is idle at that
+  point"* — not to a quiesce. The documented boot loop was only ever reproduced
+  in the bootloader's own post-TFTP path, under a large transfer. That a
+  watchdog timeout can corrupt early boot the same way is a plausible mechanism
+  on this platform, not a demonstrated one.
+- **A reboot budget, persisted in `/userdata`, that fails closed.** Default 3
+  per 24 h. If the budget file cannot be written the daemon refuses to reboot,
+  because an unbounded loop on unreachable hardware would be worse than the
+  outage it is trying to fix.
+
+Written in C like the other long-lived daemons here, though on its own merits
+rather than the old ash-is-unsafe rationale — that one died with the issue #109
+root cause (a TLB sweep starting at a hardcoded index instead of the `Wired`
+boundary, fixed in `fac8bbf`). The work is a raw ICMP socket, `klogctl()` and a
+structured snapshot writer; none of it is a shell operation, and a script would
+fork `ping` and `dmesg` every cycle forever on a single 400 MHz core.
+Started by `S80netwatch` under `keepalive`, after every service
+it might describe and before `S90checkpasswd`, tunable through the optional
+`/userdata/etc/netwatch.conf` and **disabled with a single `ENABLED=0`**.
+
+Bench-validated on `.88` across six cases: no false trigger against a live
+target; detection and snapshot in dry run; carrier gating (unreadable carrier
+never acts); fail-closed when the state directory is unwritable; refusal once
+the budget is spent; and one real end-to-end reboot — box down 20 s, incident
+and budget both intact afterwards, and the automatic restart at boot correctly
+refusing the second reboot, so the anti-loop guard is proven across the very
+reboot it bounds.
+
+Two things the bench corrected. The failure window originally counted probe
+rounds, which silently stretched it (each round also carries the probe wait, so
+a nominal 60 s ran ~90 s); it now measures elapsed time from `/proc/uptime`.
+And the reset-reason latch turns out to carry no information at all: the
+driver reports `watchdog timeout` only when `WDIND` is set, and that bit does
+not survive the reset it is meant to flag. Both overflow paths were checked on
+the bench — the short window armed by the panic notifier, and a natural
+`OVSEL=9` overflow after the feeder was killed outright — and each came back
+reading `power-on / pin reset (WDTCNR=0xa5000000)`. A `netwatch` reboot, a
+power cycle and a genuine watchdog bite are therefore indistinguishable from
+that line. The panic record is the only positive evidence of a watchdog
+recovery; its absence proves nothing either way.
+
+Not enabled anywhere by default yet: shipped as an opt-in awaiting a field
+decision.
+
+<!-- Naming and documentation -->
+
+### Documentation — five user guides replace a subsystem-first reference
+The tree documented itself the way it is built: everything a reader needed
+existed, but in the README of whichever subsystem produced it. That serves
+someone who already knows where their problem lives, and fails everyone else —
+a first installation spanned four directories, and nothing said in which order
+to read them.
+
+`docs/` now carries the path a user actually walks, and all five pages are new
+in this release: first installation, choosing a radio mode, upgrading, using
+and maintaining the gateway, and troubleshooting. The MkDocs navigation leads
+with them. The subsystem READMEs keep their place as the reference layer
+behind, no longer as the entry point.
+
+### The project is `rtl8196e-gateway`, and no longer calls itself Zigbee-only
+The repository, the documentation site and the build scripts described a
+single-board, Zigbee-only firmware for one Lidl product. It has supported a
+second board since 4.0.0-pre, and three radio roles — Zigbee, Thread, and a
+standalone router — for longer than that. The name was telling new readers
+something untrue about what they were about to install.
+
+Renamed throughout: the project, the CI workflows, the build environment, and
+the per-subsystem READMEs. The default hostname follows the same move, above.
+
+Two names were deliberately left alone. The `2-Zigbee-Radio-Silabs-EFR32/`
+directory and the navigation section it carries are published URLs; breaking
+them to satisfy a naming rule would cost readers more than the inconsistency
+does. Historical entries further down this file keep the old name too — they
+describe what was true when they were written.
+
+### Changed: the default hostname is `rtl8196e-gw`, not `zigbeegw`
+
+The firmware runs three roles — Zigbee coordinator, Thread Border Router,
+standalone router — on two boards, and the default hostname claimed only the
+first of them. A border router announced itself on the LAN as a Zigbee gateway:
+`zigbeegw login:` on the console, `zigbeegw` in `uname -a`, and `zigbeegw` sent
+as DHCP option 12, which is the name the router's DNS then serves to everyone
+else. The new default says what the box is — an RTL8196E gateway — and leaves
+the role to the role.
+
+**Only fresh installs are affected.** `etc/hostname` is in the preserved set of
+both `flash_install_rtl8196e.sh` and `flash_remote.sh`, so an existing gateway
+keeps whatever name it has across an upgrade, including `zigbeegw`. The new
+value ships with a first install or a full-flash — and there, the DNS name of
+the box changes, so anything addressing it by name (a Zigbee2MQTT adapter path,
+a bookmark, a firewall rule) needs the new one. To keep the old name:
+
+```sh
+echo zigbeegw > /userdata/etc/hostname && reboot
+```
+
+The hostname has always been a plain writable file on the JFFS2 partition; any
+other value works just as well.
+
+### Login banner is now board- and role-neutral (`etc/version`, `etc/motd`)
+
+`etc/version` and `etc/motd` greeted every board as a "Lidl Zigbee Gateway" —
+wrong on a ported board (e.g. the Sengled G4), and "Zigbee" is wrong whenever
+the box runs as a Thread Border Router or a standalone router. Both now read
+"RTL8196E Gateway": the RTL8196E SoC is common to every supported board and the
+name carries no role, so the banner is accurate in every configuration. The
+board-specific identity a client actually consumes is advertised over mDNS by
+`S70otbr` (see below). The project name ("Lidl Silvercrest Gateway", in
+docs/repo) is unchanged — this is only the on-device login banner.
+
+<!-- Addressing and first-run configuration -->
+
+### Changed: gateway addresses are resolved from the host's network, not hardcoded
+
+`192.168.1.88` and `192.168.1.6` were the maintainer's addresses. They were
+baked into every host-side script as the default, and into the prompts that
+build an image — so a user on `192.168.0.0/24` or `10.0.0.0/8` was offered an
+address they could not reach, and had to override an environment variable on
+every single command.
+
+The addresses now come from `lib/gwconf.sh`, one resolver shared by the flash,
+backup, restore and bench scripts. In order: the explicit argument, the script's
+environment variable, `gateway.env` at the repository root (gitignored, template
+in `gateway.env.example`), `.gateway-state` (gitignored — what the last install
+wrote and the last gateway reached), a value derived from the LAN of the machine
+running the script (its netmask, its default route, host part 88 for the gateway
+and 6 for the bootloader), and only then the historic constants. On a
+`192.168.1.0/24` LAN every value is unchanged.
+
+Two consequences worth knowing:
+
+- The address chosen at install time is written back, so a re-install proposes
+  the same one and `backup_gateway.sh`, `flash_remote.sh`, `flash_efr32.sh` and
+  the bench scripts find the gateway with no argument. `flash_remote.sh` no
+  longer requires `LINUX_IP`. Whenever an address was not stated explicitly the
+  scripts print it with its origin before acting, and `flash_remote.sh` compares
+  the gateway's hostname against the recorded one — a remembered address can be
+  handed to another machine by a DHCP server, and the next step reboots the
+  target into its bootloader.
+- Changing the gateway's address by hand — edit `/userdata/etc/eth0.conf`,
+  reboot, reconnect — never reaches back to the machine running the flash
+  scripts, so `.gateway-state` keeps pointing at the old address and the next
+  argument-less command aims at a host that is no longer there. The failure was
+  already safe and already named its source, but the only advice it offered was
+  about cables and bootloaders. It now explains that the record may be stale and
+  gives the three ways out. `docs/using-the-gateway.md` states the consequence
+  where the reader learns the procedure.
+- `flash_userdata.sh` no longer rewrites `docker-compose-otbr-host.yml` and
+  `z2m/configuration.yaml` in place. Editing tracked files left the working tree
+  dirty after every install. The compose file now reads `RCP_HOST` from a
+  gitignored `.env` written next to it; the Zigbee2MQTT port is printed for the
+  user to paste, as its documentation already instructs.
+
+### Fixed: the bootloader address is only derived where boothold can hand it over
+
+Deriving the bootloader's address from the host's LAN is right for the caller
+that then tells the bootloader where to be — `boothold`, used by
+`flash_remote.sh` and by the upgrade path of `flash_install_rtl8196e.sh`. It is
+wrong everywhere else: a first installation, a restore, or a bare partition
+flash finds a gateway already sitting at a bootloader prompt, reached by a cold
+boot and a serial ESC. Nothing can move it, so it answers on the address
+compiled into it — `192.168.1.6` — whatever LAN the host is on. The derivation
+would have sent a first flash from a `192.168.0.0/24` machine looking for a
+bootloader at `192.168.0.6`.
+
+`gwconf_cold_boot_ip` now serves those callers and never derives;
+`gwconf_boot_ip` keeps the derivation for the two that hand the address over.
+`flash_install_rtl8196e.sh` has both paths, so it starts from the compiled
+default and switches to the derived address only once it knows it is going
+through boothold. A value stated by flag, environment or `gateway.env` still
+wins everywhere — the address can be set by hand with `IPCONFIG` at the
+bootloader prompt.
+
+Found while auditing the documentation rather than by a test: the first-install
+path is the one scenario the bench campaign deliberately skipped, because
+rehearsing it wipes `/userdata`.
+
+### Fixed: a failed DHCP lease no longer strands the gateway on the wrong subnet
+
+When DHCP obtained no lease, `udhcpc.script` fell back to a hardcoded
+`192.168.1.254/24` with a `192.168.1.1` route. On any other LAN that made the
+gateway unreachable at precisely the moment the fallback exists to save it.
+
+The fallback is now read from `/userdata/etc/eth0.bak`, which the flash scripts
+generate in the subnet the gateway was actually installed on, high in the range
+so it cannot collide with the address used in static mode. The hardcoded values
+remain only as a last resort when that file is absent.
+
+Running that branch for the first time also exposed a defect that had been
+latent in it since it was written: the fallback never installed a default
+route. BusyBox ignores the selector in `ip route show default` and prints the
+whole table, so the guard saw the connected route added moments earlier,
+concluded a default route already existed, and skipped its own. A gateway that
+fell back was reachable from its own subnet but could reach nothing beyond it —
+including the 8.8.8.8 the same branch writes into `resolv.conf`. The guard now
+matches a real `default via ...` line. Verified on the bench: before the fix,
+`ip route get 8.8.8.8` answered `Network unreachable`; after it, the box pings
+8.8.8.8 from the fallback address.
+
+The `bound` branch carried the same idiom, where it was harmless in effect but
+dishonest in the log: it announced `Removing existing default routes` on every
+single lease, because the test matched the connected route rather than a
+default one. Fixed the same way, and the unconditional `Checking existing
+default routes` line above it is gone — it announced an intention, not an
+outcome. Exercising the branch afterwards showed the removal never runs at all:
+`ip -4 addr flush` a few lines earlier already drops any default route that
+pointed through this interface, so by the time the test executes there is
+genuinely nothing to remove. The block is kept as a guard for a default route
+reached through some other device; it simply no longer claims to have done
+work it did not do. `S15hostname` recognises
+the fallback by matching `eth0.bak` instead of comparing against a fixed
+address, and `eth0.bak` keeps its second role: the file to copy over
+`eth0.conf` to return to a static address.
+
+<!-- Boot and logging behaviour -->
+
+### Changed: no RSA host key — the first boot stops stalling for half a minute
+
+`S30dropbear` generated three host keys on the first boot, and RSA alone
+accounted for almost all of the wait. Measured on this SoC: ed25519 0.2 s,
+ecdsa 0.3 s, **RSA-2048 32.4 s** — sixty-five times the other two together. The
+function runs synchronously in the boot sequence, so that cost also delayed the
+button daemon, the UART bridge and OTBR, while the network was already up: the
+gateway answered ping but refused SSH for half a minute, which reads as a hang.
+
+Dropbear runs without `-r` and without `-R`, so it serves exactly the keys that
+exist and offers no other algorithm. ed25519 has been accepted by OpenSSH since
+6.5 and PuTTY since 0.68, ecdsa by OpenSSH since 5.7, so any client of the last
+decade connects. This is the host key only — logging in with an RSA *user* key
+is unaffected.
+
+Existing gateways are untouched: the function only creates what is missing and
+`etc/dropbear` is preserved across upgrades, so a box that already has an RSA
+key keeps serving it and nobody gets a host-key-changed warning. Anyone who
+needs one for an old client can create it once, and the command is in the
+script.
+
+Verified by deleting the host keys on the bench and rebooting: only ecdsa and
+ed25519 are generated, and `ssh-keyscan` confirms the server no longer offers
+`ssh-rsa`.
+
+### Changed: the boot log no longer goes silent on services that do nothing
+
+`S26panicrec` printed nothing on the path it takes almost
+every boot — no panic record to persist — leaving a `Starting S...` line with no
+outcome under it. Silence there reads like a service that failed rather than one
+with nothing to do. It now reports in the convention the other init scripts use:
+
+```
+Starting S26panicrec
+  panicrec: skipped (no panic record)
+```
+
+`panicrec` distinguishes its two quiet cases, because a record already sitting
+in `/userdata/panic/` is worth surfacing at boot: it reports
+`skipped (record already saved, delete to re-arm)`.
+
+`S70otbr` was the same defect in a third script, and the one that mattered most:
+it exits silently on every gateway that is not a Thread border router — any
+Zigbee box, and any fresh install whose radio has not been flashed yet. It only
+escaped notice because the bench runs in OTBR mode; a first-boot log from a
+virgin install is what exposed it. It now reports which mode won
+(`otbr: skipped (radio mode: ncp)`), says `no radio configured` when
+`radio.conf` does not exist yet, and `otbr-agent not installed` when the binary
+is absent.
+
+`S50uart_bridge` was checked and deliberately left alone: it prints nothing on
+its success path because the kernel driver already logs `armed on <tty> @ <baud>
+baud, listening on ...`, which is a documented decision rather than an omission.
+
+The same two-voice convention was applied to `wireguardctl` — lifecycle
+subcommands speak in the boot-log style, human-typed ones keep the tool's own
+voice. That work stays in the tree under `34-Userdata/wireguard/`, which this
+release does not ship; see its README.
+
+### Fixed: `/var/log/messages` was timestamped in UTC while everything else was local
+
+Correlating a field incident meant mentally shifting every log line by the UTC
+offset — against the login shell, against a home automation history, against a
+capture taken on another host. The offset is silent: nothing in the file says
+which zone it is in, and the box has no RTC, so there is no boot banner to give
+it away either. It cost a wrong reading of a real incident log before being
+noticed.
+
+`S05syslog` now exports `TZ` from `/etc/TZ` before starting syslogd, and passes
+`-t`. Both are required, and this is the part that is easy to get wrong:
+`syslog(3)` embeds its own timestamp in the message, and without `-t` BusyBox
+syslogd copies that verbatim instead of stamping the line itself — so setting
+`TZ` alone changes nothing for any line a daemon wrote, which is nearly all of
+them. `TZ` was never in syslogd's environment to begin with: only `/etc/profile`
+exports it, and only for login shells, while init runs each `S*` script in a
+separate shell.
+
+Bench-validated across a reboot: with `-t`, a client forced to `TZ=UTC` is
+restamped local like every other, and the pre-NTP lines read `Jan 1 01:00:06`
+rather than `00:00:06` — the zone offset is already applied to the epoch, so
+`TZ` is in effect from the very first line written.
+
+The cost is the one-hour fold at the DST fallback, which the previous comment
+in the script cited as the reason for UTC. Kernel lines still carry the
+monotonic `[ seconds ]` prefix and disambiguate themselves; for daemon lines,
+an hour of ambiguity once a year is a smaller problem than a constant offset
+against every other clock in the installation.
+
+### Fixed: every syslog line was stamped `(none)` instead of the gateway's name
+
+`/var/log/messages` never carried the hostname. Every line, for the whole
+uptime, read `(none)` — which is not a formatting artefact but the kernel's
+literal `CONFIG_DEFAULT_HOSTNAME`, the name the box holds until something sets
+one. It stayed invisible for as long as nobody had another gateway's log to
+read beside it.
+
+BusyBox syslogd reads the hostname **once**, before forking, and stamps every
+subsequent line with that copy. `rcS` runs the init scripts in glob order, so
+`S05syslog` starts the daemon well before `S15hostname` gets to call
+`hostname -F`. The daemon therefore caches the default and keeps it until it is
+restarted — which is why a log could show the real name partway through: those
+lines come from a second syslogd, started later from a login shell. That also
+explains the mixed timestamps seen while diagnosing a field incident, since a
+login shell sources `/etc/profile` and thus exports `TZ` as well: same second
+instance, both symptoms.
+
+`S05syslog` now applies `/etc/hostname` before starting the daemon. The
+ordering constraint belongs to syslog, so it is expressed there rather than by
+renumbering scripts; `S15hostname` keeps its real job, writing `/etc/hosts`,
+which needs an address this early script does not have yet. Bench-verified:
+zero `(none)` lines in a full boot, the name present from the first line.
+
+<!-- Component versions -->
+
+### Kernel — Linux 6.18.35 → 6.18.41 on the production line, 7.1.3 → 7.1.7 on the alternate one
+Both lines move up and the four shipped images
+(`{lidl, sengled-e39-g8c}` × `{6.18, 7.1}`) were regenerated, so every board
+ships a kernel built from the same overlay as the drivers below. `uname -r`
+names the upstream release and the firmware release together
+(`6.18.41-rtl8196e-v4.0.0`), which is what identifies a kernel partition after
+a kernel-only reflash.
+
+The production line deliberately stops at `.41` rather than the newest `.43`.
+Benching every point release of the interval, paired and back to back, puts the
+last good release at `.41` and the first bad one at `.42`, which costs about
+2.2 Mbit/s of TX:
+
+| version | commits | TX | RX |
+|---|--:|--:|--:|
+| 6.18.38 | — | 68.2 | 90.6 |
+| 6.18.39 | 496 | 68.3 | 89.8 |
+| 6.18.40 | 1617 | 68.8 | 89.3 |
+| **6.18.41** | 3 | **68.8** | 89.4 |
+| 6.18.42 | 672 | 66.0 | 86.6 |
+| 6.18.43 | 2 | 66.8 | 86.9 |
+
+Those six rows are a within-campaign comparison on a fixed driver, taken before
+the two I-MEM placements below, and they are left as measured — the point of the
+table is the step between rows, not the absolute level. The shipped `.41` image,
+benched after both placements, reads **TX 70.7** (10 reps, σ 0.80) and **RX
+92.8** (3 reps, 91.9–93.2); the 7.1.7 image reads TX 72.2 and RX 89.4. Those two
+are single runs taken 45 minutes apart, so the gap between the two lines is not
+settled — only the level of what ships is.
+
+The loss is not attributable to any single commit — reverting all of `net/`
+restores it, no subgroup does — and whether it is extra work or merely a
+different link layout was not settled. Either way, stopping at `.41` takes 2116
+upstream commits at no measured cost, where `.43` takes 671 more and pays for
+them; nothing in those 671 applies to this configuration. 7.1 takes its newest
+point release, which costs nothing there.
+
+All 57 patches per line apply with no reject and no fuzz. Four needed a refresh
+for line offsets only, with identical content; four are new this release — the
+`csum_partial` placement, the copy-core placement and the `modpost`
+authorization it needs, and the `vermagic.h` arm below.
+
+### Kernel — `csum_partial` runs from on-chip SRAM
+
+Driver v2.23 made RX checksums a gated policy: TCP is verified by the stack
+rather than trusting the switch's uncharacterised checksum bits. That turned
+`csum_partial` into a per-RX-packet function, and it was still being fetched
+from SDRAM.
+
+The RTL8196E has 16 KiB of on-chip instruction SRAM (I-MEM), filled at boot
+through the Lexra COP3 window. The window is **always** 16 KiB whatever `.iram`
+holds, and only 8 700 B of it were in use — the remaining 7.7 KiB were
+inter-section padding, SRAM that was simply wasted. `csum_partial` (1 432 B)
+now goes there: `.iram` 8 700 → 10 144 B, `.text` down 1 440 B.
+
+Measured on `.88`, four interleaved `base`/`csum` pairs across two sessions,
+5×30 s TX and 3×30 s RX medians per point, radio quiesced:
+
+| pair | RX baseline | RX with I-MEM | Δ RX | Δ TX |
+|---|--:|--:|--:|--:|
+| 1 | 89.1 | 91.1 | +2.0 | +0.3 |
+| 2 | 89.9 | 90.8 | +0.9 | +0.9 |
+| 3 | 89.5 | 90.7 | +1.2 | +1.5 |
+| 4 | 88.9 | 90.2 | +1.3 | +1.5 |
+| | | | **+1.35** | **+1.05** |
+
+Eight paired differences, all positive, and the distributions do not overlap —
+the best baseline (89.9) stays below the weakest treated run (90.2). Against a
+±0.9 same-binary noise floor, no single pair would be a result; the pattern is.
+
+What is **not** established is why. Moving 1 432 B out of `.text` also shifts
+everything downstream, and code placement alone is worth ±2–4 % on this SoC.
+Separating the two needs a `.space 0x598` left at the original location so every
+other `.text` address is preserved; that control has not been run. The gain is
+measured, its mechanism is assumed.
+
+Placement is guarded on `CONFIG_RTL8196E_IMEM &&
+CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT`, so it follows the same two switches as
+every C-side annotation and the PoC baseline that turns default placement off
+still removes every default placement site.
+
+Ships as a patch on both kernel lines.
+
+### Kernel — the two assembly copy cores run from on-chip SRAM
+
+A dynamic profile of the RX and TX paths — PC sampling in 16-byte buckets, one
+bucket per cache line, RX and TX measured separately — ranked two shared
+assembly bodies far above everything else per byte:
+
+| body | size | % RX work | % TX work | % per KB |
+|---|--:|--:|--:|--:|
+| user-copy core (`__raw_copy_{to,from}_user`, `memcpy`) | 700 B | 41.5 | 20.4 | **90.6** |
+| checksum-copy core (`__csum_partial_copy_*`) | 856 B | — | 15.1 | 18.1 |
+| `tcp_ack` | 5 056 B | 0.4 | 1.7 | 0.4 |
+
+Both move into the on-chip instruction SRAM, taking `.iram` from 10 144 to
+11 712 bytes of the fixed 16 KiB window. `tcp_ack` is listed because it headed
+every pair of the earlier *static* conflict model and returns 0.4 % of profile
+per kilobyte — 220 times less than the copy core. Selecting by static extent had
+been picking exactly the functions that matter least per byte.
+
+Eight paired A/B runs of the shipping form, balanced order, one saved image per
+variant with its md5 verified at every flash:
+
+| | mean | 95 % CI | positive |
+|---|--:|---|---|
+| **TCP TX** | **+1.39 Mbit/s** (+2.0 %) | [+0.63, +2.15] | 7/8 |
+| **TCP RX** | **+1.88 Mbit/s** (+2.1 %) | [+1.54, +2.21] | 8/8 |
+
+The declared utility gate — a 95 % lower bound above 0.70 Mbit/s — was **not**
+formally cleared on TX: the bound is +0.63. The point estimate is twice the bar,
+RX is unambiguous, and the change ships with that stated rather than rounded
+away. What causes the gain is also open: on-chip SRAM latency, an avoided
+I-cache conflict, or both.
+
+Verified before shipping: the exception table holds 477 entries with 105 having
+instruction *and* fixup in `.iram` and **none straddling**; 236 of 14 310 `.text`
+symbols move while `.data`, `.rodata` and `.bss` do not, `softnet_data` and
+`tcp_ack` among them; and user-fault recovery was tested on the board — bad
+addresses through `read`, `write` to a file and to a pipe, and `sendto` to
+exercise `csum_partial_copy_from_user` — all returning `EFAULT` cleanly with no
+oops.
+
+Requires a third patch, `scripts/mod/modpost.c`, to authorize `.iram` as an
+`__ex_table` fixup target: the copy-user routines carry exception entries for
+faults on user pointers, and modpost refuses a target in an unlisted section.
+Checked before authorizing that the faulting instruction and its handler move
+into `.iram` together, so fault recovery stays intact.
+
+`.iram` now holds 11 712 bytes of 16 384; **4 672 remain free**.
+
+### Kernel — `CONFIG_MODULES=y` builds again on this port
+
+Nothing is modular in the shipped configuration and nothing becomes modular
+here. This removes a build failure that made the option impossible to even
+evaluate.
+
+`arch/mips/include/asm/vermagic.h` picks `MODULE_PROC_FAMILY` from a cascade of
+upstream CPU types — BMIPS, MIPS32_R1..R6, MIPS64_\*, R3000, R4300, LOONGSON\*,
+OCTEON, P5600 — and falls through to an `#error` otherwise. The Lexra core is
+not an upstream CPU type, so `CONFIG_CPU_RLX4181` matched nothing and any
+`CONFIG_MODULES=y` build stopped at:
+
+```
+vermagic.h:54:2: error: MODULE_PROC_FAMILY undefined for your processor configuration
+```
+
+An `RLX4181` arm at the head of the cascade fixes it. The string only has to be
+unique and consistent between `vmlinux` and its modules. With
+`CONFIG_MODULES=n` the macro is unused and the image is byte-identical
+(`.text` 3 312 688 either way, verified).
+
+Two facts for whoever picks this up. `CONFIG_MODULES=y` adds **381 KiB** to
+`.text` — five times what WireGuard adds — because `--gc-sections` can no longer
+drop anything reachable from an `EXPORT_SYMBOL`; `CONFIG_TRIM_UNUSED_KSYMS` was
+not tried and would claw some of that back. And that 381 KiB costs **no
+measurable throughput**: `MODULES=y WIREGUARD=m` measured 68.0 / 67.9 against a
+shipping baseline of 69.6 / 67.4, a gap of 0.55 against ±0.9 repeatability. A
+first pass at one run per point suggested modularising cost 1.6 Mbit/s; the
+reversed-order repeat showed that was baseline drift.
+
+Not measured: a module actually loaded. We know what its presence costs
+(nothing); we do not know what its use costs, nor whether running from vmalloc
+space penalises a tunnel against the built-in version.
+
+Ships as a patch on both kernel lines.
+
+### Userdata — OpenThread Border Router pinned to the upstream release `v2026.07.0`
+
+`build_otbr.sh` pinned a main-branch commit (`717abf0d`, 2026-05-01) because
+ot-br-posix had no recent tagged release; the project has since started cutting
+CalVer releases, so the pin is now the tag `v2026.07.0` (2026-07-01). It contains
+the previous pin — 107 ot-br-posix commits further on, carrying an OpenThread
+core bump of 195 commits (`fb274efe6` → `c34311ff5`). Upstream's own notes for
+this release are dominated by integration tests; the one host fix (D-Bus method
+hangs on Spinel set-property failures) does not apply to a build configured with
+`OTBR_DBUS=OFF`, and the advertising proxy that #3416 enables by default for all
+mDNS backends was already active here through `OTBR_MDNS=openthread`.
+
+What matters on a bump is that the three local patches still land, since two of
+them are the reason Home Assistant can talk to this border router at all. All
+three re-applied on the new tree and are visible in the artefact: the REST JSON
+keys are PascalCase (`ActiveTimestamp`, `NetworkKey`, `PSKc`, `MeshLocalPrefix`
+present; no camelCase spelling left), the six `/api/actions` route registrations
+are commented out so python-otbr-api 2.10+ falls back to the PascalCase parser,
+and the `uart-sw-flow-control` URL parameter (#134, @hlyi) is in the binary for
+boards without RTS/CTS.
+
+`otbr-agent` grows from 4 761 288 to 4 828 936 bytes (+66 kB, +1.4 % — the JFFS2
+userdata partition has room), and reports
+`OPENTHREAD/thread-reference-20250612-1257-gc34311ff5-dirty`, the `-dirty`
+suffix being our flow-control patch. `ot-ctl` rebuilds byte-for-byte identical.
+**Built, not yet exercised on hardware**: the development gateway currently runs
+the NCP firmware (Zigbee), so its Thread path is not in play.
+
+### Rootfs — Dropbear 2025.89 → 2026.94
+
+Five upstream releases, most of them carrying security fixes, and the SSH daemon
+is the gateway's only remote entry point. The ones that reach a build like ours:
+
+- **2026.90** — an authenticated user could bypass an `authorized_keys`
+  `forced_command` when the server runs with `-t`; `authorized_keys` is now opened
+  non-blocking, so a special file in its place can no longer wedge a login; the
+  missing OpenSSH patch for **CVE-2019-6111** (a malicious server overwriting
+  unexpected files through `scp`) was added, as was clearing setuid/setgid bits on
+  files received by `scp` (**CVE-2026-35385**). We ship `scp`, so both client-side
+  fixes apply to anyone copying files *from* the gateway.
+- **2026.92** — `-B` (blank password) combined with `-t` let a blank-password
+  account in without pubkey auth; long `authorized_keys` lines were parsed such
+  that the tail of a line became the start of a new one, which can defeat a
+  `command=` restriction on keys added by external tooling.
+- **2026.93** — use-after-free in X11 forwarding (not built here), out-of-bounds
+  read in utmp/wtmp handling, and `permitlisten` entries with an invalid port are
+  now ignored rather than misread.
+- **2026.94** — fixes an `scp` build regression from 2026.93 and supports longer
+  `scp` paths.
+
+Two behaviour changes are visible from the outside. `scp -r` now refuses a target
+directory that already exists (2026.90, logic corrected in 2026.91) — it affects
+the gateway's own `scp` client, not the `scp -O` a host runs against the gateway.
+And log lines now bracket IPv6 addresses that carry a port
+(`[2a00:…:1c6]:22`), which matters to anything parsing them, `fail2ban` style.
+Dropbear's new default of disabling client-side compression changes nothing here:
+the build has always passed `--disable-zlib`, so compression was never available.
+
+No configure flag had to change — the deprecations in 2026.92/93 concern auth
+plugins and `--enable-plugin-deprecated`, which this build never enabled. The
+result is a static MIPS-I musl binary of 634 608 bytes, 704 more than 2025.89,
+and its advertised algorithm set is unchanged: curve25519-sha256,
+sntrup761x25519, mlkem768x25519, ssh-ed25519, ecdsa-sha2-nistp256, rsa-sha2-256,
+chacha20-poly1305 and aes256-ctr all resolve in the new image exactly as in the
+old one.
+
+Validated on the development gateway before shipping, without disturbing the
+running daemon: the new binary was copied to `/tmp`, generated an ed25519 host
+key with its own `dropbearkey`, and served a second instance on port 2222 while
+the production one kept port 22. Through that instance, an interactive session
+opened and ran commands, and a 200 kB `scp` transfer arrived with a matching
+md5 — which also exercises the gateway-side `scp` applet, the one the CVE
+patches above touch. The instance was then killed and the temporary files
+removed.
+
+`build_dropbear.sh` also changed its working directory to its own: every path
+after the download was relative, so running the script from anywhere but
+`33-Rootfs/dropbear/` scattered a `DROPBEAR_<version>/` tree wherever the shell
+happened to be — which is exactly how a stray `33-Rootfs/DROPBEAR_2025.89/`
+came to exist.
+
+<!-- Kernel drivers -->
+
+### Kernel — Ethernet LAN LED true off (`rtl8196e-eth` v2.23 → v2.24)
+
+The visual LED regression gate found that `led_mode=off` reported success but
+left the LAN LED visibly DIM. The old path wrote `LEDCREG=0` and
+`DIRECTLCR=0`; the RTL8196E SDK definitions and live register tests show why
+that cannot mean off: topology zero is scan mode, while DIRECTLCR is a
+duty-scale register whose zero value still leaves a minimum-duty glow.
+
+v2.24 declares the active-low LAN LED pad on the Ethernet node, claims it
+through gpiolib and preloads its inactive physical-high state. `bright` and
+`dim` program the ASIC and route the pad to LED_PORTn; `off` routes only that
+pad to GPIO, where it remains fully dark. The mux field is derived from the
+board device tree rather than hard-coded: Lidl uses B6/LED_PORT4 and Sengled
+G4 uses B2/LED_PORT0. Failed mux changes are propagated and the remembered
+mode is updated only after a successful hardware transition, so switch-core
+reset replay cannot advertise an unapplied state.
+
+The true-off GPIO route was visually validated on Lidl. The 6.18 and 7.1
+overlays carry identical v2.24 sources, and all four Lidl/Sengled build
+combinations compile. The LED test script now detects the board and records
+the ASIC, pin-mux and GPIO readbacks needed to distinguish true OFF from the
+former false-DIM state.
+
+### Kernel — UART bridge client/relisten lifecycle (`rtl8196e-uart-bridge` v1.6 → v1.7)
+
+The independent A2 audit exposed that the bridge's advertised
+replace-on-connect policy was dead code: its only worker blocked in
+`kernel_recvmsg()` for the first client and could not return to `accept()` to
+see a replacement. v1.7 splits those roles. A permanent accept worker remains
+available while a dedicated client worker shovels TCP→UART; a new connection
+atomically removes the predecessor, shuts it down, joins its worker and takes
+over. The client worker owns its socket through final release, including EOF,
+replacement and disarm paths, so the fix does not trade the availability flaw
+for a socket/task lifetime race.
+
+Live listener reconfiguration is also transactional. The old listener is
+stopped before binding its replacement, allowing the security-sensitive
+`0.0.0.0` → `127.0.0.1` transition on the same port without the old wildcard
+socket causing `EADDRINUSE`. The independent client worker is preserved across
+successful port/address changes. A failed change recreates the old listener;
+if rollback itself fails, the bridge disarms rather than retaining a false
+`armed=1` state without an acceptor.
+
+Finally, tty callback ownership changes are quiesced. Arm holds the tty
+flip-buffer exclusion, installs bridge `client_ops` before opening the UART and
+publishes all state before releasing it. The first v1.7 candidate target disarm exposed
+an ordering bug: it called `uart_close()` while already holding the
+non-recursive flip-buffer mutex, then self-deadlocked when
+`tty_buffer_flush()` tried to acquire that mutex. The corrected v1.7 closes the UART with
+`bridge_lock` dropped, allowing close/flush and any dispatched RX callback to
+finish, and only then takes flip-buffer exclusion to restore the saved
+callback table. Partially armed error unwinds use the same ordering.
+
+The 6.18 and 7.1 objects compile and their complete `vmlinux` images link with
+`W=1`; their sources differ only by the 7.1 `kernel_bind()` argument type.
+The corrected v1.7 was then validated on the development gateway at 460800 baud:
+active/idle client replacement, live client teardown and replacement, repeated
+arm/disarm, and sustained read-only EZSP traffic teardown passed on both kernel
+lines. The target gates are therefore closed for this unreleased change.
+
+### Kernel — TC0 clockevent: do-not-toggle hardening (`timer-rtl819x` v1.2 → v1.3)
+
+The historical saturation wedge is strongly attributed to TC0’s COUNTER-mode
+`TC0_EN: 0 → 1` re-arm edge, rather than to Ethernet traffic or lost MMIO
+writes.
+During the failures the visible enable, DATA0 and interrupt registers remained
+correct while COUNT0 stayed zero; TC1 continued at the healthy 25 kHz cadence.
+The evidence is consistent with TC0 functional logic missing that edge across
+its slow clock domain.
+
+The production remedy is **do-not-toggle (DNT)**. TC0 enters TIMER/auto-reload
+mode with enable held high; every one-shot is armed by writing DATA0 while it
+runs. The old disable → DATA0 → enable transition is absent. The IRQ sequence
+masks TC0, W1C-acks, writes DATA0, W1C-acks again and unmasks, preventing a
+stale completion from becoming the next event. During NO_HZ idle, TC0 remains
+enabled but IRQ-masked, so `CONFIG_NO_HZ_IDLE` is safe and tickless operation
+does not recreate the hazardous edge.
+
+The DATA0 reload semantics were validated with forced minimum, intermediate and
+maximum/short-replacement cells. A running maximum (~3 h) deadline was
+replaced by a short one deterministically, with zero missed, double or
+parasitic IRQs. The cause-level DNT soak completed **26.3 h and 54.8 million
+kernel reprogrammings under bidirectional saturation**, with zero wedge, missed
+IRQ, double IRQ, parasitic IRQ or unresolved write-ahead record.
+`pend_at_unmask` at the registered minimum delta remains telemetry: pending is
+preserved and the corresponding IRQ is delivered.
+
+DNT is selected by `CONFIG_RTL819X_TC0_DNT=y`. The verified legacy
+disable/DATA0/enable + observe/retry path remains the protected boot and
+fallback path. Experimental phase sweeps, busy waits and forensic DRAM
+instrumentation are removed from the production hot path. Three
+reboot-separated iperf3 suites on 6.18 for each configuration showed no
+adverse throughput effect beyond normal run-to-run variation. Three additional
+7.1 DNT runs confirmed compatibility on that kernel line. Unlike phase
+avoidance, DNT has no per-event busy-wait cost.
+
+### Kernel — watchdog: production recovery record (`rtl819x-wdt` v1.11 → v1.12)
+
+The watchdog is returned to its production role. Start, stop and ping are
+constant-time MMIO operations; the 1 Hz flight recorder, printk capture,
+scheduler/list walks, Ethernet/NAPI and INTC snapshots, and multi-record
+decoder are removed.
+
+On panic it first arms the validated short reset sequence (disable/clear, then
+zero), then optionally writes a fixed 108-byte record v9: uptime, EPC/RA, CP0
+cause/status, pending softirqs, WDTCNR, flags and a sanitized reason. Magic is
+published last. The next boot prints one `previous panic:` line and clears the
+DRAM record; `S26panicrec` persists the first such line to
+`/userdata/panic/history`, which the operator explicitly deletes to re-arm.
+
+The record has a dedicated no-map page, `watchdog-crash@1ffd000`, separate
+from bootloader handoff page `boothold@1ffe000`. Both 6.18 and 7.1 watchdog
+objects/DTBs compile cleanly and the driver passes checkpatch.
+
+`S26panicrec` no longer dates its capture line 1970. The board has no RTC, so
+the clock starts at the epoch every boot, and since #125 `S20time` only starts
+`ntpd` as a daemon rather than blocking on a one-shot sync — the step lands
+well after this script, which meant the persisted line always carried a
+confidently wrong date. It now marks the stamp `(clock not yet synced)` when
+the year is implausible, and points at the record's own `uptime=` field, which
+is the trustworthy indication of when the panic happened.
+
+Bench verification of the whole chain on the release image (2026-08-07,
+`.88`): a `sysrq-c` panic passed all ten checks — record written, survived the
+reset, decoded once, persisted, watchdog and feeder re-armed — and a second
+incident with the feeder killed outright confirmed the hardware bite itself,
+the board resetting unaided about 681 s after the last kick and coming back
+with the DRAM magic already cleared and `history` untouched, so the one-shot
+and first-occurrence guards both hold across a later reboot.
+
+### Kernel — software-PWM LED lifecycle hardening (`leds-gpio-pwm` v1.1 → v1.2)
+
+The STATUS LED PWM state machine is now safe for the full atomic LED callback
+contract. The old rail transition called `timer_delete_sync()` from
+`brightness_set()`, which LED triggers may invoke in hard-IRQ context; if that
+IRQ interrupted the PWM softirq, both contexts could wait on each other
+forever. Threshold, counter, active state, GPIO writes and timer decisions are
+now serialized by one IRQ-safe lock. Rail transitions mark PWM inactive and
+use non-blocking `timer_delete()`; synchronous shutdown is confined to an
+ordered process-context devres action after LED-class unregister and before
+GPIO release.
+
+Probe now rejects sleep-capable GPIO providers, propagates kept-state read and
+direction errors, and no longer retains unused private brightness/driver data.
+A new `leds-gpio-pwm` DT schema documents the supported gpio-leds-like subset
+and rejects the lifecycle properties the driver does not implement. Source,
+binding, DESIGN and AUDIT are identical between 6.18 and 7.1; the equivalent
+Kconfig changes differ only by their upstream context line.
+
+The established PWM behavior is unchanged: four jiffies per cycle at `HZ=250`,
+62.5 Hz output, quantized rails with no recurring timer, and the intentional
+`mod_timer(..., jiffies)` rearm that fixes issue #120. Intermediate brightness
+still creates 250 timer wakeups/s and limits `NO_HZ_IDLE` residency while
+active; this is an explicit design cost, not a hidden regression.
+
+### Kernel — IRQ and GPIO drivers: independent-audit diagnostic-hygiene pass (`irq-rtl819x` v1.1 → v1.2, `gpio-rtl819x` v1.2 → v1.3)
+
+Independent security and performance audits of the interrupt-controller and
+GPIO drivers found no vulnerability and no runtime defect in either. The routing
+policy was confirmed appropriate for this product and is unchanged: TC0 on IP7,
+UART1 on IP4, switch/Ethernet on IP3, UART0 on IP2. What the audits did find is
+that three pieces of telemetry meant what their comments did not say — harmless
+to execution, but able to send a future investigation down the wrong path.
+
+The headline: the architecture dispatcher named CPU line IP3 "UART1" and IP4
+"SWITCH", the exact inverse of the routing the irqchip programs (`IRR1 =
+0x30420007`, read back on live silicon). Nothing was ever misrouted — IP*n*
+maps to CPU IRQ *n*, and all three cascade lines share one chained handler — but
+the inversion did mislead a forensic campaign into reading an IP4-only trace as
+an Ethernet interrupt storm when it was ordinary UART1 traffic, and it would
+become a real bug the day distinct per-parent handlers are installed. The
+constants are now named after the CPU line they carry, above a canonical routing
+table that the IRR programming, the device tree and these labels must all agree
+with.
+
+Second, `count[8]` was being read as a tick counter and is not one. TC0 is
+requested directly on CPU IP7 and never traverses the chained INTC handler, so
+its GISR bit is only ever observed incidentally — it read near zero while the
+clockevent was plainly running. A dedicated `ip7` counter is now incremented in
+`plat_irq_dispatch()`, and the watchdog flight recorder's `d_tc0` reads it.
+Two more fields had their documented meaning tightened: `empty` is an ambiguous
+empty chained entry rather than proof of a storm (the one-snapshot dispatch
+design produces it in normal operation, when one parent drains every pending bit
+and the sibling parent then enters with nothing left), and `last_seen_j` is
+meaningful only while the clockevent is alive, since jiffies freeze together
+with the tick they measure.
+
+On the GPIO side, a `realtek,syscon` lookup failure now fails the probe through
+`dev_err_probe()` instead of collapsing every error into "absent". The old path
+also swallowed `-EPROBE_DEFER`, which could have turned a mere probe-ordering
+issue into permanently dead LED, button and EFR32-reset lines; every supported
+board inherits the property from the shared `rtl819x.dtsi`, so its absence is a
+broken device tree rather than an optional feature. A device-tree binding was
+added for the controller, constraining `realtek,led-pads` to unique offsets
+10-14 and writing down the shared-pad ownership contract that the GPIO and
+Ethernet drivers both read. A schema cannot catch an electrically wrong but
+syntactically valid pad number — that failure reads back perfectly correct and
+shows up only as a dead LAN LED — so board bring-up still requires a visual
+check. The registration banner now reports the core's effective `gc.ngpio`
+instead of a private constant that could only drift away from it.
+
+Both kernel overlays carry the change: the six affected files were byte-identical
+between the 6.18 and 7.1 trees beforehand, and are again.
+
+Both audits explicitly recommended leaving several things alone, and they were:
+the interrupt routing and priorities, consumer-driven unmasking, the one-snapshot
+bounded dispatch, the current I-MEM placement, the always-on INTC counters, the
+absence of a GPIO `.free` mux restore, the absence of a hardware valid mask
+while the character device stays root-only, and the absence of a GPIO irqchip.
+
+Verified statically so far: clean build, `.iram` at 8 700 of 16 384 bytes after
+the added IP7 counter, checkpatch clean on every touched file except the
+pre-existing space indentation of the architecture dispatcher. The bench gates
+from both reports — INTC counters against `/proc/interrupts`, `d_tc0` against
+CPU IRQ 7, LAN LED verified by eye, EFR32 reset pulse — are still to run.
+
+### Kernel — UART1 driver: independent-audit flow-control rework (`8250_rtl819x` v1.6 → v1.7)
+
+An independent security and performance audit of the EFR32-link UART driver was
+implemented and bench-validated on both kernel lines. The headline change: the
+driver now expresses RTS ownership in the serial core's native vocabulary
+instead of overriding it. The `set_mctrl` guard that force-held RTS under
+hardware flow control (the issue #109 wedge fix) protected the link but also
+intercepted legitimate requests — dropping to `B0` could leave physical RTS
+asserted, and a `CRTSCTS` removal could desynchronise the modem-control shadow.
+It is replaced by advertising `UPSTAT_AUTOCTS`/`UPSTAT_AUTORTS` (set only after
+the MCR read-back confirms the hardware state) plus `throttle`/`unthrottle`
+callbacks in the mainline `8250_omap` pattern: under tty backpressure the core
+now delegates to the driver, which masks the RX interrupts so the FIFO fills
+and the hardware itself deasserts RTS. `B0` genuinely drops DTR and RTS.
+
+The port lifecycle was also moved where the core expects it: the FIFO trigger
+and the flow-control gate are armed by a `startup` callback (before the core
+programs the FCR) and disarmed by a symmetric `shutdown`, eliminating the
+post-registration writes that raced the first open of `ttyS1`. Probe no longer
+touches the UART beyond the pin mux — operators reading the MCR via `devmem`
+will now see `0x00000000` until the first open, which is expected. Hardening
+around it: the optional phantom-timeout log line moved from hard-IRQ context
+to a workqueue, the phantom counters became 64-bit atomics, the MMIO window is
+size-checked, the silent 200 MHz clock fallback now fails probe explicitly,
+the UART1 pin-mux bits are restored on probe failure and removal, and the N+1
+divisor now programs zero for a unit quotient (unreachable below 12.5 Mbaud).
+
+Validated on the Lidl gateway on both kernel lines: termios/MCR semantics
+including the `B0` transitions, 500 open/configure/close cycles, an OTBR soak,
+and a loopback load campaign — 10-minute floods at 460800 and 892857 in both
+flow modes with byte-perfect echo, zero hardware overruns and IRQ/CPU cost on
+par with the June baseline; the new throttle path engages and recovers cleanly
+under a stalled-reader stress. The campaign also characterised a pre-existing
+platform envelope, confirmed by an A/B against the previous driver: a
+sustained full-rate flood at 691200 overruns the tty buffer layer (the flip
+worker starves at ~97 % CPU) while the hardware FIFO stays clean — real radio
+workloads sit far below this envelope, 460800 and 892857 floods are lossless,
+and the same traffic paced at 80 % is lossless at 691200 too.
+
+The driver's two audit reports were merged into a single English `AUDIT.md`
+(findings `8250RTL-010..017`) and `DESIGN.md` was rewritten to the v1.7
+architecture, both mirrored in the 6.18 and 7.1 overlays.
+
+### Kernel — Ethernet driver: independent-audit hardening pass (`rtl8196e-eth` v2.21 → v2.23)
+
+Two independent from-scratch audits of the `rtl8196e-eth` driver were reconciled
+and their findings implemented, then bench-validated on the Lidl gateway. The
+headline correctness fix: `ndo_tx_timeout` was calling `napi_disable()` — which
+sleeps in 6.x — from the `dev_watchdog` timer softirq while holding
+`tx_global_lock`, a "scheduling while atomic" bug that fired precisely under the
+load a TX timeout is most likely to hit. The callback is now atomic (stop the
+queue, record a diagnostic fingerprint) and hands the ring/switch recovery to a
+workqueue.
+
+Around it: the NAPI kick path masks the device IRQs before publishing NAPI
+state, closing a race the ISR and both software timers shared; the switch-core
+deep-reset recovery gained an explicit hold-down with bounded 1/2/4 s retries
+that never re-opens interrupts or carrier on a half-programmed switch and
+requires an administrative down/up once the retry budget is exhausted; each RX
+packet-header descriptor now occupies its own cache line, removing a
+false-sharing window where a rearm write-back could clobber a neighbouring
+switch DMA update (a silent, rate-dependent RX drop); the RX checksum policy now
+defaults to software verification except for characterised unfragmented IPv4
+UDP, trading a measured ~2–5 % RX at 8-stream saturation for the kernel's
+checksum-integrity contract instead of trusting uncharacterised switch bits for
+TCP/IPv6; the hardware table engine fails and propagates handshake/setup
+timeouts instead of silently proceeding; in-flight TX SKBs freed by a ring reset
+are accounted as `tx_dropped`; and packet/byte totals are 64-bit via
+`ndo_get_stats64` so they no longer wrap in days at line rate. Descriptor-pointer
+validation (exact element stride), the RX length bound (MTU + headers), the
+interface MTU floor (576), the `phy-id` range and a `!SMP` build guard were also
+tightened, and a coalesced TX kick is now drained at each dequeue-batch boundary
+so a descriptor flipped after the TX engine parked is never stranded on an
+RX-silent link.
+
+Two "improvements" were investigated on the bench and **rejected** because they
+brick the port: explicitly programming the PCR accept-max-length field — the
+vendor never writes it, its bit position is chip-variant-dependent, and writing
+it wedged the port entirely — and clearing the CSCR `AcceptL2Err` bit, which
+silently killed all CPU transmit (the CPU injects FCS-less frames under
+`EXCLUDE_CRC`, and that bit is exactly what lets the CPU port accept them). Both
+are left at their silicon defaults and the reasoning is documented in the
+register header.
+
+Validated on hardware: TCP RX at 100BASE-TX line rate (~94 Mbit/s), TX in the
+historical ~70 Mbit/s band, zero TCP retransmissions across the full RX/TX/UDP
+suite, all ring-anomaly and switch-core recovery counters at zero, and the
+recovery hold-down / bounded-retry / administrative-recovery lifecycle exercised
+by fault injection.
+
+### Kernel — the blmode pulse reports its sequence, not an outcome it cannot see (`rtl8196e-uart-bridge` v1.5 → v1.6, discussion #148)
+
+`blmode_pulse` drops the radio into its bootloader by holding the board's
+bootloader-entry pin through an nRST pulse. It then announced `blmode released,
+EFR32 in bootloader` — a claim the driver is in no position to make. Whether the
+radio actually stopped in its bootloader depends entirely on the firmware at the
+far end of the pin: a Gecko bootloader built without GPIO activation never
+samples it and boots the application instead. Nothing on the host side can tell
+those two outcomes apart.
+
+On a board whose pin works the message was merely redundant. In the one case
+where an operator actually needs the log — a radio whose bootloader ignores the
+pin — it asserted success while the chip quietly went back to running its
+application, which is exactly the wrong thing to read at that moment. Both lines
+now state what the driver did (`resetting EFR32 with blmode asserted`, then
+`blmode released, reset sequence complete`); establishing what the chip is really
+running is the caller's probe's job, which is what `flash_efr32.sh` has always
+done with the result.
+
+Raised by @hlyi while reviewing the bootloader-entry fast path on a Sengled G4.
+
+### Kernel — the phantom RX-timeout recovery goes silent (`8250_rtl819x` v1.5 → v1.6, issue #99)
+
+The rc5 quirk logged a rate-limited warning on every phantom RX-timeout it
+cleared — the field-confirmation instrument of the issue #99 campaign. The
+field data then showed the instrument was not free: the warning is emitted
+from the interrupt handler, and on a legacy (non-nbcon) console every record
+is written with interrupts disabled — ~147 characters at the 38400-baud
+console is **~38 ms of interrupts-off time per line**. On a board without
+RTS/CTS nothing stops the radio during that blackout, so the warning caused
+the very hardware overrun it was suspected of witnessing (the one field
+overrun coincident with a phantom landed 42 ms after the warning line — the
+console-write duration plus the drain). On RTS/CTS boards the AFE
+back-pressure makes the blackout loss-free, but each occurrence still cost a
+38 ms interrupt outage — and a fully-handled quirk that fills a healthy box's
+log with "stuck ... empty RX FIFO" lines reads like an error to users.
+
+v1.6 adopts full parity with the mainline `dw8250_handle_irq` precedent the
+workaround came from: the dummy-read recovery is now **silent**. Observability
+moves to two module parameters:
+
+- `/sys/module/8250_rtl819x/parameters/phantom_count` — per-boot total of
+  phantom recoveries (read-only; replaces counting `dmesg` lines).
+- `/sys/module/8250_rtl819x/parameters/phantom_log` — set this boolean
+  parameter to `Y` (for example, `printf 'Y\\n' >
+  /sys/module/8250_rtl819x/parameters/phantom_log`) to restore the timestamped
+  per-occurrence log line (identical text, now `KERN_INFO`) at runtime, when
+  diagnosing a field incident needs time correlation. Reading a boolean module
+  parameter returns `Y`/`N`; `1`/`0` are accepted input aliases, so
+  `8250_rtl819x.phantom_log=1` remains valid on the boot command line. No
+  reflash or reboot is required for a runtime change.
+
+Upgrading soakers, note: the `stuck RX-timeout` dmesg lines disappear at this
+version — read the counter instead.
+
+Issue #99 was reported by @olivluca; the field campaign that produced both the
+quirk and this refinement ran on gateways volunteered by @olivluca, @frtz13,
+@MaxRower and @hlyi.
+
+### `otbr-agent` — real software flow control on the RCP UART (discussion #134, @hlyi)
+
+A board without RTS/CTS wiring (the Sengled G4) runs its OT-RCP on the iostream
+UART backend, which **emits** XON/XOFF when its RX buffer hits the watermark.
+Upstream OpenThread cannot consume them: `HdlcInterface::OpenFile()` calls
+`cfmakeraw()` — which clears `IXON`/`IXOFF` — and its only flow-control radio-URL
+parameter, `uart-flow-control`, sets `CRTSCTS` (hardware only). So on such a
+board the radio's 0x11/0x13 reached the HDLC decoder as frame data, failed the
+FCS, and the frame was dropped. There is no way to get `IXON` from the outside:
+`tcsetattr()` at open overrides anything `stty` had set.
+
+`build_otbr.sh` therefore applies a patch to the OpenThread submodule
+(`patches/openthread-uart-sw-flow-control.patch`) adding a `uart-sw-flow-control`
+parameter that clears `CRTSCTS` and sets `IXON|IXOFF`, and `S70otbr` passes it
+when `radio.conf` says `FIRMWARE_FLOW_CTRL=sw` (`hw` still selects
+`uart-flow-control`, `none` neither). `IXON` honors the radio's XOFF and consumes
+the flow bytes; `IXOFF` lets the tty throttle the radio in return — the iostream
+backend honors an inbound XOFF, so the link is now flow-controlled in both
+directions. This is safe on a spinel link because OpenThread's HDLC encoder
+escapes 0x11/0x13 (`HdlcByteNeedsEscape`), so no payload byte can be mistaken for
+a flow character. Software flow control protects the software buffers, not the
+16-byte hardware FIFO: **230400 remains the recommended operating point** for a
+`sw` board; 460800 without RTS/CTS stays best-effort.
+
+Patch authored and validated by @hlyi on a Sengled G4, at the recommended `sw`
+operating point: OT-RCP at 230400, 18 hours of uptime with repeated Matter
+pairings, no `oe:` field on the `ttyS1` line of `/proc/tty/driver/serial` and no
+overrun warning in `dmesg`. The shipped `otbr-agent` is rebuilt with it.
+
+<!-- Tooling -->
+
+### `S70otbr` — derive the Thread BorderAgent vendor/model from the board (discussion #144)
+
+Requested by @hlyi (#144): `S70otbr` hard-coded `--vendor-name Lidl` /
+`--model-name Silvercrest` in the `otbr-agent` command line — the values a
+commissioner sees in the mDNS `_meshcop._udp` `vn`/`mn` TXT records. On a ported
+board (e.g. the Sengled G4) that mislabels the device. The two flags are now
+derived from `/proc/device-tree/model` — the same authoritative board identity
+`flash_efr32.sh` already keys off — defaulting to `Lidl` / `Silvercrest`, so the
+reference board is unchanged, and advertising `Sengled` / `E39-G8C` on the G4 —
+the model number on the unit's own label, @hlyi's call, not the marketing name
+("G4"). Matched with a `case` glob on the model file's contents — needs only `cat`
+plus a shell builtin (no `grep` binary-file heuristic, no `tr`; the ash command
+substitution simply drops the model node's trailing NUL).
+
+### `build_fullflash.sh` / `create_fullflash.sh` — the `xxd` requirement is gone (issue #147, @hlyi)
+
+Both scripts verify the assembled image by reading the four partition magic bytes back
+out of it, and did so with `xxd -p`. On Debian `xxd` ships in its own package and is not
+installed by default, so on a fresh host the run died — under `set -euo pipefail`,
+`xxd: command not found` (exit 127) aborted the script *after* the 16 MiB image had been
+assembled. `flash_install_rtl8196e.sh`'s prerequisite check did not catch it: the tool is
+used by the script it delegates to, not by the checker.
+
+Rather than add `xxd` to that checklist — which would only have covered that one entry
+point, leaving both fullflash scripts to fail the same way when run on their own, as the
+documentation invites — the dependency is removed. The magics are now dumped with
+`od -An -tx1 -v | tr -d ' \n'`: `od` and `tr` are coreutils, present on every Linux host.
+`xxd` is consequently dropped from `install_deps.sh` and the Dockerfile — nothing in the
+tree invokes it any more.
+
+## [4.0.0-rc5] - 2026-07-08
+
+_A **UART stuck-interrupt storm** with the exact issue #99 soft-lockup signature caught
+in the act on the bench and fixed (via the new **v8 diagnostic instrumentation**: flight
+recorder + panic-time kernel-log capture) — **field confirmation pending**; root-cause fix for
+the intermittent **RLX4181 TLB fault** (issue #109) behind the busybox
+`SIGSEGV`/`SIGILL`/`SIGBUS` crashes, switch-core **PHY-interface watchdog**, driver-comment
+cleanup, a **userdata supervision overhaul** (keepalive for every long-lived daemon +
+`otbr-monitor` ported from busybox-ash to a C daemon), an **`S70otbr` spinel
+flow-control fix** for boards without RTS/CTS (discussion #142), and **per-board
+pre-built bootloaders** closing the discussion #140 brick scenario, heading to the
+next release._
+
+### Kernel — issue #99: a UART1 stuck-IIR interrupt storm captured and fixed — field confirmation pending (rtl8196e-uart v1.4 → v1.5)
+
+- **The v8 instrumentation caught a soft-lockup in the act — on the bench, the day it
+  was built.** The reference unit crashed with the exact issue #99 macro-signature
+  while the flight recorder was running. The film of THAT crash is unambiguous: for the
+  final 21 s **UART1 (the EFR32 radio link) rotated at ~1360 interrupts/s = 100 % of
+  all interrupt-controller dispatches**, starving everything else to zero (timer wheel
+  frozen, NAPI never run — the ethernet "culprit" of the earlier theories an innocent
+  bystander in this capture). The UART registers at panic show a **contradictory,
+  frozen state**: IIR = 0xCC (interrupt pending, ID = RX character timeout, "bytes are
+  waiting in the FIFO") while LSR = 0x60 (Data Ready clear, "RX FIFO empty").
+- **Mechanism:** the 8250 core gates its RX drain on `LSR_DR`, so it reads nothing and
+  the timeout condition is never cleared; the level-triggered line re-asserts after
+  every interrupt return. Each rotation costs ~700 µs of MMIO on the 200 MHz bus
+  (~95 % of the CPU in hardirq): no schedule point is ever reached, the softlockup
+  detector fires at 20 s and the watchdog reboots the box.
+- **Fix:** a custom `port->handle_irq` in the UART1 glue driver — the classic
+  16550-clone workaround with a direct mainline precedent (`dw8250_handle_irq`: *"there
+  are ways to get [these] UARTs into a state where they are asserting
+  UART_IIR_RX_TIMEOUT but there is no actual data available … if we don't do this then
+  the 'RX TIMEOUT' interrupt will fire forever"*). On an RX-timeout ID with an empty
+  LSR, one dummy RBR read flushes the phantom byte and clears the latch. A rate-limited
+  `stuck RX-timeout IIR … occurrence #N` warning is the confirmation signal: one log
+  line = one averted storm, with unbroken uptime.
+- **Honest scope — this issue has been declared fixed twice before and the field
+  disagreed both times, so the claims are kept falsifiable.** Established: the bench
+  crash was this UART1 storm, measured at the registers. NOT yet established: (a) the
+  field crashes match on the macro-signature only — the v7 records structurally could
+  not see UART registers or per-line interrupt rates, so whether the reporting units
+  die of the same mechanism is unconfirmed until one of them logs the trace line (or a
+  v8 record decides otherwise); (b) the quirk has never been exercised against a live
+  storm (no false positives ≠ efficacy). Confirmation = the trace line with unbroken
+  uptime and no recurrence over several times the historical 3–8 day interval.
+- Validated so far: no false positives under normal spinel traffic nor across 10
+  otbr-agent restart cycles under a 60 Mbit/s UDP flood; ethernet throughput untouched
+  by construction (the change is confined to the UART1 interrupt path).
+- The rc4 bounded RX poll and all its detectors remain in place as hardening; the v8
+  record (below) stays as the permanent black box precisely in case this diagnosis is
+  wrong too.
+
+### Kernel — issue #99 reopened: v8 diagnostic instrumentation (wdt v1.11, eth v2.21, irqchip v1.1)
+
+- **The rc4 theory did not survive the field.** The first crash captured with the full
+  v7 record (uptime 7.83 d on v4.0.0-rc4) showed **every** rc4 detector counter at zero:
+  the bounded RX poll never saturated its budget once (`pollhit=0`), no stall run, no
+  deep reset, RUNOUT clear, TX idle — while the box still soft-locked ~21 s with
+  TIMER|NET_RX pending and a frozen timer wheel. The bounded poll remains (correct
+  hardening), but the field mechanism is elsewhere: the evidence points at an interrupt
+  storm on an **unidentified line**, with the ethernet state at panic consistent with an
+  innocent bystander (the normal `napi_defer_hard_irqs` masked window). The storming
+  source cannot be named from a final-frame snapshot — hence v8, which records the film:
+  - **Panic record v8** (`rtl819x_wdt` v1.10 → v1.11). The reserved 4 KB DRAM page is now
+    fully used: v7 core record (byte-compatible) + a v8 scalar block (CP0 Cause/Status,
+    GIMR/GISR, `preempt_count`, interrupted task comm, a raw **UART1 8250 register
+    snapshot** (IER/IIR/LSR/MSR/MCR), INTC dispatch stats, per-line last-seen jiffies,
+    eth activity stamps, RX ring base addresses that make the switch-pointer captures
+    decodable into ring indices).
+  - **1 Hz flight recorder.** A storm-proof `HRTIMER_MODE_REL_HARD` sampler (the same
+    context the softlockup detector provably kept running from during the field hang)
+    records per-second deltas of total hardirqs, per-INTC-line dispatches
+    (UART0/UART1/switch/TC0), NET_RX/TIMER softirq runs, eth ISR/poll/delivered/rx
+    counters, INTC entries and **empty-pending entries** (the signature of an INTC-level
+    storm no existing counter could see), plus live CPUIISR/CPUIIMR and NAPI state. The
+    newest 31 samples are copied into the DRAM page at panic — the 20 s hang window plus
+    a pre-onset baseline.
+  - **Panic-time kernel-log capture.** The last ~2.1 KB of the printk buffer are saved
+    into the DRAM page at panic (strictly best-effort, torn-safe length marker): it
+    contains the softlockup report — including the per-IRQ interrupt-storm utilization
+    table the kernel already compiles in (`SOFTLOCKUP_DETECTOR_INTR_STORM`) — and the
+    backtrace that headless field units could never show. Decoded and re-emitted at the
+    next boot under `flight|` / `panic-log|` prefixes; `S26panicrec` now persists the
+    whole multi-line block to `/userdata/panic/history`.
+  - **eth v2.20 → v2.21**: ISR/poll invocation counters with last-activity jiffies
+    stamps, a per-jiffy ISR burst high-water (an eth-line hardirq storm cannot hide from
+    it), a counter on the tx-reclaim timer's NAPI kick (the one `napi_schedule` that sets
+    `SCHED` without masking), all exposed via `ethtool -S` and the v8 record.
+  - **irqchip v1.0 → v1.1**: INTC dispatch statistics (entries, empty-pending, per-line
+    counts and last-seen jiffies) feeding the recorder and the record.
+  - Bench-validated end-to-end on the reference unit: sysrq-c panic → next boot decodes
+    the v8 scalars, the 31-row flight table (exact 1 s cadence) and the log tail ending
+    at the panic banner; live counters advance at the expected idle rates.
+
+### Kernel — MIPS TLB flush (RLX4181)
+
+- **Root-cause fix for the intermittent RLX4181 `SIGSEGV`/`SIGILL`/`SIGBUS` faults
+  (issue #109).** Under fork/exec pressure a user process would intermittently read the
+  *wrong physical frame* for a correctly-mapped virtual address — a plain load returned a
+  stale pointer its own page table never pointed to — corrupting a register mid-sequence
+  and crashing (busybox-ash, the fork/exec-heaviest process, was the most exposed).
+  The cause was in `local_flush_tlb_all()`: it began its invalidation sweep at a hardcoded
+  TLB index of **8**, inheriting the classic-R3000 assumption that the `Random` register
+  never allocates entries 0–7. The Lexra RLX4181 does **not** honour that convention — it
+  reserves entries through the `Wired` register, which is **0** on this core — so
+  `tlb_write_random` installs translations into slots 0–7 and the bulk flush left them
+  untouched. A stale mapping parked in a low slot survived every flush and, once the ASID
+  generation rolled over, spuriously matched and resolved a user address to the wrong
+  frame. The sweep now starts at `read_c0_wired()`, matching the vendor `arch/rlx` TLB
+  code. Confirmed by ~53 min of continuous fork/exec churn with **zero** faults, on a load
+  that crashed every prior build within 200–600 s. Applies to both kernel lines (6.18 and
+  7.1). This is the actual fix behind the earlier ash→C daemon rewrites, which were
+  mitigations that moved code off the exposed path rather than closing the bug.
+
+### rtl8196e-eth driver — v2.19 → v2.20
+
+- **Switch-core PHY-interface watchdog.** A periodic 1 s check reads the switch's
+  per-port `EnablePHYIf` bit; if it reads back **clear** on an administratively-up
+  port across three consecutive checks — the switch core silently severed the
+  MAC↔PHY interface, a stall with neither a `PKTHDR_DESC_RUNOUT` nor a TX-done
+  hang, invisible to the existing detectors — it escalates to the shared
+  `FullAndSemiReset` deep reset. Mirrors the vendor `one_sec_timer()`
+  `EnablePHYIf` recovery branch. Bench-validated: detection in ~3 s, full port
+  recovery in ~3.2 s, independent of the RUNOUT / stall detectors (they stay 0).
+
+### Cleanup
+
+- Genericized the eth + watchdog driver comments — dropped the project-internal
+  issue-tracker / audit-finding tags so the code reads standalone for reuse.
+- Removed the `CONFIG_RTL8196E_ETH_DEBUG` fault injectors (`force_dropflood` /
+  `force_stall`): bench validation scaffolding, never shipped in any image.
+
+### userdata — unified process supervision + `otbr-monitor` ported to C
+
+- **Unified keepalive supervision.** `s40button` and `linkwatch`, previously started
+  fire-and-forget, now run under the `keepalive` supervisor like `otbr-agent` /
+  `otbr-monitor`, so any long-lived daemon that crashes is restarted instead of staying
+  dead until the next reboot. A shared `etc/init.d/supervise.func` helper
+  (`sup_start` / `sup_stop`) — factored from the hardened `S70otbr` stop logic (kill the
+  supervisor before the child, then a command-line-matched poll-until-dead with a SIGKILL
+  fallback) — replaces the duplicated bookkeeping in `S40button`, `S10network` and
+  `S70otbr`.
+- **`otbr-monitor` rewritten in C** (`34-Userdata/otbr-monitor/`, v1.0). The OTBR
+  housekeeping loop (radio tuning, status LED, dataset sync, once-per-boot SRP recovery)
+  was the last long-lived busybox-ash loop in the system — the only process still exposed
+  to the intermittent RLX4181 `SIGSEGV`/`SIGILL`/`SIGBUS` fault that retired the s40button
+  and inline-monitor shell loops. It is now a foreground C daemon: it reads the REST API
+  over a plain TCP socket, tunes the radio and runs the SRP cycle via short-lived `ot-ctl`
+  execs, and copies the dataset in-process — no ash is spawned, and its resident set drops
+  from ~944 KB to ~288 KB. Behaviour-for-behaviour parity with the script; bench-validated
+  across a warm restart and a cold reboot (all services come up supervised, radio/LED/SRP
+  correct, no ash faults).
+
+### userdata — `S70otbr` no longer passes `uart-flow-control=false` (discussion #142)
+
+- **Flow-control was force-enabled on boards without RTS/CTS.** OpenThread's radio
+  URL parser treats `uart-flow-control` as a **presence flag** (`Url::HasParam()`
+  only checks that the name occurs in the query string, per its own usage text:
+  "Enable flow control, disabled by default"), so the `uart-flow-control=false`
+  that `S70otbr` emitted for `FIRMWARE_FLOW_CTRL=none|sw` still set `CRTSCTS` on
+  `/dev/ttyS1`. On a board that does not wire RTS/CTS (the Sengled G4), otbr-agent
+  then waited on a dead handshake and exited silently with code 1 before printing
+  anything — OT-RCP simply never came up (#142). Root-caused by @hlyi, from the
+  shipped rc3 image down to the exact `HasParam` line. `S70otbr` now **omits the
+  parameter entirely** for `none|sw` and keeps `&uart-flow-control=true` for `hw`
+  (or an absent key), so the Lidl path is byte-for-byte unchanged. The bug never
+  shipped in a GA release — it was introduced with the #134 flow-control split and
+  only ever affected the v4.0.0 release candidates on non-hw boards.
+
+### Flash tooling — per-board pre-built bootloaders (discussion #140)
+
+- **`boot.bin` is now shipped per board**, in `31-Bootloader/boot-img/<board>/boot.bin` —
+  the same layout and selection mechanism as the kernel images. All consumers
+  (`build_fullflash.sh`, `create_fullflash.sh`, `flash_install_rtl8196e.sh`,
+  `flash_remote.sh bootloader`, `flash_bootloader.sh`) resolve the binary from `BOARD=`
+  through the shared `lib/kernel_image.sh` helper, and `build_bootloader.sh` writes only
+  into the selected board's slot. This closes the discussion #140 brick scenario both
+  ways: a non-lidl full install can no longer bundle the Lidl DRAM bring-up (the old
+  single `boot.bin` + stderr warning), and a leftover non-lidl build can no longer land
+  on a Lidl gateway, since no shared mutable `boot.bin` exists any more. The Lidl image
+  is byte-for-byte the former `31-Bootloader/boot.bin` (V2.9, reproducible build); a
+  pre-built `sengled-e39-g8c` image is now committed alongside it. `flash_remote.sh
+  bootloader` additionally gained the `/proc/device-tree/model` board-mismatch guard
+  that previously covered only the kernel component.
+
+---
+
+## [4.0.0-rc4] - 2026-06-30
+
+_Supersedes `v4.0.0-rc3`. Headline: **issue #99 — the real root cause, fixed.** Two field
+units still soft-locked on rc3 (frtz13, olivluca), and their `v6` panic records revised the
+diagnosis: not the RUNOUT desync rc1–rc3 targeted (the field signature is `iisr=0x320e` —
+RX_DONE set, **RUNOUT clear**), but an **unbounded RX poll loop**. The NAPI poll bounded
+itself by packets *delivered*, while every drop/error path re-armed and advanced the ring
+cursor without counting — so under a flood of droppable descriptors the poll never returned,
+pinning the CPU in softirq (100% softirq / 0% hardirq) until the watchdog rebooted. rc3's
+switch-core recovery was structurally blind to it (it gates on RUNOUT, which was clear). rc4
+**bounds the poll by descriptors processed**, restoring the vendor SDK's iteration bound the
+rewrite had dropped: the poll now provably returns within one NAPI budget, converting the
+fatal lockup into a survivable yielding poll. A **RUNOUT-independent stall detector** escalates
+a sustained zero-delivery saturating poll to the existing switch-core deep reset. The
+post-mortem capture is widened (record **v7**) and now **also logged live at every recovery**,
+so a self-heal that never reboots still records what triggered it. Both kernel lines (6.18 and
+7.1) in sync. Release candidate, not GA._
+
+### `rtl8196e-eth` v2.18 → v2.19 — issue #99 bounded RX poll + RUNOUT-independent recovery
+
+- **Bounded RX poll (the fix).** `rtl8196e_ring_rx_poll` now counts descriptors *processed*
+  (incremented unconditionally every iteration), not packets *delivered*, and returns that to
+  NAPI; the packet count is reported separately. The loop terminates in ≤ budget iterations by
+  construction, so a droppable-descriptor flood can no longer spin it forever. This restores the
+  behaviour of the 2012 vendor driver, which bounds its receive loop by total iterations.
+- **RUNOUT-independent stall detector.** A budget-saturating poll that delivered nothing, for
+  `rtl8196e_rx_stall_thresh` (default 32) consecutive polls, escalates to the bench-validated
+  switch-core deep reset — independent of the RUNOUT status the rc1–rc3 recovery gated on (and
+  which the field captures showed clear). Tunable via the module parameter (`0` disables).
+- No datapath regression (TCP RX ~94, TX median ~70 Mbit/s, retrans 0). Bench-validated under
+  fault injection: the bounded poll absorbs a sustained forced-drop flood (~64 K drops/s) with
+  the box staying schedulable (no soft-lockup), the detector escalates to a deep reset, and RX
+  returns to line rate afterward.
+
+### Watchdog post-mortem record v6 → v7 + live recovery fingerprint (`rtl819x-wdt` v1.9 → v1.10)
+
+The DRAM panic record is re-focused on the narrowed root cause, and the same fingerprint is now
+emitted to the kernel log at each recovery action — so the next field event is diagnosable
+whether it self-heals (a log line, no reboot) or rides a hang to the watchdog (the DRAM record):
+
+- **Retired** the RUNOUT-latch in-progress counters (`zero`, `seen`) of the disproved model.
+- **Added** the bounded-poll detector state (`poll_budget_hit`, `rx_stall_run`,
+  `swcore_deep_reset`); an **A-vs-B discriminator** (the switch-desync counters
+  `wild_pkthdr`/`wild_mbuf`/`mbuf_no_shadow`/`skew` vs the runt-flood counter `bad_len`); and
+  the switch's own RX descriptor pointers and CPU-port descriptor counter
+  (`CPURPDCR0`/`CPURMDCR0`/`P6_DCR0`, real vendor register addresses) cross-checked against the
+  driver's ring cursor.
+- The eth driver emits the same fingerprint via `netdev_warn` at the four rate-limited deep
+  recovery sites (RX-poll stall, TX-done stuck, TX timeout, RUNOUT escalation).
+
+Record size widened to `0x280`; the v5/v6 decoders are retained for the one-boot-after-upgrade
+leftover.
+
+## [4.0.0-rc3] - 2026-06-25
+
+_Supersedes `v4.0.0-rc2`. Headline: **issue #99 switch-core self-recovery** (ETHDRV-016,
+eth v2.18) — the driver now detects a wedged switch core and performs a full hardware
+switch-core reset to recover at runtime instead of riding the lockup to a watchdog reboot,
+restoring the deep recovery the vendor SDK shipped and the from-scratch rewrite had
+dropped. It pairs with the new **watchdog post-mortem record** (v6): the next field event
+either self-heals visibly (a `switch core reset done (#N)` log line) or is captured in the
+panic record. rc3 also rolls up the full rc2-development-cycle work that the public
+`v4.0.0-rc2` branch predated — **board + kernel-line selection** (four pre-built images),
+**bootloader V2.9**, **flash user-file preservation**, **quiet boot**, and the **QA/bench
+tooling** (each detailed under `[4.0.0-rc2]` below). Both kernel lines (6.18 and 7.1) are
+brought in sync. Release candidate, not GA. (The validated Sengled G4 NCP **radio**
+firmware, #130, is tracked in the EFR32 changelog under `2-Zigbee-Radio-Silabs-EFR32/`.)_
+
+### `rtl8196e-eth` v2.15 → v2.18 — issue #99 switch-core self-recovery (ETHDRV-016)
+
+Building on the rc2 detector + ring-resync (ETHDRV-015), three changes reconstruct the
+stock firmware's self-healing that our rewrite had omitted:
+
+- **Deep switch-core reset (escalation).** A new process-context worker performs the
+  vendor `FullAndSemiReset` sequence (switch-core clock cycle + `FULL_RST`) followed by a
+  full re-bring-up, when the cheap in-poll ring resync repeatedly fails to clear a RUNOUT
+  storm. It runs from a workqueue (it sleeps ~650 ms), never in the NAPI poll.
+- **TX-done hang watchdog.** The 1 s timer now also detects a TX-done descriptor left
+  owned by the switch across consecutive checks — a switch-core stall the RX-runout
+  detector cannot see — and triggers the deep reset (mirrors the vendor
+  `rtl_check_swCore_tx_hang`).
+- **Clear-RUNOUT-on-forward-progress.** A budget-saturating poll now clears the RUNOUT
+  status as the vendor receive path does, so a transient runout self-clears.
+
+New `ethtool -S` counter `rtl8196e_swcore_deep_reset`. No datapath regression (TCP RX
+~94, TX median ~69 Mbit/s, retrans 0). Bench-validated on the lab unit: the deep reset
+recovers a live gateway cleanly with no reboot, and both the RUNOUT-storm and TX-hang
+paths detect and recover under fault injection.
+
+### Watchdog post-mortem record v4 → v6 — eth #99 state captured at panic
+
+The DRAM-backed panic record (`rtl819x-wdt` v1.7 → v1.9), decoded one boot after a
+soft-lockup, now carries an Ethernet `#99` snapshot pulled at panic via a `__weak`
+provider in the eth driver, so a recurrence is diagnosable from the field rather than by
+guesswork:
+
+- **record v5** — the recovery counters (resyncs / NAPI kicks performed, in-progress
+  zero-work and RUNOUT-seen counts) plus the live `CPUIISR`/`CPUIIMR` and the RX ring
+  cursor.
+- **record v6** — broadened to switch-core / TX-done / ring-progress state
+  (`rxdesc`, `txprod`/`txcons`/`txfree`/`txdesc`, `cpuicr`, `sirr`, rx/tx packet counts),
+  to tell an RX-runout storm apart from a broader switch-core or TX-done stall.
+
+Persisted to `/userdata/panic/history` by `S26panicrec` (first occurrence after each
+clear). rc3 keeps this instrumentation alongside the self-recovery above — so the next
+event is either healed (a reset log line) or fully captured.
+
+### Both kernel lines synced (6.18 + 7.1)
+
+The 7.1 overlay (experimental dual-kernel line) had lagged at eth v2.15 / watchdog v1.7;
+it is brought to parity — eth **v2.18**, watchdog **v1.9 / record v6** — with identical
+drivers across both lines. rc3 ships four images (`{lidl, sengled-e39-g8c} × {6.18,
+7.1}`).
+
+---
+
+## [4.0.0-rc2] - 2026-06-19
+
+_Supersedes `v4.0.0-rc1`. Carries the **issue #99 engine fix** (ETHDRV-015,
+eth v2.15) after the rc1-line fix (ETHDRV-013) proved insufficient in the field,
+the **bootloader fixes (V2.9)** that close the post-flash boot loop on both a
+kernel flash (PHY-quiesce) and a 16 MiB full-flash (switch-DMA stop), and the
+harmonized init-script output. Field confirmation of #99 is still pending —
+release candidate, not GA._
+
+### `rtl8196e-eth` v2.15 — issue #99 engine fix (poll-side RUNOUT-storm recovery)
+
+The v2.14 candidate fix (ETHDRV-013, RX resync inside `tx_timeout`) proved
+**insufficient in the field**: a unit running `v3.8.5` (driver v2.7, which already
+carries that fix) recurred with the exact #99 signature after ~3.7 days. A full
+review (see the driver's `issue99.md`, cross-checked against the original Realtek
+SDK) found the real engine: the `PKTHDR_DESC_RUNOUT` storm is **self-sustaining
+regardless of how the switch-RX/`rx_idx` desync is entered**, and the NAPI poll has
+no escape — a zero-work poll under RUNOUT just re-enables the interrupt against an
+unchanged starved ring and the switch re-asserts the next cycle. ETHDRV-013 only
+closes one entry (`tx_timeout`); any other entry lands in the same trap. The
+original Realtek driver never hits this because it ships a runtime stuck-detector
+(`rtl_check_swCore_tx_hang` → `rtl865x_reinitSwitchCore`) that our from-scratch
+rewrite dropped.
+
+v2.15 restores that safety net, NAPI-friendly (ETHDRV-015):
+
+* **Poll-side detector (primary).** After 3 consecutive zero-work NAPI polls with
+  `PKTHDR_DESC_RUNOUT` asserted, the poll runs a full ring resync
+  (`rtl8196e_hw_ring_resync` — the `open()`/`tx_timeout` reset+rearm+TRXRDY
+  sequence, now factored out) so the switch RX pointer and `rx_idx` are forced back
+  in sync; the `napi_complete` tail then re-enables IRQs against an armed ring and
+  the storm cannot restart. Breaks the storm in microseconds. CPUIISR is read only
+  on a zero-work poll, so the normal RX path is unaffected.
+* **Periodic watchdog (belt-and-suspenders).** A ~1 s timer kicks a poll if RUNOUT
+  stays asserted across 3 checks — covering a non-CPU-pinning stall. Off the TX/RX
+  datapath (one MMIO read per second), no throughput impact.
+
+Two `ethtool -S` counters expose the recovery firing: `rtl8196e_rx_runout_resync`
+and `rtl8196e_rx_runout_kick` (both 0 unless a storm was caught). ETHDRV-013 and
+ETHDRV-014 are retained as defence in depth. Candidate pending field confirmation.
+
+### Bootloader V2.9 — stop the switch DMA and quiesce the PHY before kernel handoff
+
+Fixes an intermittent **boot loop after a `flash_remote` kernel flash**: the box
+looped in early boot (resetting around the `/sbin/init` handoff, no panic text)
+until a physical power cycle, whereas a plain `reboot` or a cold boot was always
+fine. The bug is in the bootloader, so it affected both the 6.18 production
+kernel and the experimental 7.1 line — not a kernel issue.
+
+Root cause: after a TFTP kernel flash, `autoreboot()` triggered a watchdog reset
+without disabling the Ethernet PHY. A watchdog reset preserves DRAM (that is how
+the `boothold` flag survives it) and does not fully reset the switch DMA engine,
+so right after a ~1.4 MB TFTP transfer the switch could keep DMAing incoming
+frames into DRAM across the reset and into early kernel boot — before the
+kernel's Ethernet driver resets the MAC — corrupting it. A plain reboot never
+tripped it because the link is idle at that point; only a power-on reset cleared
+the switch. `autoreboot()` now disables the PHY on all five ports before the
+watchdog reset, mirroring the direct-jump-to-kernel path in `monitor.c` that
+already did this "to prevent ethernet [from] disturb[ing] Linux kernel booting".
+
+A small timer-independent busy-loop first lets the post-flash UDP `OK`
+notification drain out, so the new PHY-disable no longer drops it — otherwise the
+flash tools reported a spurious "no notification" on every successful flash. It
+is deliberately **not** `delay_ms()`: the preceding SPI flash write can leave the
+jiffy timer stopped, which would make `delay_ms()` spin forever and the box never
+reboot.
+
+Validated on the bench: 13 consecutive `flash_remote` cycles alternating the 6.18
+and 7.1 kernels all booted cleanly with no loop, and the flash tools' "Flash
+Write Succeeded" confirmation is restored. The bootloader build stays
+reproducible (`B_VERSION` V2.7 → V2.8, pinned `BOOT_CODE_TIME` bumped).
+
+**Follow-up — the same quiesce was missing from the auto-boot handoff.** The loop
+recurred in field use because the PHY-disable had been added only to
+`autoreboot()` and the manual `J` command, not to `goToLocalStartMode()` — the
+path actually taken on every auto-boot. After a `flash_remote` warm reset the
+bootloader re-enables the PHY for its own TFTP, then `goToLocalStartMode()` jumped
+to the kernel with the PHY still live, reopening the same DMA-corruption window
+during early kernel boot. Added the identical five-port `EnablePHYIf` clear before
+the kernel jump in `goToLocalStartMode()`, symmetric with `J` and `autoreboot()`.
+Re-validated: 10 consecutive `flash_remote` kernel cycles plus 3 manual reboots,
+all clean on the serial console (previously reproducible within a couple of
+cycles). Folded into V2.8 (still unreleased); `BOOT_CODE_TIME` refreshed.
+
+**Follow-up — a 16 MiB full-flash needed more than the PHY-off (V2.8 → V2.9).**
+Disabling the PHY stops *new* ingress but not a CPU-port DMA that is already
+armed, and a full `flash_install` (16 MiB over TFTP) leaves far more in flight
+than the ~1.4 MB kernel flash V2.8 was validated against — so the switch kept
+DMAing into DRAM through the handoff and the box looped until a cold power cycle
+(a warm `reboot` and a single-partition `flash_remote` were unaffected). V2.9
+adds, before the PHY-off in both `autoreboot()` and `goToLocalStartMode()`, a
+`CPUICR = 0` (clears the CPU-port `TXCMD`/`RXCMD` DMA enables) and a
+`FullAndSemiReset()` — the same switch-core reset `swCore_init()` runs on every
+cold boot, which aborts any in-flight DMA. The reset re-defaults the port
+registers, so the PHY-off deliberately stays *after* it. Validated on the bench:
+three consecutive 16 MiB `flash_install` full-flash cycles each auto-rebooted
+straight to userspace with no manual power cycle (previously reproducible on the
+first full-flash). Build stays reproducible (`B_VERSION` V2.8 → V2.9, pinned
+`BOOT_CODE_TIME` refreshed). Caveat: a gateway still running a pre-V2.9
+bootloader runs its *old* `autoreboot()` for the very first full-flash, so that
+one upgrade may still loop once — clear it with a cold power cycle (unplug/replug,
+not a warm reboot); every flash after V2.9 is in place boots clean on its own.
+
+### Init-script output — one consistent, sober convention
+
+The per-service init scripts now print a single uniform `<service>: <state>` line
+(no emoji, no redundant per-script self-prefix), with warnings and errors as
+`<service>: WARNING/ERROR …`. The boot runner prints each script's basename; the
+previously silent watchdog now emits concise `armed`/`stopped` lines, while
+`S26panicrec` and `S90checkpasswd` stay quiet on a normal boot. Shutdown is now
+symmetric with boot: `rcK` frames the stop sequence with a
+`===== Stopping userdata services =====` header and a closing
+`Userdata services stopped` line, and a leading blank line keeps both sequences
+off the login prompt. The dead `34-Userdata/…/init.d/rcS` is removed — it was
+never executed (the bootstrap runs the rootfs `rcS` at sysinit and the userdata
+`rcK` at shutdown; the `S??*` glob it iterates never matches `rcS`). Cosmetic
+only; no service behaviour changes.
+
+### Rootfs — quiet the console at the end of boot
+
+The kernel's `random: crng init done` notice (KERN_NOTICE, level 5) lands ~11 s
+into boot on this low-entropy SoC — just after getty prints the `zigbeegw login:`
+prompt, so it trailed the prompt on the serial console. At the very end of `rcS`
+(after the userdata init loop, so klogd is already draining the kernel ring buffer
+into `/var/log/messages`, and right before getty), `console_loglevel` is lowered to
+5: level-5 notices no longer reach the console while warnings/errors (level < 5)
+still do, and `/var/log/messages` keeps everything. Writing one value to
+`/proc/sys/kernel/printk` touches only `console_loglevel` (7 4 1 4 → 5 4 1 4).
+Cosmetic; no service behaviour changes.
+
+### Board + kernel selection — pick `BOARD` and `KERNEL`, four pre-built images
+
+Every flash and build script now accepts two environment variables, both defaulting to
+the historical Lidl 6.18 build so **nothing changes for a Lidl user**:
+
+* `BOARD` — `lidl` (default) or `sengled-e39-g8c` (Sengled Smart Hub G4).
+* `KERNEL` — `6.18` (default) or `7.1`.
+
+The Linux **7.1 line** is now shipped alongside 6.18 (`patches-7.1/`, `files-7.1/`,
+`config-7.1-realtek.txt`); `build_kernel.sh` builds it with `KERNEL=7.1`. Pre-built
+images moved under `32-Kernel/kernel-img/<board>/kernel-<line>.img` — four shipped
+images (`{lidl, sengled-e39-g8c}` × `{6.18, 7.1}`). The flash scripts
+(`flash_kernel.sh`, `flash_remote.sh`, `build_fullflash.sh`, `create_fullflash.sh`,
+`flash_install_rtl8196e.sh`) resolve the image from `BOARD`/`KERNEL` through a shared
+helper (`lib/kernel_image.sh`); an explicit `--image` still wins (flash_remote.sh
+first gained a kernel `--image` passthrough, now generalised to `BOARD`/`KERNEL`).
+`flash_remote.sh` and `flash_install_rtl8196e.sh` (upgrade path) read the gateway's
+`/proc/device-tree/model` and refuse a board-mismatched flash unless `--force`; a
+full install additionally warns when `BOARD` is non-default that the bundled
+bootloader (`31-Bootloader/boot.bin`) must be built for the same board, since its
+DRAM config is per-board (a mismatch bricks the gateway). The 6.18 production line
+is byte-for-byte unchanged.
+
+### Flash — preserve user-added files across a userdata reflash
+
+`flash_install_rtl8196e.sh` (upgrade path) and `flash_remote.sh userdata` already re-inject
+the saved config into the rebuilt `userdata.bin`; they now also carry over **anything the
+user added under `/userdata`** — a custom program in `usr/bin`, a hand-pushed
+`iperf3`/`ethtool`, a script, or a whole new directory (subdirectories and empty dirs
+included). The rule: every path the gateway has under `/userdata` that the fresh skeleton
+does not ship is preserved (files, symlinks and directories, with the executable bit kept);
+skeleton-shipped paths come from the new image (its version wins, never shadowed by the
+gateway's old copy), and *edits* to shipped files keep the shipped version — curated config
+edits are still re-injected by the separate save list. A shared
+`lib/ssh.sh:preserve_user_additions` does it best-effort over the existing SSH session
+(BusyBox-safe enumeration via `tar`, run after the config save so config is excluded
+automatically). First-flash-from-bootloader and a bare `34-Userdata/flash_userdata.sh` are
+unchanged — the latter still does a clean wipe.
+
+### Developer & QA tooling
+
+- **Functional test harnesses** (`32-Kernel/scripts/test_{leds,button,watchdog}.sh`):
+  host-side scripts that drive each peripheral over SSH and verify it. LEDs walks the
+  status/LAN LEDs through ON/DIM/OFF with software read-back; the button harness fakes
+  a press via `devmem` (no physical contact) and checks short-press, long-press →
+  `recover_efr32`, and the #131 LED restore; the watchdog harness validates the armed
+  state and, opt-in, a real panic → record → reboot → re-arm cycle.
+- **Portable per-release iperf3 bench** (`bench_release_iperf3.sh`): RX/TX with
+  inter-session medians and no `ethtool` dependency, for reproducible release gating.
+- **Cross-version TX comparison** (`bench_history_sweep.sh`): flashes a set of releases
+  in drift-cancelling randomized rounds (arming the bootloader via `devmem`, so it works
+  on early DTBs that predate the boothold node) to compare TCP-TX across versions without
+  session/thermal bias.
+- Prebuilt `iperf3` and `ethtool` MIPS binaries are committed next to their build scripts
+  so benching needs no rebuild (they are not part of the shipped userdata image).
+
+---
+
+## [4.0.0-rc1] - 2026-06-15
+
+_Supersedes `v4.0.0-rc0`: the same issue #99 candidate fix, plus a fix for a TX
+throughput regression rc0 introduced. If you're testing #99, this is the build
+to use._
+
+### `rtl8196e-eth` — restore TX throughput (TX-reclaim timer arm guard)
+
+The software TX-reclaim timer added for #99 was armed unconditionally from the TX
+hot path (`start_xmit` and the NAPI poll re-arm), re-inserting the timer per packet
+under load — about 5% off TCP TX on the RLX4181 (≈67.6 vs ≈71 Mbit/s; RX
+unaffected). It now arms only when not already pending: it still fires within one
+timer window to break a no-RX stall, but is free once armed. TCP TX is back to
+≈70.8 Mbit/s and an idle border router still shows zero TX timeouts. Driver version
+unchanged (v2.14, same release cycle).
+
+Bench confirmation on the rc1 build (OTBR stopped, direct Cat-6 to a Gigabit
+host): TCP RX 93.6 Mbit/s, TCP TX 70.3 Mbit/s (5-rep median, range 69.1–72.3) —
+back inside the historical 69.3–72.8 TX spread, no regression. Stress (300 s
+single-stream RX): 94.0 Mbit/s sustained, 0.00 % retransmits; eth0 rx/tx errors
+and drops all zero. Full per-gate detail in the driver's `PERFORMANCE.md`.
+
+---
+
+## [4.0.0-rc0] - 2026-06-15
+
+_Release candidate over `v4.0.0-pre`: one focused change — the **candidate fix
+for issue #99**, the long-running soft-lockup hang reported on units running an
+OpenThread Border Router. The hang was reproduced on the bench and traced to the
+Ethernet driver's TX-timeout recovery; both the storm and the condition that
+triggers it are addressed. `v4.0.0-pre` is left unchanged. Field confirmation
+that the hangs stop is still pending — hence a release candidate, not GA._
+
+### `rtl8196e-eth` v2.14 — issue #99 candidate fix (TX-timeout RX resync + software TX reclaim)
+
+Two changes to the Ethernet driver, validated on the bench; field confirmation
+pending.
+
+* **RX resync in `ndo_tx_timeout`.** The watchdog recovery rebuilt only the TX
+  ring; its `hw_stop()`/`hw_start()` cycles the switch's RX engine back to
+  descriptor 0 while the driver's `rx_idx` stays put — a desync that leaves the
+  switch with no usable RX descriptors. The switch then asserts
+  `PKTHDR_DESC_RUNOUT` continuously; `napi_complete` clears it and the switch
+  re-asserts it the next cycle — a ~100 k/s spurious interrupt storm with zero
+  forward progress that pins the CPU in `__napi_poll` until the hardware
+  watchdog resets the SoC. That is the issue #99 soft-lockup. The recovery now
+  also resets and reprograms the RX ring (`ring_rx_reset` + `hw_set_rx_rings`),
+  symmetric with `open()` and `stop()`. The bug is old (present unchanged since
+  at least v2.6); the BQL work in v4.0.0-pre lowers the queue-stop threshold,
+  which makes the triggering TX timeout fire readily and turned the bench into a
+  reliable reproducer.
+* **Software TX-reclaim timer (the trigger).** TX reclaim runs only in
+  `start_xmit` and the RX-driven NAPI poll, so a TX queue that stops (ring-full
+  or BQL byte-limit) while no RX arrives has no path to reclaim and waits for the
+  10 s netdev watchdog — e.g. a Thread border router idling with no paired
+  device, the configuration the soak reporters run. A short timer, armed when the
+  queue stops and lapsing once it drains, kicks a NAPI reclaim so the queue
+  recovers without RX. This removes the spurious timeouts — and with them the
+  path into the storm.
+
+Bench result: a border router idling alone (zero RX) previously fired a TX
+timeout every 10 s, then desynced and stormed into the #99 soft-lockup; with
+both changes it fires none — no timeout, no storm — and SSH stays responsive.
+The storm signature matches the field #99 captures, so this is the strongest
+candidate yet; confirmation that it stops the field hangs is pending.
+
+---
+
+## [4.0.0-pre] - 2026-06-13
+
+_Folds the `v3.11.0-pre` beta into v4.0.0. Two headlines: the **Sengled
+Smart Hub G4 (E39-G8C)** board port — the firmware's first port to a
+second board, contributed and hardware-validated by @hlyi — and a
+per-driver hardening pass across the whole Linux 6.18 kernel tree. Two
+userdata fixes (#131, #132) ride along. Everything is board-agnostic and
+was validated on the Lidl bench; currently on the `v4.0.0-pre` branch for
+beta testing._
+
+### Sengled Smart Hub G4 (E39-G8C) — a second supported board
+
+The platform is no longer Lidl-only. Porting to an RTL8196E twin now means
+contributing per-board data files instead of patching the tree:
+
+* **Bootloader `BOARD=`** (#126): a board contributes a single
+  `31-Bootloader/boards/<board>/board.h` packaging its DRAM bring-up, RAM
+  banner and boothold-page constants; `BOARD=<board> ./build_bootloader.sh`
+  selects it (default `lidl`, which still rebuilds bit-for-bit identical).
+* **The Sengled E39-G8C board** (64 MB DDR2): its `board.h` was contributed
+  and validated on real hardware by **@hlyi** (#127, #128), who also
+  reduced the front-panel bootloader-mode pin hold from 5 s to 1 s.
+* **Hardware teardown page** for the G4 (`0-Hardware/sengled-e39-g8c/`) —
+  also **@hlyi** (#133).
+* **Board-portable LAN LED** (#126): the Ethernet driver learned a
+  `realtek,led-pads` devicetree property (eth v2.8), so the LAN LED maps to
+  the correct switch pad on either board (the Lidl and the G4 wire it
+  differently).
+
+This pairs with the kernel `BOARD=` devicetree selection (shipped in 3.10.0)
+and the EFR32 radio-firmware `BOARD=` support (see the radio changelog,
+#130) so all three build stages are board-aware.
+
+An out-of-band audit produced an `AUDIT.md` / `DESIGN.md` pair for every
+RTL8196E kernel driver; the findings were implemented and each driver
+re-validated on the bench before the kernel image (`kernel-6.18.img`) was
+cut. No on-device behaviour regresses and the Ethernet throughput
+envelope is unchanged (RX ~94 Mbit/s, TX within the established layout
+spread, single-stream retransmits 0).
+
+### `rtl8196e-eth` v2.13 — BQL, a real DT resource model, audit fixes
+
+Five bench-gated steps on top of the v2.8 LAN-LED work:
+
+* **v2.9** — probe/teardown robustness: the uncached ring alias is
+  flush-and-discarded before first use (a dirty cached line could
+  otherwise evict over a live descriptor); `stop()` disables NAPI before
+  masking, so a finishing poll cannot re-arm the interrupt mask; probe
+  quiesces the IRQ mask/status the bootloader's TFTP path can leave
+  latched before `request_irq()`; `ndo_change_mtu` is `-EBUSY` while up.
+* **v2.10** — the first-packet/timer debug scaffolding is retired (~190
+  fewer lines), along with dead defines and the unused `tx_submit` flags.
+* **v2.11** — the one-time SoC bring-up (pinmux, board pad state, switch
+  clock, `FULL_RST`, LED controller, ~650 ms of `msleep`s) is hoisted to
+  probe; `ndo_open` now does only the volatile per-open programming and
+  measures ~30 ms instead of >1 s.
+* **v2.12** — the ethernet node declares its three register windows and
+  probe claims and maps all three, failing the probe loudly if a mapped
+  base ever diverges from the compile-time KSEG1 constants (kept, for the
+  hot path) — DT drift and conflicts can no longer corrupt MMIO silently;
+  `/proc/iomem` now shows three named windows.
+* **v2.13** — Byte Queue Limits on the TX queue (the one performance idea
+  the audit left open), landed without the throughput cost the driver's
+  earlier pointer-routing experiments warned about.
+
+### `rtl819x_wdt` v1.7 — panic-safe semantics + panic record v4 (issue #99)
+
+The panic notifier reads the record uptime with the NMI-safe
+`ktime_get_boot_fast_ns()` instead of a seqcount-retrying accessor that
+could spin forever if the panic interrupted a timekeeping writer — and it
+sat before the chip-arm writes, so a spin would have cost both the crash
+record and the fast reset. Userspace-visible cleanups: `WDIOC_GETTIMELEFT`
+now honestly returns `EOPNOTSUPP` (it used to report the constant timeout)
+and the bogus `timeleft` sysfs attribute is gone; the fixed ~671 s
+hardware window is declared as `max_hw_heartbeat_ms`, so the core bridges
+longer software timeouts with worker pings (the 60 s feeder cadence is
+unchanged). The kick is now a constant write, dropping one MMIO read per
+kick.
+
+Panic record **v4** (issue #99) extends the post-mortem with the NET_RX side of
+the soft-lockup storm, which the timer candidate lists structurally cannot name.
+The v3 field captures showed the timer wheel is only a victim (`overdue` saturates
+at the detection window while `pending` stays at the normal idle count = frozen,
+not flooded), with the co-pending vector being NET_RX. Record v4 adds, read
+straight from kernel counters at panic: per-softirq run counts
+(`kstat_softirqs_cpu`), the total hardirq count (`kstat_cpu_irqs_sum`), and the
+NAPI poll-list (`softnet_data.poll_list`) — the last naming the driver (the
+rtl8196e Ethernet `poll`) whose NAPI is scheduled at the hang. All cold-path and
+entirely within the watchdog driver (`softnet_data` is a per-CPU export, so no
+kernel patch); v2/v3 records still decode across an upgrade, and the probe banner
+prints `record v4`.
+
+### `8250_rtl819x` v1.4 — FIFO on, RX trigger pinned to 1
+
+The clone's region-claim quirk had left `ttyS1` running with `FCR=0` (FIFO
+off, 16450 char mode) since the early bring-up; the 8250 core now claims
+the window itself and the FIFOs are enabled. An A/B loopback bench showed
+the clone's trigger levels above 1 overrun non-monotonically, so the RX
+FIFO trigger is pinned to 1 — wire-identical to the proven v3.x envelope,
+full 16-byte latency cushion (`rx_trig_bytes` stays writable for
+experiments). Flow-control gating now tracks the absolute `CRTSCTS` state
+instead of edge transitions.
+
+### `timer-rtl819x` (clocksource) v1.2 — timer_of, a DT overlap closed
+
+Converted to the `timer_of` helper (base, refclk, IRQ); the timer's DT
+`reg` window is shrunk from 0x20 to 0x1c so it no longer overlaps the
+watchdog's `WDTCNR` register. An IRQ-of-parse failure now panics like the
+other init-failure paths instead of booting into a clockevent-less system
+that hangs later in scheduler bring-up with nothing pointing at the cause.
+
+### `gpio-rtl819x` v1.2 — generic MMIO core, loud failure without syscon
+
+Re-based on the kernel's generic MMIO GPIO core, keeping only the
+irreducible custom part (request-time `PIN_MUX_SEL_2` pinmux + CNR); the
+glitch-free DATA-before-DIR ordering the nRST open-drain emulation relies
+on is preserved and recorded as a design invariant. A request on a
+mux-requiring line with the syscon absent now fails with `-ENODEV` and a
+clear error instead of silently leaving the pad in peripheral mode (a dead
+LED/button whose only trace was one probe-time warning).
+
+### `leds-gpio-pwm` v1.1 — no timer at the rails, keep-state that keeps
+
+The `default-state = "keep"` path now reads the line back and re-drives it
+at that level instead of destroying the state it was meant to keep; the
+0 % and 100 % duty bands are steady GPIO levels with no timer (a 250 Hz
+timer used to run at full brightness); the initial timer arm follows the
+#120 timer-wheel rule (`jiffies`, not `jiffies+1`).
+
+### `spi-rtl819x` v1.1 — electrically correct CS, capabilities declared
+
+Chip-select deselect now parks all lines high instead of actively driving
+the sibling CS low (dormant on the Lidl board, but wrong electrically);
+`mode_bits` / `bits_per_word_mask` declare only what the hardware supports,
+so the core rejects the rest; a sub-12.5 MHz clock request that falls back
+to the next divisor warns once. Storage gate passed on the bench: squashfs
+boot and a 4 MB JFFS2 write/re-read byte-identical before and after.
+
+### `rtl8196e-uart-bridge` v1.4 — documented locking, rate-limited churn
+
+The remote-triggerable connection-lifecycle messages (connect, replace,
+disconnect) are rate-limited; the disarm/relisten window's dependency on
+the builtin param lock is documented at the lock definition and the unlock
+site for any future config entry point; the Kconfig help now covers
+`blmode_pulse` / `blmode_gpio`. No data-path change.
+
+### `rtl8196e-uart-bridge` v1.5 — split flow-control capability from firmware mode (discussion #134)
+
+The devicetree `radio-bridge/flow-control = "hw"|"sw"|"none"` conflated two
+unrelated facts: whether a board physically wires the EFR32 UART's RTS/CTS
+(a hardware truth) and which mode a given radio firmware wants (a runtime
+choice). On the Lidl board both are "hw", so the conflation was invisible;
+on the Sengled G4, which does not wire RTS/CTS, "sw" really encoded "not
+hw-capable", so changing the radio firmware meant rebuilding the DTB. v1.5
+splits the two:
+
+* **Board capability → devicetree.** A new boolean `realtek,hw-flow-control`
+  on the `/radio-bridge` node declares that RTS/CTS is wired. Present on the
+  Lidl board, omitted on the G4. It seeds the `flow_control` default
+  (present → `hw`, absent → `sw`) and acts as a **ceiling**: an `hw` request
+  from sysfs or the init scripts is clamped to `sw` on a board without the
+  boolean, so CRTSCTS is never asserted on an unwired UART. The old DT
+  `flow-control` string is dropped entirely (unreleased binding, both
+  in-tree DTS converted in lockstep — no shim).
+* **Firmware mode → radio.conf.** A new optional `FIRMWARE_FLOW_CTRL=none|sw|hw`
+  key (parallel to `FIRMWARE_BAUD`) selects the mode at runtime, applied to
+  the sysfs `flow_control` knob by `S50uart_bridge` (Zigbee) and reflected in
+  the `otbr-agent` `uart-flow-control` URL by `S70otbr` (Thread). Absent ⇒
+  the devicetree per-board default stands, so **no existing `radio.conf`
+  needs to change** on either board.
+* **`flash_efr32.sh`** now accepts a non-zero `flow_control` readback when
+  re-enabling flow control after a flash (1 on a wired board, 2/`sw` on an
+  unwired one), instead of asserting exactly `1` — which would have aborted
+  the flash on a not-capable board. The off-state checks (`0`, required for
+  the Gecko Bootloader Xmodem path) are unchanged.
+
+The runtime sysfs `flow_control` 0/1/2 numeric ABI is unchanged.
+
+### `irq-rtl819x` (irqchip) v1.0 — error-path cleanup
+
+The no-parent error path now removes the IRQ domain and NULLs the base
+after `iounmap`; the SPDX header and kernel-style indentation are applied,
+and the swapped parent labels in the chained-handler comment (IP3 = Switch,
+IP4 = UART1) are corrected. No functional change on the success path.
+
+### `s40button` v2.1 — preserve the status LED across a button press (issue #131)
+
+A button press used to switch the STATUS LED off even when it was lit before
+the press. The daemon snapshotted the LED brightness once at startup (when it
+defaults to off) and re-applied that stale snapshot on release. It now captures
+the brightness at the moment the press is confirmed and restores *that* — so a
+press leaves the LED exactly as it found it.
+
+### `linkwatch` — re-acquire DHCP after a link change (issue #132)
+
+In DHCP mode the gateway never asked for a new address after the cable was
+moved to a different subnet: busybox `udhcpc` is started once at boot and, once
+bound, never re-DISCOVERs on its own, so it sat on the stale lease until the
+lease timers expired. A new tiny static-C daemon, `linkwatch`, watches
+`/sys/class/net/eth0/carrier` and, on a down→up transition, pokes `udhcpc`
+(SIGUSR2 release + SIGUSR1 discover) so it re-acquires on whatever network is
+now present. It runs in **DHCP mode only** — static `/userdata/etc/eth0.conf`
+configurations are untouched. Written in C like `keepalive`/`s40button` so the
+long-lived poll loop never runs busybox ash (issue #109 fault class).
+
+### Kernel build — malformed `drivers-gpio-Kconfig.patch` fixed (issues #136/#137)
+
+A from-clean kernel build aborted at the patch step with `malformed patch at
+line 15`. The hunk header in `patches-6.18/drivers-gpio-Kconfig.patch` declared
+`@@ -598,6 +598,11 @@` but its body adds six lines (the `GPIO_RTL819X` block
+plus a spacer), so the real new-count is twelve — `patch(1)` ran past the
+declared count and bailed. The off-by-one was introduced when `select
+GPIO_GENERIC` was added to the patch during the gpio v1.2 audit without bumping
+the header count; it stayed invisible because incremental builds reuse the
+already-patched kernel tree and never re-run `patch(1)`, so only a build from
+clean re-exercises the file. Reported and fixed by **@hlyi** (#137): header
+corrected to `-599,6 +599,12` and a stray trailing-whitespace spacer dropped.
+**No change to `kernel-6.18.img`** — the shipped image was built from the
+already-correct tree, and the fix only affects the patch text (the resulting
+`drivers/gpio/Kconfig` is identical bar one ignored blank-line whitespace).
+
+### Kernel build — from-clean patch lint guard
+
+To keep that class of bug from reaching anyone again, `32-Kernel/lint_patches.sh`
+replays the build's patch step against a freshly downloaded pristine kernel with
+`--dry-run` (same flags and order as `build_kernel.sh`, kernel version read from
+it as the single source of truth), and a `kernel-patches.yml` GitHub Actions
+workflow runs it on every push/PR touching the patch set — including PRs against
+the `v*-pre` branches, where contributors build from clean. It catches malformed
+hunks, rejects, and context drift before they merge.
+
+### Flash tooling — safe TFTP upload retry (discussion #135)
+
+A 16 MiB `fullflash` TFTP upload — and the per-partition kernel/rootfs/userdata/
+bootloader uploads — could give up on a single stalled block mid-transfer
+(tftp-hpa's own per-block timeout) even when the bootloader's TFTP server was
+healthy, dropping the user at the bootloader prompt (reported by @MaxRower). The
+upload now retries automatically, but safely: after a timeout it re-probes the
+bootloader's TFTP server and re-sends only if it is still idle (nothing landed).
+If the server has gone quiet — busy writing flash, i.e. a lost final ACK that
+merely looked like a timeout — it does **not** re-send, so a retry can never
+collide with an in-progress auto-flash; it falls through to the existing write
+confirmation instead. The logic lives once in `lib/flash_tftp.sh`
+(`probe_tftp_wrq` + `tftp_put_safe`), shared by `flash_install_rtl8196e.sh` and
+the four per-partition `flash_*.sh` scripts.
 
 ---
 

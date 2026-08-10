@@ -1,174 +1,219 @@
-# Backup & Restore — Flash Memory (GD25Q128C, 16 MiB)
+# Backup and Restore the 16 MiB Flash
 
-The gateway's GD25Q128C SPI flash stores the bootloader, kernel, rootfs, and userdata. This guide covers three backup/restore methods depending on your situation.
+The RTL8196E SPI NOR stores the Realtek bootloader, Linux kernel, root
+filesystem, and persistent data. A complete 16 MiB backup is the recovery point
+for a failed install and the only way to return exactly to a device's original
+vendor state.
 
-> **Warning:** Flashing can permanently damage the device. Always verify your backups before modifying anything.
+Make a backup before the first flash, before a board/kernel experiment, and
+before a manual partition update. Store it outside the repository and do not
+publish it: vendor data, identifiers, credentials, or network configuration may
+be present.
 
-## Which method?
+## Choose a method
 
-| Method | When to use | Requirements |
-|--------|-------------|--------------|
-| **1. SSH** (`backup_gateway.sh`) | Gateway boots into Linux | Ethernet + SSH access |
-| **2. Bootloader** (FLR/FLW) | Linux is broken, or preventive backup | Serial console + TFTP |
-| **3. SPI programmer** | Bootloader is corrupted | Desolder flash chip |
+| Gateway state | Method | Writes to gateway? | Requirements |
+| --- | --- | --- | --- |
+| Linux running with known root credentials | [`backup_gateway.sh`](#method-1--backup-over-ssh) | No | Ethernet + SSH |
+| Linux credentials unavailable, bootloader works | [Bootloader `FLR`](#method-2--bootloader-flr--tftp) | No | UART + same-L2 TFTP |
+| Bootloader corrupted or flash chip inaccessible in circuit | [External SPI programmer](#method-3--external-spi-programmer) | Read is safe; restore writes | Desoldering and SPI tools |
 
-**Method 1 is recommended** — it works with both custom firmware (SSH:22) and original Tuya firmware (SSH:2333).
+For a stock Tuya image, the SSH service is normally on port 2333; using it still
+requires valid root credentials. If those credentials are unavailable, use the
+serial bootloader read before installing the replacement firmware.
 
----
+## Verify every backup
 
-## Method 1 — SSH backup via `backup_gateway.sh`
+A full image must be exactly 16,777,216 bytes:
 
-The unified script at the repository root auto-detects the firmware type and dumps all partitions via SSH:
-
-```sh
-./backup_gateway.sh                                    # auto-detect everything
-./backup_gateway.sh --linux-ip 192.168.1.71            # different gateway IP
-./backup_gateway.sh --output /tmp/my-backup            # custom output directory
+```bash
+stat -c '%n %s bytes' fullflash.bin
+sha256sum fullflash.bin
 ```
 
-Output: `backups/YYYYMMDD-HHMM/` containing `fullflash.bin`, individual `mtdX_name.bin` files, and `backup.log`.
+Keep the hash next to the backup. Prefer two independent storage locations.
+Do not treat a set of zero-byte or short partition files as a successful backup
+merely because the script created a directory.
 
-To restore a backup, use `restore_gateway.sh` (guides through TFTP upload + FLW).
+## Method 1 — Backup over SSH
 
----
+The repository-root script detects this project's SSH service on port 22 or the
+stock Tuya service on port 2333, reads every MTD partition, verifies its size,
+and concatenates a full image.
 
-## Method 2 — Bootloader (FLR + TFTP)
-
-Use this when Linux doesn't boot. Requires a serial console (3.3V UART, 38400 8N1).
-
-### Entering bootloader mode
-
-**From Linux (SSH):**
-```sh
-ssh root@192.168.1.88 boothold
+```bash
+./backup_gateway.sh --linux-ip <gateway-ip> \
+  --output /path/outside/the/repository/gateway-backup
 ```
 
-> If your LAN is not on `192.168.1.x`, pass the address to use in bootloader
-> mode: `ssh root@<gw> "boothold 192.168.0.6"` (bootloader V2.7+). The
-> `tftp 192.168.1.6` commands below then become `tftp 192.168.0.6`. Without
-> the argument the bootloader stays at the compiled default `192.168.1.6`.
+If the gateway uses the usual project address:
 
-**From serial console:** power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt appears. (On a non-`192.168.1.x` LAN, set the IP at the prompt with `IPCONFIG <A.B.C.D>`.)
-
-### Full flash backup
-
-On the serial console, read the entire flash (16 MiB) into RAM:
+```bash
+./backup_gateway.sh --linux-ip 192.168.1.88 \
+  --output /srv/backups/rtl8196e-before-upgrade
 ```
-RealTek>FLR 80500000 00000000 01000000
+
+The output contains:
+
+```text
+fullflash.bin
+mtd0_<name>.bin
+mtd1_<name>.bin
+...
+backup.log
+```
+
+The script asks for SSH authentication as needed. It is read-only with respect
+to the gateway. Review `backup.log`, confirm every partition reports `[OK]`, and
+verify the full image size and hash.
+
+## Method 2 — Bootloader `FLR` + TFTP
+
+Use this before a first install when stock SSH credentials are unavailable, or
+when Linux no longer boots. It requires the RTL8196E serial console at 38400
+8N1 and a computer on the same L2 subnet as the bootloader.
+
+### Enter the bootloader
+
+From a running custom system:
+
+```bash
+ssh root@<gateway-ip> 'boothold 192.168.1.6 && reboot'
+```
+
+From stock firmware or a broken Linux system, open the serial console, apply
+power, and press `Esc` repeatedly until `<RealTek>` appears. See the
+[hardware/UART instructions](../../docs/getting-started.md#6-open-the-gateway-and-connect-the-serial-console).
+
+The default bootloader TFTP address is `192.168.1.6`. On another subnet, use
+`IPCONFIG <address>` at the prompt or pass a supported address to a V2.7+
+`boothold` command.
+
+### Read the complete flash
+
+At the serial prompt, copy all 16 MiB from flash to RAM:
+
+```text
+RealTek> FLR 80500000 00000000 01000000
 (Y)es , (N)o ? --> Y
 Flash Read Succeeded!
 ```
 
-Then download it from your host:
-```sh
+On the computer, download that RAM buffer from the bootloader TFTP server:
+
+```bash
 tftp -m binary 192.168.1.6 -c get fullflash.bin
 ```
 
-The file must be exactly **16,777,216 bytes**. Verify with `md5sum fullflash.bin`.
+Verify the exact size and hash before leaving the bootloader or running an
+install. `FLR` reads only; it does not change flash.
 
-### Full flash restore
+### Restore a complete image
 
-Upload the image from your host:
-```sh
+Restoring overwrites every byte of the device flash. Resolve the exact backup
+path, board, and file size before continuing.
+
+Upload the image to RAM:
+
+```bash
 tftp -m binary 192.168.1.6 -c put fullflash.bin
 ```
 
-Write it to flash (overwrites everything):
-```
-RealTek>FLW 00000000 80500000 01000000
-```
+Then write RAM to flash at the serial prompt:
 
-### Per-partition backup/restore
-
-`FLR` reads flash into RAM, `FLW` writes RAM to flash:
-```
-FLR <ram_addr> <flash_offset> <size>
-FLW <flash_offset> <ram_addr> <size>
+```text
+RealTek> FLW 00000000 80500000 01000000
 ```
 
-**Custom firmware (4 partitions):**
+Do not interrupt power during `FLW`. The repository-root
+`restore_gateway.sh` provides the same guided full-image workflow and performs
+host-side checks before the write.
 
-| MTD | Description | FLR | FLW |
-|-----|-------------|-----|-----|
-| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000` | `FLW 00000000 80500000 00020000` |
-| mtd1 | Kernel | `FLR 80500000 00020000 001E0000` | `FLW 00020000 80500000 001E0000` |
-| mtd2 | Rootfs | `FLR 80500000 00200000 00200000` | `FLW 00200000 80500000 00200000` |
-| mtd3 | JFFS2 Userdata | `FLR 80500000 00400000 00C00000` | `FLW 00400000 80500000 00C00000` |
+### Partition-level commands
 
-**Original Lidl/Tuya firmware (5 partitions):**
+`FLR` and `FLW` use this form:
 
-| MTD | Description | FLR | FLW |
-|-----|-------------|-----|-----|
-| mtd0 | Bootloader + Config | `FLR 80500000 00000000 00020000` | `FLW 00000000 80500000 00020000` |
-| mtd1 | Kernel | `FLR 80500000 00020000 001E0000` | `FLW 00020000 80500000 001E0000` |
-| mtd2 | Rootfs | `FLR 80500000 00200000 00200000` | `FLW 00200000 80500000 00200000` |
-| mtd3 | Tuya Label | `FLR 80500000 00400000 00020000` | `FLW 00400000 80500000 00020000` |
-| mtd4 | JFFS2 Overlay | `FLR 80500000 00420000 00BE0000` | `FLW 00420000 80500000 00BE0000` |
+```text
+FLR <ram-address> <flash-offset> <size>
+FLW <flash-offset> <ram-address> <size>
+```
 
-For each partition: FLR to read into RAM, then `tftp get` to download. To restore: `tftp put`, then FLW.
+Current custom layout:
 
----
+| MTD | Offset / size | `FLR` | `FLW` |
+| --- | --- | --- | --- |
+| boot + config | `0x000000` / `0x020000` | `FLR 80500000 00000000 00020000` | `FLW 00000000 80500000 00020000` |
+| kernel | `0x020000` / `0x1E0000` | `FLR 80500000 00020000 001E0000` | `FLW 00020000 80500000 001E0000` |
+| rootfs | `0x200000` / `0x200000` | `FLR 80500000 00200000 00200000` | `FLW 00200000 80500000 00200000` |
+| userdata | `0x400000` / `0xC00000` | `FLR 80500000 00400000 00C00000` | `FLW 00400000 80500000 00C00000` |
 
-## Method 3 — SPI programmer (CH341A)
+Original Lidl/Tuya layout:
 
-Use this only if the bootloader is corrupted and the gateway is completely unresponsive. Requires **desoldering** the SPI flash chip.
+| MTD | Offset / size | Purpose |
+| --- | --- | --- |
+| mtd0 | `0x000000` / `0x020000` | Bootloader + config |
+| mtd1 | `0x020000` / `0x1E0000` | Kernel |
+| mtd2 | `0x200000` / `0x200000` | Rootfs |
+| mtd3 | `0x400000` / `0x020000` | Tuya label |
+| mtd4 | `0x420000` / `0xBE0000` | JFFS2 overlay |
 
-### Hardware
+Prefer a complete full-flash backup. Partition-level restores are for users who
+understand the active layout and image headers.
 
-- CH341A USB SPI programmer (use the 25xx entry)
-- SOP8 to 200 mil DIP adapter
-- Flux and desoldering braid or pump
+## Method 3 — External SPI programmer
 
-<p align="center">
-  <img src="./media/image1.jpeg" alt="CH341A programmer" width="50%">
-</p>
+Use an external programmer only if the Realtek bootloader cannot read/write the
+flash. On this board, an in-circuit SOP8 clip does not work reliably; the flash
+chip must be desoldered.
 
-> A programming clip does **not** work on this board.
+Required equipment:
 
-### Detect the chip
+- CH341A-compatible SPI programmer configured for 25xx flash;
+- SOP8-to-DIP adapter for the package width;
+- appropriate soldering, flux, and ESD tools.
 
-```sh
+Detect the chip:
+
+```bash
 flashrom -p ch341a_spi -c GD25Q128C
 ```
 
-Expected output:
-```
-Found GigaDevice flash chip "GD25Q128C" (16384 kB, SPI) on ch341a_spi.
-No operations were specified.
-```
+Read it at least twice and compare hashes:
 
-If the chip is not detected, check your connections and install the latest version from [flashrom.org](https://www.flashrom.org/).
-
-### Read (backup)
-
-```sh
-flashrom -p ch341a_spi -c GD25Q128C -r fullflash.bin
+```bash
+flashrom -p ch341a_spi -c GD25Q128C -r fullflash-read1.bin
+flashrom -p ch341a_spi -c GD25Q128C -r fullflash-read2.bin
+sha256sum fullflash-read1.bin fullflash-read2.bin
 ```
 
-### Write (restore)
+Only after matching reads should a restore be considered:
 
-```sh
+```bash
 flashrom -p ch341a_spi -c GD25Q128C -w fullflash.bin
 ```
 
-Ensure `fullflash.bin` is exactly 16 MiB. The operation takes a few minutes.
+Writing the wrong image or using the wrong voltage can make recovery harder.
 
----
+## Utilities
 
-## Scripts
+| Script | Purpose |
+| --- | --- |
+| `../../backup_gateway.sh` | Detect Linux type and create a verified SSH backup |
+| `../../restore_gateway.sh` | Guide a full TFTP + `FLW` restore |
+| `split_flash.sh` | Split a 16 MiB image into partition files |
+| `scripts/restore_mtd_via_ssh.sh` | Restore a partition on original Tuya firmware |
 
-| Script | Description |
-|--------|-------------|
-| `../../backup_gateway.sh` | Unified backup — auto-detects gateway state, dumps all partitions via SSH |
-| `../../restore_gateway.sh` | Restore a fullflash.bin — guides through LOADADDR + FLW |
-| `split_flash.sh` | Split a 16 MiB backup into individual partition files |
-| `scripts/restore_mtd_via_ssh.sh` | Restore partitions via SSH (original firmware only) |
+Split a current custom image:
 
-### split_flash.sh
-
-```sh
-./split_flash.sh fullflash.bin              # custom firmware (4 partitions, default)
-./split_flash.sh fullflash.bin lidl         # original Lidl/Tuya (5 partitions)
+```bash
+./split_flash.sh fullflash.bin
 ```
 
-Creates `mtd0_boot+cfg.bin`, `mtd1_kernel.bin`, `mtd2_rootfs.bin`, etc. next to the input file.
+Split an original Lidl/Tuya image:
+
+```bash
+./split_flash.sh fullflash.bin lidl
+```
+
+For installation failures, continue with the central
+[troubleshooting guide](../../docs/troubleshooting.md).

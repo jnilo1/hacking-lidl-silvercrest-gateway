@@ -1,0 +1,13 @@
+--- a/arch/mips/include/asm/vermagic.h
++++ b/arch/mips/include/asm/vermagic.h
+@@ -2,7 +2,9 @@
+ #ifndef _ASM_VERMAGIC_H
+ #define _ASM_VERMAGIC_H
+ 
+-#ifdef CONFIG_CPU_BMIPS
++#ifdef CONFIG_CPU_RLX4181
++#define MODULE_PROC_FAMILY "RLX4181 "
++#elif defined CONFIG_CPU_BMIPS
+ #define MODULE_PROC_FAMILY "BMIPS "
+ #elif defined CONFIG_CPU_MIPS32_R1
+ #define MODULE_PROC_FAMILY "MIPS32_R1 "

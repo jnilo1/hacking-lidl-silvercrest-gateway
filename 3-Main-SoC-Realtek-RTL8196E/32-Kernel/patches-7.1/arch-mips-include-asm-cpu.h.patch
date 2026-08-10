@@ -1,0 +1,21 @@
+--- a/arch/mips/include/asm/cpu.h
++++ b/arch/mips/include/asm/cpu.h
+@@ -95,7 +95,7 @@
+ #define PRID_IMP_LOONGSON_64R	0x6100  /* Reduced Loongson-2 */
+ #define PRID_IMP_LOONGSON_64C	0x6300  /* Classic Loongson-2 and Loongson-3 */
+ #define PRID_IMP_LOONGSON_64G	0xc000  /* Generic Loongson-2 and Loongson-3 */
+-
++#define PRID_IMP_LX4380		0xcd00  /* Lexra LX4380 / RLX4181 */
+ #define PRID_IMP_UNKNOWN	0xff00
+ 
+ /*
+@@ -297,6 +297,9 @@
+ 	 */
+ 	CPU_R2000, CPU_R3000, CPU_R3000A, CPU_R3041, CPU_R3051, CPU_R3052,
+ 	CPU_R3081, CPU_R3081E,
++	
++	/* Lexra / Realtek */
++	CPU_RLX4181,
+ 
+ 	/*
+ 	 * R4000 class processors

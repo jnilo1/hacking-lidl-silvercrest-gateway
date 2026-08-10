@@ -1,0 +1,54 @@
+name: Kernel patch lint (from-clean)
+
+# Replays build_kernel.sh's patch step against a pristine kernel tree with
+# --dry-run. Incremental builds reuse the already-patched linux-6.18-rtl8196e/
+# tree and never re-exercise the patch files, so a malformed hunk can sit green
+# in the repo until a contributor does a from-clean build and hits it (#136).
+# This job is that from-clean build's patch step, on every change that can
+# affect it.
+
+on:
+  pull_request:
+    paths:
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18/**'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-7.1/**'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/lint_patches.sh'
+      - '.github/workflows/kernel-patches.yml'
+  push:
+    branches:
+      - main
+      - 'v*-pre'
+    paths:
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18/**'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-7.1/**'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh'
+      - '3-Main-SoC-Realtek-RTL8196E/32-Kernel/lint_patches.sh'
+      - '.github/workflows/kernel-patches.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kernel-patches-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cache the pristine tarball, keyed on build_kernel.sh (which pins
+      # KERNEL_VERSION). A version bump invalidates the cache and re-downloads.
+      - name: Cache pristine kernel tarball
+        uses: actions/cache@v4
+        with:
+          path: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/linux-*.tar.xz
+          key: kernel-tarball-${{ hashFiles('3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh') }}
+
+      - name: From-clean patch dry-run (6.18 + 7.1)
+        run: |
+          KERNEL=6.18 ./3-Main-SoC-Realtek-RTL8196E/32-Kernel/lint_patches.sh
+          KERNEL=7.1  ./3-Main-SoC-Realtek-RTL8196E/32-Kernel/lint_patches.sh

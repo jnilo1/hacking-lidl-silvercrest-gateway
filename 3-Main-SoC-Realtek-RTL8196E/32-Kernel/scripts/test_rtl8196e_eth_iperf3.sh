@@ -37,7 +37,11 @@ set -euo pipefail
 export LC_ALL=C
 
 # Configuration
-RTL8196E_IP="${RTL8196E_IP:-192.168.1.88}"
+# Gateway address: RTL8196E_IP env > gateway.env > the last gateway installed
+# or reached > its hostname > the historic 192.168.1.88 (see lib/gwconf.sh).
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/../../../lib/gwconf.sh"
+RTL8196E_IP="${RTL8196E_IP:-$(gwconf_gateway_addr)}"
 RTL8196E_USER="${RTL8196E_USER:-root}"
 IPERF_PORT=5201		# iperf3 default; differs from iperf2's 5001
 DURATION=30
@@ -47,6 +51,7 @@ KERNEL_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 LOG_DIR="${KERNEL_DIR}/test_results_iperf3_$(date +%Y%m%d_%H%M%S)"
 TEST_MODE="${TEST_MODE:-full}"
 TEST_DESCRIPTION="${1:-rtl8196e-eth iperf3 full test}"
+TEST_FAILURES=0
 
 # Colors & logging
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -212,6 +217,25 @@ iperf3_receiver_mbps(){
     awk '{for(i=1;i<=NF;i++) if($i ~ /bits\/sec/){unit=$i; v=$(i-1); if(unit ~ /Kbits/) v=v/1000; else if(unit ~ /Gbits/) v=v*1000; print v; exit}}'
 }
 
+iperf3_result_valid(){
+  local file=$1 minimum_summaries=${2:-1}
+  local summaries
+
+  summaries=$(grep -Ec "[0-9]+(\.[0-9]+)?[[:space:]]+[KMG]bits/sec.*receiver[[:space:]]*$" "$file" 2>/dev/null || true)
+  [ "$summaries" -ge "$minimum_summaries" ]
+}
+
+record_test_failure(){
+  local test_name=$1 exit_code=$2
+
+  if [ "$exit_code" -eq 0 ]; then
+    log_error "$test_name failed (missing iperf3 receiver summary)"
+  else
+    log_error "$test_name failed (exit code: $exit_code)"
+  fi
+  TEST_FAILURES=$((TEST_FAILURES + 1))
+}
+
 # ── Tests ─────────────────────────────────────────────────────────────
 
 test_tcp_to_rtl(){
@@ -221,11 +245,12 @@ test_tcp_to_rtl(){
   timeout --kill-after=3 $((DURATION + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -t ${DURATION} -i 1 > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log"; then
     log_success "$test_name completed"
     grep -E "^\[.*\][[:space:]]+0\.0+-.*sec.*[0-9]+(\.[0-9]+)?[[:space:]]+[KMG]bits/sec.*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -240,11 +265,12 @@ test_tcp_from_rtl(){
   timeout --kill-after=3 $((DURATION + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -R -t ${DURATION} -i 1 > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log"; then
     log_success "$test_name completed"
     grep -E "^\[.*\][[:space:]]+0\.0+-.*sec.*[0-9]+(\.[0-9]+)?[[:space:]]+[KMG]bits/sec.*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -256,11 +282,12 @@ test_tcp_parallel(){
   timeout --kill-after=3 $((DURATION + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -P ${n} -t ${DURATION} > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log"; then
     log_success "$test_name completed"
     grep -E "\[SUM\].*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -273,11 +300,12 @@ test_stress_long(){
   timeout --kill-after=5 $((L + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -t ${L} -i 10 > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log"; then
     log_success "$test_name completed"
     grep -E "^\[.*\][[:space:]]+0\.0+-.*sec.*[0-9]+(\.[0-9]+)?[[:space:]]+[KMG]bits/sec.*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -290,12 +318,13 @@ test_udp_to_rtl(){
   timeout --kill-after=3 $((DURATION + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -u -b ${bw} -t ${DURATION} -i 1 > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log"; then
     log_success "$test_name completed"
     # UDP receiver line carries Lost/Total Datagrams in the same row.
     grep -E "^\[.*\][[:space:]]+0\.0+-.*sec.*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -311,12 +340,13 @@ test_udp_bidirectional(){
   timeout --kill-after=3 $((DURATION + 10)) iperf3 -c ${RTL8196E_IP} -p ${IPERF_PORT} -u -b 50M --bidir -t ${DURATION} > "$LOG_DIR/${test_name}.log" 2>&1
   local ec=$?
   set -e
-  if [ $ec -eq 0 ] || [ $ec -eq 124 ] || [ $ec -eq 137 ]; then
+  if [ $ec -eq 0 ] && iperf3_result_valid "$LOG_DIR/${test_name}.log" 2; then
     log_success "$test_name completed"
     echo "  [host -> gw]"; grep -E "\[TX-C\].*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
     echo "  [gw -> host]"; grep -E "\[RX-C\].*receiver" "$LOG_DIR/${test_name}.log" | tail -1 || true
   else
-    log_error "$test_name failed (exit code: $ec)"
+    record_test_failure "$test_name" "$ec"
+    [ $ec -eq 0 ] && ec=1
   fi
   test_end_marker "$test_name" "$ec"
 }
@@ -426,7 +456,7 @@ print_comparison(){
 
 # ── Main ──────────────────────────────────────────────────────────────
 
-cleanup(){ echo; log_warning "Interrupted..."; ssh ${RTL8196E_USER}@${RTL8196E_IP} "pkill iperf3 2>/dev/null" >/dev/null 2>&1 || true; pkill iperf3 2>/dev/null || true; exit 1; }
+cleanup(){ echo; log_warning "Interrupted..."; ssh ${RTL8196E_USER}@${RTL8196E_IP} "killall iperf3 2>/dev/null" >/dev/null 2>&1 || true; pkill iperf3 2>/dev/null || true; exit 1; }
 trap cleanup INT TERM
 
 echo "=========================================="
@@ -440,7 +470,20 @@ echo
 log "Checking prerequisites..."
 command -v iperf3 >/dev/null || { log_error "iperf3 not installed locally (sudo apt install iperf3)"; exit 1; }
 ssh -o ConnectTimeout=5 ${RTL8196E_USER}@${RTL8196E_IP} "echo ok" >/dev/null 2>&1 || { log_error "Cannot connect to ${RTL8196E_IP}"; exit 1; }
-ssh ${RTL8196E_USER}@${RTL8196E_IP} "iperf3 --version" >/dev/null 2>&1 || { log_error "iperf3 not installed on RTL8196E (build via 34-Userdata/iperf3/ then scp -O to /userdata/usr/bin/)"; exit 1; }
+LOCAL_IPERF3_VERSION=$(iperf3 --version 2>&1 | head -1)
+REMOTE_IPERF3_VERSION=$(ssh ${RTL8196E_USER}@${RTL8196E_IP} "iperf3 --version" 2>&1 | head -1) || {
+  log_error "iperf3 not installed on RTL8196E (build via 34-Userdata/iperf3/ then scp -O to /userdata/usr/bin/)"
+  exit 1
+}
+[[ "$LOCAL_IPERF3_VERSION" =~ ^iperf[[:space:]]+3\. ]] || {
+  log_error "Local iperf3 is not version 3.x: $LOCAL_IPERF3_VERSION"
+  exit 1
+}
+[[ "$REMOTE_IPERF3_VERSION" =~ ^iperf[[:space:]]+3\. ]] || {
+  log_error "Gateway iperf3 is not version 3.x: $REMOTE_IPERF3_VERSION"
+  log_error "iperf2 and iperf3 are protocol-incompatible; use test_rtl8196e_eth.sh or deploy a genuine iperf3 binary"
+  exit 1
+}
 log_success "All prerequisites OK"
 
 # Setup
@@ -450,8 +493,8 @@ mkdir -p "$LOG_DIR"
   echo "Mode: $TEST_MODE"
   echo "Date: $(date)"
   echo "RTL8196E: ${RTL8196E_IP} (${RTL_IFACE})"
-  echo "iperf3 host:    $(iperf3 --version 2>&1 | head -1)"
-  echo "iperf3 gateway: $(ssh ${RTL8196E_USER}@${RTL8196E_IP} 'iperf3 --version' 2>&1 | head -1)"
+  echo "iperf3 host:    $LOCAL_IPERF3_VERSION"
+  echo "iperf3 gateway: $REMOTE_IPERF3_VERSION"
 } > "$LOG_DIR/test_config.txt"
 
 # Capture before
@@ -467,7 +510,7 @@ capture_udp_stats "$LOG_DIR/snmp_before.txt"
 # UDP from clients on the same port — no separate UDP server needed
 # (unlike iperf2 which needed `iperf -s -u` alongside `iperf -s`).
 log "Starting iperf3 server on RTL8196E..."
-ssh ${RTL8196E_USER}@${RTL8196E_IP} "pkill iperf3 2>/dev/null; true"; sleep 1
+ssh ${RTL8196E_USER}@${RTL8196E_IP} "killall iperf3 2>/dev/null; true"; sleep 1
 ssh ${RTL8196E_USER}@${RTL8196E_IP} "iperf3 -s -p ${IPERF_PORT} -D >/dev/null 2>&1 </dev/null"; sleep 2
 log_success "iperf3 server started (port ${IPERF_PORT})"
 
@@ -490,7 +533,7 @@ test_udp_to_rtl 100M;       sleep 2
 test_udp_bidirectional;     sleep 2
 
 # Cleanup & capture after
-ssh ${RTL8196E_USER}@${RTL8196E_IP} "pkill iperf3 2>/dev/null" >/dev/null 2>&1 || true
+ssh ${RTL8196E_USER}@${RTL8196E_IP} "killall iperf3 2>/dev/null" >/dev/null 2>&1 || true
 pkill iperf3 2>/dev/null || true
 capture_interface_stats "$LOG_DIR/ifstat_after.txt"
 capture_ethtool_stats "$LOG_DIR/ethtool_after.txt"
@@ -506,4 +549,8 @@ analyze_kick_stats_global
 print_comparison
 
 echo
+if [ "$TEST_FAILURES" -gt 0 ]; then
+  log_error "$TEST_FAILURES test(s) failed; results in: $LOG_DIR"
+  exit 1
+fi
 log_success "Results in: $LOG_DIR"

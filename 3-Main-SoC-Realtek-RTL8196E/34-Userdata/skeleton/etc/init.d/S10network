@@ -19,6 +19,8 @@
 # J. Nilo - Nov 2025
 #
 
+. "$(dirname "$0")/supervise.func"
+
 # Convert dotted netmask (255.255.255.0) to CIDR prefix length (24)
 mask2cidr() {
     local n=0 oct
@@ -34,8 +36,6 @@ mask2cidr() {
 
 case "$1" in
 start)
-    echo "Starting network setup"
-
     ip link set lo up
     ip addr add 127.0.0.1/8 dev lo 2>/dev/null
 
@@ -44,25 +44,25 @@ start)
 
     if [ -f "$MACFILE" ]; then
         formatted_mac=$(cat "$MACFILE")
-        echo "Using persisted MAC address: $formatted_mac"
+        echo "  network: persisted MAC $formatted_mac"
     else
         # Generate a locally administered MAC (U/L bit = 1, multicast bit = 0)
         octets=$(hexdump -n5 -e '/1 ":%02X"' /dev/urandom)
         formatted_mac="02${octets}"
         echo "$formatted_mac" >"$MACFILE"
-        echo "Generated and saved new MAC address: $formatted_mac"
+        echo "  network: generated MAC $formatted_mac"
     fi
 
     ip link set eth0 address "$formatted_mac"
 
     # Bring up eth0 and configure IP
     if [ -f /userdata/etc/eth0.conf ]; then
-        echo "Loading static IP configuration from /userdata/etc/eth0.conf"
         . /userdata/etc/eth0.conf
         CIDR=$(mask2cidr "$NETMASK")
         ip addr add "$IPADDR/$CIDR" dev eth0
         ip link set eth0 up
         ip route add default via "$GATEWAY"
+        echo "  network: static IP $IPADDR/$CIDR (gw $GATEWAY)"
         echo "$IPADDR" >/var/run/current_eth0_ip
         # Generate resolv.conf from eth0.conf (DNS and DOMAIN are optional)
         : > /var/resolv.conf
@@ -73,7 +73,7 @@ start)
             echo "nameserver $GATEWAY" >> /var/resolv.conf
         fi
     else
-        echo "No static IP configuration found, starting DHCP client on eth0"
+        echo "  network: DHCP client on eth0 (no static config)"
         ip link set eth0 up
         sleep 1
         HOSTNAME=$(cat /etc/hostname)
@@ -81,10 +81,19 @@ start)
         # retrying so the gateway recovers once the DHCP server is back (see #82)
         udhcpc -i eth0 -x hostname:"$HOSTNAME" -s /bin/udhcpc.script -S \
             -p /var/run/udhcpc0.pid -T 3 -b 2>&1 | grep -v "no lease, failing"
+        # Watch the carrier and re-trigger DHCP when the link returns on a
+        # possibly different subnet (cable moved). busybox udhcpc never
+        # re-DISCOVERs on its own once bound (#132). DHCP mode only: this is
+        # the DHCP branch, so the static-IP path above never starts it.
+        if [ -x /usr/sbin/linkwatch ]; then
+            sup_start linkwatch /usr/sbin/linkwatch -i eth0 -p /var/run/udhcpc0.pid
+        fi
     fi
     ;;
 stop)
-    echo "Stopping network"
+    echo "  network: stopped"
+
+    sup_stop linkwatch
 
     if [ -f /var/run/udhcpc0.pid ]; then
         kill "$(cat /var/run/udhcpc0.pid)" 2>/dev/null
@@ -97,7 +106,7 @@ stop)
     ip link set eth0 down 2>/dev/null
     ;;
 restart)
-    echo "Restarting network"
+    echo "  network: restarting"
     $0 stop
     $0 start
     ;;

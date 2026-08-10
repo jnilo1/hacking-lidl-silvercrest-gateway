@@ -74,66 +74,80 @@ markdown_extensions:
   - pymdownx.tasklist:
       custom_checkbox: true
 
-# Phase 1: explicit, minimal nav. Phase 2 will rely on awesome-pages
-# to auto-discover sub-sections as exclusions are lifted.
+# User journeys come first. Component and developer references remain available
+# below them without forcing a first-time installer through implementation
+# details.
 nav:
   - Home: README.md
-  - Hardware: 0-Hardware/README.md
-  - Build environment: 1-Build-Environment/README.md
-  - Zigbee Radio (EFR32):
+  - Start here:
+    - First installation: docs/getting-started.md
+    - Choose a radio mode: docs/radio-options.md
+    - Upgrade: docs/upgrading.md
+    - Use and maintain the gateway: docs/using-the-gateway.md
+    - Troubleshooting: docs/troubleshooting.md
+    - Backup and restore: 3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md
+    - Install and upgrade reference: 3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md
+  - Hardware:
+    - Lidl Silvercrest / Tuya: 0-Hardware/README.md
+    - Sengled Smart Hub G4: 0-Hardware/sengled-e39-g8c/README.md
+  - Radio firmware (EFR32):
     - 2-Zigbee-Radio-Silabs-EFR32/README.md
-    - EZSP Reference: 2-Zigbee-Radio-Silabs-EFR32/20-EZSP-Reference/README.md
-    - Simplicity Studio: 2-Zigbee-Radio-Silabs-EFR32/21-Simplicity-Studio/README.md
-    - Backup, Flash & Restore: 2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md
-    - Bootloader (UART/Xmodem):
-      - 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/README.md
-      - Firmware: 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/README.md
-    - NCP-UART-HW (EmberZNet 7.5): 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/README.md
-    - RCP-UART-HW (EmberZNet 8.2):
-      - 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/README.md
+    - Per-board builds: 2-Zigbee-Radio-Silabs-EFR32/boards/README.md
+    - NCP (Zigbee2MQTT / ZHA): 2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/README.md
+    - RCP (host-side EmberZNet 8.2):
+      - Overview: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/README.md
       - EmberZNet 8.x guide: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/EMBERZNET-8.x-GUIDE.md
-      - cpcd: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/cpcd/README.md
-      - Docker:
-        - 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/README.md
-        - cpcd + zigbeed + otbr image: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/cpcd-zigbeed-otbr/README.md
       - RCP stack: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/rcp-stack/README.md
-      - zigbeed 7.5.1: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-7.5.1/README.md
+      - cpcd: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/cpcd/README.md
       - zigbeed 8.2.2: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-8.2.2/README.md
-    - OT-RCP (OpenThread):
-      - 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/README.md
-      - Thread & Matter primer: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/THREAD-MATTER-PRIMER.md
-      - ot-ctl cheat-sheet: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/OT-CTL-CHEATSHEET.md
+      - zigbeed 7.5.1: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/zigbeed-7.5.1/README.md
+      - Docker:
+        - Overview: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/README.md
+        - cpcd + zigbeed + otbr: 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/cpcd-zigbeed-otbr/README.md
+    - OT-RCP (Thread / Zigbee-on-Host):
+      - Overview: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/README.md
+      - Thread and Matter primer: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/THREAD-MATTER-PRIMER.md
+      - ot-ctl cheat sheet: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/OT-CTL-CHEATSHEET.md
       - Docker: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker/README.md
       - Range testing:
-        - 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/range-testing/README.md
+        - Method: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/range-testing/README.md
         - Field-test report: 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/range-testing/REPORT.md
-    - Router: 2-Zigbee-Radio-Silabs-EFR32/27-Router/README.md
-  - Main SoC (RTL8196E):
+    - Standalone Zigbee router: 2-Zigbee-Radio-Silabs-EFR32/27-Router/README.md
+    - Radio backup, flash, and restore: 2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/README.md
+    - Gecko bootloader:
+      - 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/README.md
+      - Firmware: 2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/README.md
+    - EZSP reference: 2-Zigbee-Radio-Silabs-EFR32/20-EZSP-Reference/README.md
+    - Simplicity Studio: 2-Zigbee-Radio-Silabs-EFR32/21-Simplicity-Studio/README.md
+  - Linux system (RTL8196E):
     - 3-Main-SoC-Realtek-RTL8196E/README.md
-    - Backup & Restore: 3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md
     - Bootloader:
-      - 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/README.md
+      - Overview: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/README.md
       - Commands: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/COMMANDS.md
       - Reboot to bootloader: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/REBOOT_TO_BOOTLOADER.md
       - Testing guide: 3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/TESTING.md
     - Kernel:
-      - 3-Main-SoC-Realtek-RTL8196E/32-Kernel/README.md
+      - Overview: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/README.md
+      - UART diagnostics: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/tools/README.md
       - UART↔TCP bridge:
-        - 3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/README.md
+        - Operation: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/README.md
         - Security: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/rtl8196e-uart-bridge/SECURITY.md
       - Watchdog driver: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/watchdog/README.md
       - Ethernet driver performance: 3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18/drivers/net/ethernet/rtl8196e-eth/PERFORMANCE.md
     - Rootfs: 3-Main-SoC-Realtek-RTL8196E/33-Rootfs/README.md
     - Userdata:
-      - 3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md
-      - OpenThread Border Router: 3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/README.md
-    - Migration: 3-Main-SoC-Realtek-RTL8196E/35-Migration/README.md
+      - Persistent services and configuration: 3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md
+      - Native OpenThread Border Router: 3-Main-SoC-Realtek-RTL8196E/34-Userdata/ot-br-posix/README.md
+  - Development:
+    - Build environment: 1-Build-Environment/README.md
 
 # Exclusions: keep the build small and clean in phase 1.
 # Sub-sections (2x-*, 3x-*) are excluded for now and will be enabled
 # one by one in phase 2 as their links are validated.
 exclude_docs: |
+  AGENTS.md
   CLAUDE.md
+  .codex/
   .claude/
   .venv-docs/
   site/
@@ -159,6 +173,9 @@ exclude_docs: |
   2-Zigbee-Radio-Silabs-EFR32/*/patches/*.patch
   2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/docker/z2m/
   2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/docker/z2m/
+  # Legacy local output from the prototype's former location.
+  2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/build-blehci/
+  2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW/cpcd/cpc-daemon/
   2-Zigbee-Radio-Silabs-EFR32/CHANGELOG.md
   # Dev note — internal technical memo
   2-Zigbee-Radio-Silabs-EFR32/22-Backup-Flash-Restore/MEMO-universal-silabs-flasher.md
@@ -188,6 +205,8 @@ exclude_docs: |
   3-Main-SoC-Realtek-RTL8196E/CHANGELOG.md
   3-Main-SoC-Realtek-RTL8196E/3-Main-SoC-Realtek-RTL8196E/
   backups/
+  canari/
+  MEMO-tx-throughput-verdict.md
 
   # Developer notes — readable on github.com but excluded from the site
   3-Main-SoC-Realtek-RTL8196E/31-Bootloader/doc/MEMO_BOOTLOADER.md

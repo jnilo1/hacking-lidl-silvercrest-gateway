@@ -1,0 +1,161 @@
+#!/bin/sh
+# thread-health-monitor — optional gateway health sampler (BusyBox sh)
+#
+# Optional companion to the range-testing scripts. Captures the gateway's
+# host-side state (memory, load, UART1 errors on the OT-RCP link, Thread
+# role and child count, Ethernet errors) at 1 sample/minute, so a long
+# experiment has matching context to interpret RSSI/LQI behaviour.
+#
+# Not a permanent service. Start it before a test, stop it when the test
+# ends — the CSV stays on JFFS2 until you delete it. JFFS2 wear is
+# negligible at one sample per minute.
+#
+# Usage:
+#   thread-health-monitor start    — launch sampler in background
+#   thread-health-monitor stop     — kill the sampler
+#   thread-health-monitor status   — print sampler PID and log sizes
+#   thread-health-monitor sample   — internal worker
+#
+# Output:
+#   $LOG_DIR/health.csv     one CSV line per minute
+#   $LOG_DIR/dmesg.snapshot full kernel ring buffer, written once on exit
+#                           (non-destructive — does not clear the buffer)
+#
+# Environment variables:
+#   LOG_DIR  output directory (default: /userdata/log)
+#   OT_CTL   path to ot-ctl   (default: ot-ctl on $PATH)
+#
+# CSV columns:
+#   ts                wall-clock unix epoch
+#   uptime            monotonic seconds since boot (survives NTP jumps)
+#   mem_avail_kb      MemAvailable from /proc/meminfo
+#   load1             1-min load average
+#   uart1_fe          UART1 framing errors counter (cumulative)
+#   uart1_oe          UART1 overrun errors counter
+#   uart1_pe          UART1 parity errors counter
+#   thread_state      ot-ctl state (leader/router/child/detached/...)
+#   thread_children   number of attached children
+#   eth_rx_err        eth0 RX errors counter
+#   eth_tx_err        eth0 TX errors counter
+#
+# Notes:
+# - The wallclock `ts` may jump backwards once when ntpd first syncs at
+#   boot. The `uptime` column is monotonic and gives a reliable timeline
+#   for any analysis that doesn't need calendar time.
+# - UART1 is the line connecting the host to the EFR32 OT-RCP. The fe/oe/pe
+#   counters surface bit-errors that would otherwise be invisible above the
+#   Spinel/HDLC framing layer.
+# - On exit, the kernel ring buffer is dumped to `dmesg.snapshot` (not
+#   cleared). Useful to correlate any anomaly seen in health.csv with
+#   kernel-level events.
+# - BusyBox ash 1.37 does not fire traps while blocked in an external
+#   `sleep`. Hence the `sleep 60 & wait $!` idiom — `wait` is interruptible.
+
+LOG_DIR="${LOG_DIR:-/userdata/log}"
+OT_CTL="${OT_CTL:-ot-ctl}"
+CSV="$LOG_DIR/health.csv"
+DMESG="$LOG_DIR/dmesg.snapshot"
+HEADER='ts,uptime,mem_avail_kb,load1,uart1_fe,uart1_oe,uart1_pe,thread_state,thread_children,eth_rx_err,eth_tx_err'
+
+case "$1" in
+    start)
+        mkdir -p "$LOG_DIR"
+        OLD=$(pgrep -f 'thread-health-monitor sample')
+        [ -n "$OLD" ] && kill $OLD
+        sleep 1
+
+        # Wait up to 60s for NTP-synced wallclock. Without this, the first
+        # samples carry pre-1970 epoch values and the CSV shows a 56-year
+        # jump when ntpd kicks in.
+        i=0
+        while [ "$(date +%s)" -lt 1000000000 ]; do
+            if [ $i -ge 60 ]; then
+                echo "WARN: clock not synced after 60s, starting anyway (uptime column still valid)"
+                break
+            fi
+            [ $i -eq 0 ] && echo "waiting for NTP-synced clock..."
+            sleep 1
+            i=$((i + 1))
+        done
+
+        # Rotate the CSV if its header doesn't match the current schema —
+        # a re-run after a script update should not mix two layouts.
+        if [ -s "$CSV" ] && [ "$(head -n1 "$CSV")" != "$HEADER" ]; then
+            mv "$CSV" "$CSV.$(date +%s).old"
+            echo "rotated old CSV (schema changed)"
+        fi
+
+        # Detach via subshell + & so the worker survives the SSH session
+        # close. BusyBox has no `nohup` / `setsid`; `( cmd & )` is the
+        # portable equivalent (orphans the process to PID 1).
+        ( "$0" sample </dev/null >/dev/null 2>&1 & )
+        sleep 1
+        if pgrep -fl 'thread-health-monitor sample' >/dev/null; then
+            echo "sampler started: $(pgrep -f 'thread-health-monitor sample')"
+            echo "logs: $CSV  $DMESG"
+        else
+            echo "WARN: sampler did not start"
+            exit 1
+        fi
+        ;;
+
+    stop)
+        OLD=$(pgrep -f 'thread-health-monitor sample')
+        if [ -n "$OLD" ]; then
+            kill $OLD && echo "sampler stopped"
+        else
+            echo "sampler: not running"
+        fi
+        ;;
+
+    status)
+        pgrep -fl 'thread-health-monitor sample' || echo "sampler: not running"
+        echo "csv lines:    $(wc -l < "$CSV" 2>/dev/null || echo 0)"
+        echo "dmesg bytes:  $(wc -c < "$DMESG" 2>/dev/null || echo 0)"
+        ;;
+
+    sample)
+        if [ ! -s "$CSV" ]; then
+            echo "$HEADER" > "$CSV"
+        fi
+        # Snapshot the kernel ring buffer once on exit (stop / SIGINT / SIGTERM).
+        # Non-destructive (no `-c`). Captures the final state without
+        # churning JFFS2 every 10 min during the run.
+        trap 'dmesg > "$DMESG.tmp" 2>/dev/null && mv "$DMESG.tmp" "$DMESG"; exit 0' INT TERM
+        while :; do
+            ts=$(date +%s)
+            read up _ < /proc/uptime; up=${up%.*}
+            mem=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
+            read l1 _ _ _ < /proc/loadavg
+
+            # /proc/tty/driver/serial — line "1:" is UART1. The driver only
+            # emits fe:/oe:/pe: when the counter is non-zero; absence = 0.
+            uart=$(awk '/^1:/' /proc/tty/driver/serial)
+            fe=$(echo "$uart" | sed -n 's/.*fe:\([0-9]*\).*/\1/p'); fe=${fe:-0}
+            oe=$(echo "$uart" | sed -n 's/.*oe:\([0-9]*\).*/\1/p'); oe=${oe:-0}
+            pe=$(echo "$uart" | sed -n 's/.*pe:\([0-9]*\).*/\1/p'); pe=${pe:-0}
+
+            state=$(timeout 3 "$OT_CTL" state 2>/dev/null | head -n1 | sed 's/\r$//')
+            state=${state:-?}
+            kids=$(timeout 3 "$OT_CTL" child list 2>/dev/null | sed 's/\r$//' | grep -E '^[0-9 ]+$' | wc -w)
+            kids=${kids:-0}
+
+            # /proc/net/dev — eth0 rx_errs (col 4) tx_errs (col 12)
+            eth=$(awk '/^ *eth0:/ {print $4" "$12}' /proc/net/dev)
+            rxe=$(echo "$eth" | awk '{print $1}'); rxe=${rxe:-0}
+            txe=$(echo "$eth" | awk '{print $2}'); txe=${txe:-0}
+
+            echo "$ts,$up,$mem,$l1,$fe,$oe,$pe,$state,$kids,$rxe,$txe" >> "$CSV"
+
+            # `sleep & wait $!` keeps the shell in an interruptible wait so
+            # SIGTERM dispatches the trap (BusyBox ash kills external `sleep`
+            # without firing traps).
+            sleep 60 & wait $!
+        done
+        ;;
+
+    *)
+        echo "usage: $0 start|stop|status"
+        exit 1
+        ;;
+esac

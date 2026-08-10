@@ -14,7 +14,8 @@ cpcd/test_tcp.c
 zigbeed-8.2.2/host_token.nvm
 zigbeed-8.2.2/tmp/
 
-# Keep RCP firmware for users who just want to flash
+# Keep RCP firmware for users who just want to flash. Only the .gbl is shipped:
+# the .s37 is a side-effect of the build (the SWD/J-Link image), and stays
+# ignored by the root rule like every other .s37 in the tree.
 !firmware/
 !firmware/*.gbl
-!firmware/*.s37

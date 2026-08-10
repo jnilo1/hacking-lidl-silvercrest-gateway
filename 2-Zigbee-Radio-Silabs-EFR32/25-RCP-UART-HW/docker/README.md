@@ -1,14 +1,14 @@
 # Docker Stacks for RCP Firmware (EmberZNet 8.2.2)
 
-The RCP firmware has one working use case on the Lidl Silvercrest gateway.
+The RCP firmware has one working use case on these gateways.
 A second one (concurrent Zigbee + Thread) was originally sketched but is
-not achievable on this hardware — see [`cpcd-zigbeed-otbr/README.md`](./cpcd-zigbeed-otbr/README.md).
+not achievable on a Series 1 radio — see [`cpcd-zigbeed-otbr/README.md`](./cpcd-zigbeed-otbr/README.md).
 
 ## Use Cases at a Glance
 
 | # | Use case | Compose file | EFR32 firmware | Status |
 |---|----------|-------------|----------------|--------|
-| 1 | **Zigbee** (EmberZNet 8.2.2) | `docker-compose-zigbee.yml` | `rcp-uart-802154.gbl` | Tested, stable |
+| 1 | **Zigbee** (EmberZNet 8.2.2) | `docker-compose-zigbee.yml` | `./flash_efr32.sh rcp` | Tested, stable |
 | 2 | **Multipan** (Zigbee + Thread) | — | — | ❌ Not achievable on EFR32MG1B ([why](./cpcd-zigbeed-otbr/README.md)) |
 
 ```
@@ -36,16 +36,16 @@ not achievable on this hardware — see [`cpcd-zigbeed-otbr/README.md`](./cpcd-z
 ```
 
 For Matter-over-Thread on this gateway, reflash the EFR32 with the standalone
-OT-RCP firmware (`../../26-OT-RCP/firmware/ot-rcp.gbl`) and use the Thread
+OT-RCP firmware (`./flash_efr32.sh otrcp` from the repo root) and use the Thread
 Border Router compose at `../../26-OT-RCP/docker/docker-compose-otbr-host.yml`.
 
 ---
 
 ## Requirements
 
-### On the Lidl Gateway
+### On the Gateway
 
-- **EFR32 flashed with RCP firmware** (`rcp-uart-802154.gbl`)
+- **EFR32 flashed with RCP firmware** (via `./flash_efr32.sh rcp`)
 - **Gateway running kernel 6.18 or newer** with the in-kernel UART bridge
   (`rtl8196e-uart-bridge`) armed on TCP:8888 (automatic via `S50uart_bridge`
   at boot)

@@ -8,6 +8,7 @@
  * Copyright (c) 2024-2026 J. Nilo
  */
 
+#include "board.h"
 #include "boot_common.h"
 #include "boot_soc.h"
 #include "spi_common.h"
@@ -31,10 +32,15 @@ unsigned int gCHKKEY_CNT = 0;
  * The flag is one-shot: the bootloader clears it before entering
  * download mode.
  *
- * Address 0xA1FFEFFC = KSEG1 (uncached) alias of physical 0x01FFEFFC,
- * inside a 4 KB page (0x01FFE000–0x01FFEFFF) declared as
- * reserved-memory with no-map in the device tree.  The kernel page
- * allocator skips this page — no KSEG0/KSEG1 coherency conflict.
+ * The flag words live at the top of a 4 KB page placed at DRAM top
+ * minus 0x2000, derived from the board's BOARD_DRAM_TOP_KSEG1 (on the
+ * Lidl board: page 0x01FFE000–0x01FFEFFF, HOLD at KSEG1 0xA1FFEFFC).
+ * The same page is declared as reserved-memory with no-map in the
+ * board's kernel DTS, where the `boothold` tool and the watchdog panic
+ * record resolve it at runtime — the bootloader is the only
+ * compile-time consumer, so a board with a different DRAM size only
+ * needs its board.h and its DTS to agree.  The kernel page allocator
+ * skips this page — no KSEG0/KSEG1 coherency conflict.
  *
  * Why HIGH in DRAM and not at 0x003FFFFC like in v2.x?
  *
@@ -58,7 +64,8 @@ unsigned int gCHKKEY_CNT = 0;
  * usage on this minimal bootloader.
  */
 #define BOOTHOLD_MAGIC  0x484F4C44  /* "HOLD" */
-#define BOOTHOLD_RAM    ((volatile unsigned long *)0xA1FFEFFC)
+#define BOOTHOLD_PAGE   (BOARD_DRAM_TOP_KSEG1 - 0x2000)
+#define BOOTHOLD_RAM    ((volatile unsigned long *)(BOOTHOLD_PAGE + 0xFFC))
 
 /*
  * Optional TFTP-server-IP handoff: `boothold <ip>` writes a marker word and
@@ -68,8 +75,8 @@ unsigned int gCHKKEY_CNT = 0;
  * cold boot the page holds garbage; the marker will not match and tftpd_entry()
  * keeps the compiled default (192.168.1.6).
  */
-#define BOOTHOLD_IP_MAGIC_RAM ((volatile unsigned long *)0xA1FFEFF8)
-#define BOOTHOLD_IP_RAM       ((volatile unsigned long *)0xA1FFEFF4)
+#define BOOTHOLD_IP_MAGIC_RAM ((volatile unsigned long *)(BOOTHOLD_PAGE + 0xFF8))
+#define BOOTHOLD_IP_RAM       ((volatile unsigned long *)(BOOTHOLD_PAGE + 0xFF4))
 #define BOOTHOLD_IP_MAGIC     0x49505634  /* "IPV4" */
 
 extern unsigned long g_tftp_server_ip;
@@ -132,7 +139,8 @@ void showBoardInfo(void)
 
 	cpu_speed = check_cpu_speed();
 
-	prom_printf("Realtek RTL8196E  CPU: %dMHz  RAM: 32MB  Flash: %s\n",
+	prom_printf("Realtek RTL8196E  CPU: %dMHz  RAM: " BOARD_DRAM_BANNER
+		    "  Flash: %s\n",
 		    cpu_speed, g_flash_chip_name);
 	prom_printf("Bootloader: %s - %s - J. Nilo\n", B_VERSION, BOOT_CODE_TIME);
 }
@@ -398,6 +406,10 @@ void goToDownMode()
 	return;
 }
 
+/* swCore.c — full switch-core reset (active_swcore toggle), used to flush any
+ * in-flight CPU-port DMA before the kernel handoff. */
+extern void FullAndSemiReset(void);
+
 void goToLocalStartMode(unsigned long addr, IMG_HEADER_Tp pheader)
 {
 	unsigned short *word_ptr;
@@ -415,6 +427,26 @@ void goToLocalStartMode(unsigned long addr, IMG_HEADER_Tp pheader)
 		jump = (void *)(pheader->startAddr);
 
 		cli();
+		/*
+		 * Quiesce the Ethernet switch before handing off to the kernel.
+		 * The kernel re-inits the MAC, but until it does, a live switch can
+		 * DMA inbound frames into DRAM during early boot and corrupt it —
+		 * the intermittent post-flash boot loop. Turning the PHY interface
+		 * off stops new ingress but NOT an already-armed DMA, so on the
+		 * auto-boot path (taken on every boot) first stop the CPU-port DMA
+		 * engine and hard-reset the switch core (the same active_swcore reset
+		 * swCore_init() runs on every boot, which aborts any in-flight
+		 * transfer), THEN hold the PHY off (the reset re-defaults PCRP, so
+		 * PHY-off must come after it). Counterpart of the same quiesce in the
+		 * `J` command (monitor.c) and autoreboot() (tftpd.c).
+		 */
+		WRITE_MEM32(CPUICR, 0); /* stop CPU-port RX/TX DMA */
+		FullAndSemiReset();	/* hard-reset switch core — flush in-flight DMA */
+		WRITE_MEM32(PCRP0, (READ_MEM32(PCRP0) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP1, (READ_MEM32(PCRP1) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP2, (READ_MEM32(PCRP2) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP3, (READ_MEM32(PCRP3) & (~EnablePHYIf)));
+		WRITE_MEM32(PCRP4, (READ_MEM32(PCRP4) & (~EnablePHYIf)));
 		flush_cache();
 		jump(); // jump to start
 		return;

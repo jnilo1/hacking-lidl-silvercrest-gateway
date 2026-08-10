@@ -1,0 +1,159 @@
+#!/bin/sh
+# uart-overrun-monitor — sample RTL8196E UART error counters (BusyBox sh)
+#
+# Runs on the gateway and emits CSV with cumulative and per-interval counters
+# from /proc/tty/driver/serial. UART1 is the EFR32 link by default, so this
+# works with NCP, RCP, OT-RCP, and experimental radio firmware.
+
+set -u
+
+INTERVAL=2
+DURATION=0
+LINE=1
+OUT=-
+PROC="${SERIAL_PROC:-/proc/tty/driver/serial}"
+
+usage() {
+    cat <<'EOF'
+Usage: uart-overrun-monitor [-i SECONDS] [-d SECONDS] [-l LINE] [-o CSV]
+
+Options:
+  -i SECONDS  interval between samples (default: 2)
+  -d SECONDS  duration; 0 runs until Ctrl-C (default: 0)
+  -l LINE     UART line in /proc/tty/driver/serial (default: 1 / ttyS1)
+  -o CSV      output file (default: stdout)
+
+Example:
+  uart-overrun-monitor -i 2 -d 120 -o /tmp/uart-errors.csv
+
+Any positive d_oe means the UART hardware dropped bytes during that interval.
+Positive d_fe or d_pe values indicate framing or parity errors. Check the
+configured baud and flow-control mode before raising the UART speed.
+EOF
+}
+
+need_value() {
+    [ $# -ge 2 ] || {
+        echo "Error: $1 requires a value" >&2
+        exit 2
+    }
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -i) need_value "$@"; INTERVAL=$2; shift 2 ;;
+        -d) need_value "$@"; DURATION=$2; shift 2 ;;
+        -l|-p) need_value "$@"; LINE=$2; shift 2 ;;
+        -o) need_value "$@"; OUT=$2; shift 2 ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "Error: unknown argument: $1" >&2; usage >&2; exit 2 ;;
+    esac
+done
+
+case "$INTERVAL:$DURATION:$LINE" in
+    *[!0-9:]*) echo "Error: interval, duration, and line must be integers" >&2; exit 2 ;;
+esac
+[ "$INTERVAL" -gt 0 ] || { echo "Error: interval must be greater than zero" >&2; exit 2; }
+
+[ -r "$PROC" ] || { echo "Error: cannot read $PROC (run as root)" >&2; exit 1; }
+
+sample() {
+    awk -v line="$LINE" '
+        $1 == line":" {
+            tx=rx=fe=pe=brk=oe=0
+            for (i=2; i<=NF; i++) {
+                n = index($i, ":")
+                if (n == 0) continue
+                key = substr($i, 1, n-1)
+                value = substr($i, n+1)
+                if (key == "tx")  tx  = value
+                if (key == "rx")  rx  = value
+                if (key == "fe")  fe  = value
+                if (key == "pe")  pe  = value
+                if (key == "brk") brk = value
+                if (key == "oe")  oe  = value
+            }
+            print tx, rx, fe, pe, brk, oe
+            exit
+        }
+    ' "$PROC"
+}
+
+write_row() {
+    if [ "$OUT" = - ]; then
+        printf '%s\n' "$1"
+    else
+        printf '%s\n' "$1" >> "$OUT"
+    fi
+}
+
+first=$(sample)
+[ -n "$first" ] || { echo "Error: UART line $LINE not found in $PROC" >&2; exit 1; }
+
+if [ "$OUT" != - ]; then
+    : > "$OUT" || { echo "Error: cannot write $OUT" >&2; exit 1; }
+fi
+write_row "timestamp,elapsed_s,tx,rx,fe,pe,brk,oe,d_tx,d_rx,d_fe,d_pe,d_brk,d_oe"
+
+t0=$(date +%s)
+prev_tx=0
+prev_rx=0
+prev_fe=0
+prev_pe=0
+prev_brk=0
+prev_oe=0
+first_sample=1
+
+trap 'echo >&2; echo "monitor stopped" >&2; exit 0' INT TERM
+
+while :; do
+    now=$(date +%s)
+    elapsed=$((now - t0))
+    values=$(sample)
+    # Intentional field splitting: sample returns exactly six counters.
+    # shellcheck disable=SC2086
+    set -- $values
+    [ $# -eq 6 ] || { echo "Error: UART line $LINE disappeared" >&2; exit 1; }
+    tx=$1
+    rx=$2
+    fe=$3
+    pe=$4
+    brk=$5
+    oe=$6
+
+    if [ "$first_sample" -eq 1 ]; then
+        d_tx=0; d_rx=0; d_fe=0; d_pe=0; d_brk=0; d_oe=0
+        first_sample=0
+    else
+        d_tx=$((tx - prev_tx))
+        d_rx=$((rx - prev_rx))
+        d_fe=$((fe - prev_fe))
+        d_pe=$((pe - prev_pe))
+        d_brk=$((brk - prev_brk))
+        d_oe=$((oe - prev_oe))
+    fi
+    prev_tx=$tx
+    prev_rx=$rx
+    prev_fe=$fe
+    prev_pe=$pe
+    prev_brk=$brk
+    prev_oe=$oe
+
+    timestamp=$(date '+%Y-%m-%dT%H:%M:%S')
+    write_row "$timestamp,$elapsed,$tx,$rx,$fe,$pe,$brk,$oe,$d_tx,$d_rx,$d_fe,$d_pe,$d_brk,$d_oe"
+
+    if [ "$d_oe" -gt 0 ] || [ "$d_fe" -gt 0 ] || [ "$d_pe" -gt 0 ]; then
+        printf '[%s] t=%4ss rx=+%-6s tx=+%-6s ERROR oe=+%s fe=+%s pe=+%s\n' \
+            "$timestamp" "$elapsed" "$d_rx" "$d_tx" "$d_oe" "$d_fe" "$d_pe" >&2
+    else
+        printf '[%s] t=%4ss rx=+%-6s tx=+%-6s errors=0 (oe=%s fe=%s pe=%s)\n' \
+            "$timestamp" "$elapsed" "$d_rx" "$d_tx" "$oe" "$fe" "$pe" >&2
+    fi
+
+    if [ "$DURATION" -gt 0 ] && [ "$elapsed" -ge "$DURATION" ]; then
+        break
+    fi
+    sleep "$INTERVAL" & wait $!
+done
+
+echo "monitor complete" >&2

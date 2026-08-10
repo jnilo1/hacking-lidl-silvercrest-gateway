@@ -14,8 +14,8 @@
 #   - ramtest: RAM-test image with read-back verification of BSS clears
 #
 # Outputs:
-#   boot.bin               - flash image
-#   btcode/build/test.bin  - RAM-loadable image for RAM testing
+#   boot-img/<board>/boot.bin  - flash image (per-board slot, committed)
+#   btcode/build/test.bin      - RAM-loadable image for RAM testing
 #
 # Usage:
 #   ./build_bootloader.sh          # build all variants
@@ -29,6 +29,19 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 JUMP_ADDR="${JUMP_ADDR:-0x80500000}"
 CROSS_PREFIX="mips-lexra-linux-musl-"
+
+# --- Board selection ---------------------------------------------------------
+# Per-board constants (DRAM size/top, DDR bring-up) live in
+# boards/<board>/board.h — see boards/README.md. Default: the Lidl
+# reference board. The build is reproducible: it regenerates the committed
+# boot-img/<board>/boot.bin bit-for-bit.
+
+BOARD="${BOARD:-lidl}"
+if [ ! -f "$SCRIPT_DIR/boards/$BOARD/board.h" ]; then
+    echo "ERROR: unknown BOARD '$BOARD' — no boards/$BOARD/board.h" >&2
+    echo "Available boards: $(ls "$SCRIPT_DIR/boards" | grep -v README | tr '\n' ' ')" >&2
+    exit 1
+fi
 
 # Toolchain - check project root first, then walk up the repo tree
 find_toolchain() {
@@ -91,7 +104,8 @@ do_clean() {
     echo "Cleaning all build outputs..."
     make -C "$SCRIPT_DIR/boot"   CROSS="$CROSS_PREFIX" clean 2>/dev/null || true
     make -C "$SCRIPT_DIR/btcode" CROSS="$CROSS_PREFIX" clean 2>/dev/null || true
-    rm -f "$SCRIPT_DIR/boot.bin"
+    # boot-img/<board>/boot.bin is a committed artifact, not a build output —
+    # clean leaves it alone (git restores it if a build overwrote it).
     echo "Done."
 }
 
@@ -109,6 +123,7 @@ echo ""
 echo "Toolchain: $TOOLCHAIN_DIR"
 echo "Compiler:  $(${CROSS_PREFIX}gcc --version | head -1)"
 echo "Jump addr: $JUMP_ADDR"
+echo "Board:     $BOARD"
 if [ -n "$REALTEK_TOOLS" ]; then
     echo "Realtek:   $REALTEK_TOOLS"
 else
@@ -119,24 +134,25 @@ fi
 echo ""
 
 # Pass tool paths to btcode Makefile (overrides hardcoded defaults)
-BTCODE_VARS="CROSS=${CROSS_PREFIX} CVIMG=${REALTEK_TOOLS}/cvimg LZMA=${REALTEK_TOOLS}/lzma"
+BTCODE_VARS="CROSS=${CROSS_PREFIX} CVIMG=${REALTEK_TOOLS}/cvimg LZMA=${REALTEK_TOOLS}/lzma BOARD=${BOARD}"
 
 # boot/ must be cleaned between variants because the Makefiles do not
 # track CFLAGS changes.
 
 # --- boot variant ---
-echo "--- Building boot image ---"
+echo "--- Building boot image (board: $BOARD) ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR"
+make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" BOARD="$BOARD"
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS
-cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot.bin"
+mkdir -p "$SCRIPT_DIR/boot-img/$BOARD"
+cp -f "$SCRIPT_DIR/btcode/build/boot.bin" "$SCRIPT_DIR/boot-img/$BOARD/boot.bin"
 
 # --- ramtest variant (btcode CFLAGS change -> clean btcode too) ---
 echo ""
 echo "--- Building ramtest variant ---"
 make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" clean
-make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" RAMTEST_TRACE=1
+make -C "$SCRIPT_DIR/boot" CROSS="$CROSS_PREFIX" boot JUMP_ADDR="$JUMP_ADDR" BOARD="$BOARD" RAMTEST_TRACE=1
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS clean
 make -C "$SCRIPT_DIR/btcode" $BTCODE_VARS RAMTEST_TRACE=1
 
@@ -147,7 +163,7 @@ echo "========================================="
 echo "  BUILD SUMMARY"
 echo "========================================="
 echo ""
-[ -f "$SCRIPT_DIR/boot.bin" ]              && ls -lh "$SCRIPT_DIR/boot.bin"
-[ -f "$SCRIPT_DIR/btcode/build/test.bin" ] && ls -lh "$SCRIPT_DIR/btcode/build/test.bin"
+[ -f "$SCRIPT_DIR/boot-img/$BOARD/boot.bin" ] && ls -lh "$SCRIPT_DIR/boot-img/$BOARD/boot.bin"
+[ -f "$SCRIPT_DIR/btcode/build/test.bin" ]    && ls -lh "$SCRIPT_DIR/btcode/build/test.bin"
 echo ""
 echo "Done."

@@ -1,4 +1,4 @@
-# Changelog — Build Environment & Toolchain (Lidl Silvercrest Gateway)
+# Changelog — Build Environment & Toolchain (RTL8196E Gateway)
 
 All notable changes to the build environment and the Lexra MIPS cross-toolchain
 are documented here. This covers `1-Build-Environment/` in its entirety:
@@ -19,6 +19,22 @@ Toolchain component versions at each release:
 v0 was a teardown-and-docs-only snapshot — no toolchain in the tree yet. The
 toolchain entered the repository at v1.0.0 and was frozen on the GCC 8 /
 binutils 2.34 / musl 1.2.5 line through the entire v1.x and v2.x series.
+
+---
+
+## [4.0.0] - 2026-08-10
+
+_Toolchain unchanged since 3.0.0 (crosstool-NG 1.28.0, binutils 2.45.1, GCC
+15.2.0, musl 1.2.6, Linux headers 6.16). One host dependency drops out._
+
+### `xxd` dropped from the host dependencies (issue #147)
+
+`install_deps.sh` and the `Dockerfile` no longer install `xxd`. Its only consumers were
+`build_fullflash.sh` and `create_fullflash.sh`, which read the partition magic bytes back
+out of the assembled image; both now use `od` (coreutils) instead, so nothing in the tree
+invokes `xxd` any more. Reported by @hlyi, who hit the flip side of this on a fresh Debian
+host: `xxd` is not installed by default there, and the flash scripts died on it. Details
+in the RTL8196E changelog.
 
 ---
 

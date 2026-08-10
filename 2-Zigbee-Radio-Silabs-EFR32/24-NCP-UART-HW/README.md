@@ -1,8 +1,13 @@
-# NCP-UART-HW Firmware for Lidl Silvercrest Gateway
+# NCP-UART-HW Firmware
 
-Network Co-Processor (NCP) firmware for the EFR32MG1B232F256GM48 chip found in the Lidl Silvercrest Smart Home Gateway.
+Network Co-Processor (NCP) firmware for the EFR32 radio: EFR32MG1B232F256GM48 on the Lidl Silvercrest Smart Home Gateway (`BOARD=lidl`, the default), EFR32MG13P732F512IM32 on the Sengled Smart Hub G4 (`BOARD=sengled-e39-g8c`). Both ship prebuilt.
 
 This firmware enables communication with Zigbee coordinators like **Zigbee2MQTT** and **Home Assistant ZHA** via EZSP (EmberZNet Serial Protocol).
+
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`); e.g. `BOARD=sengled-e39-g8c` for the Sengled Smart Hub G4,
+> whose prebuilt is committed and **validated end-to-end on real hardware**
+> (#130) — see [`../boards/README.md`](../boards/README.md).
 
 ## Features
 
@@ -31,9 +36,14 @@ Pre-built firmware is available in the `firmware/` directory. From the
 repository root:
 
 ```bash
-./flash_efr32.sh -y ncp                 # default baud 115200, default IP 192.168.1.88
+# Lidl Silvercrest (default board)
+./flash_efr32.sh -y ncp                 # default baud 115200, gateway from gateway.env
 ./flash_efr32.sh -y ncp 460800          # 460800 baud (faster, max-tested 892857)
 ./flash_efr32.sh -y -g 10.0.0.5 ncp     # custom gateway IP
+
+# Sengled Smart Hub G4: validated NCP image, default baud 115200
+./flash_efr32.sh -y --board sengled-e39-g8c -g 10.0.0.6 ncp
+
 ./flash_efr32.sh --help                 # full CLI reference
 ```
 
@@ -93,7 +103,7 @@ cd 1-Build-Environment/12-silabs-toolchain
 Or use Docker (see `1-Build-Environment/` for setup):
 
 ```bash
-docker run --rm -v $(pwd):/workspace lidl-gateway-builder \
+docker run --rm -v $(pwd):/workspace rtl8196e-gateway-builder \
     /workspace/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/build_ncp.sh
 ```
 
@@ -112,11 +122,11 @@ The output filename embeds the EmberZNet version and the chosen baud:
 
 ```
 firmware/
-├── ncp-uart-hw-7.5.1-115200.gbl   # default
-├── ncp-uart-hw-7.5.1-230400.gbl   # if you ran ./build_ncp.sh 230400
-├── ncp-uart-hw-7.5.1-460800.gbl
-├── ncp-uart-hw-7.5.1-691200.gbl
-└── ncp-uart-hw-7.5.1-892857.gbl
+├── ncp-uart-hw-7.5.1-115200-hw.gbl   # default (-hw = RTS/CTS flow, #145)
+├── ncp-uart-hw-7.5.1-230400-hw.gbl   # if you ran ./build_ncp.sh 230400
+├── ncp-uart-hw-7.5.1-460800-hw.gbl
+├── ncp-uart-hw-7.5.1-691200-hw.gbl
+└── ncp-uart-hw-7.5.1-892857-hw.gbl
 ```
 
 `flash_efr32.sh` resolves the right file via a glob — no need to keep
@@ -140,7 +150,7 @@ filenames in sync manually.
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):
 ```bash
-commander flash firmware/ncp-uart-hw-7.5.1-460800.gbl \
+commander flash firmware/ncp-uart-hw-7.5.1-460800-hw.gbl \
     --device EFR32MG1B232F256GM48
 ```
 
@@ -209,8 +219,8 @@ values work end-to-end (Z2M ember adapter, ZHA).
 
 ### Network parameters
 
-The build process applies patches to optimize the firmware for the Lidl
-Gateway. See [patches/README.md](https://github.com/jnilo1/rtl8196e-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md) for details.
+The build process applies patches to optimize the firmware for these
+gateways. See [patches/README.md](https://github.com/jnilo1/rtl8196e-gateway/blob/main/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/patches/README.md) for details.
 
 ### Network Parameters
 

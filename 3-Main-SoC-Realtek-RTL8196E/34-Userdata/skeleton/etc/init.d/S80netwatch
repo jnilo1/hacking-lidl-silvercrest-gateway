@@ -1,0 +1,118 @@
+#!/bin/sh
+#
+# S80netwatch — reboot and record a gateway isolated on a live link.
+#
+# The hardware watchdog armed by S25watchdog only catches a stopped CPU: the
+# feeder is a userspace process, so a kernel hang stops the kicks and the chip
+# resets the board. It cannot see a board whose userspace is alive but whose
+# network path is dead — the kicks keep coming and the gateway simply vanishes
+# from the LAN until someone power-cycles it. That power cycle then wipes the
+# watchdog reset-reason latch and the reserved-DRAM panic record, so the cause
+# is lost with the outage.
+#
+# netwatch probes the default gateway (and any extra targets given below) and,
+# after a long continuous failure window WITH THE CARRIER STILL UP, writes a
+# snapshot to /userdata/netwatch/incidents.log and reboots through the normal
+# init path. The snapshot is the point: it is on JFFS2, so it survives the
+# reboot and any later power cycle.
+#
+# Slot S80 puts it after every service it might want to describe (network,
+# bridge, OTBR) and before S90checkpasswd. It runs under `keepalive` like the
+# other long-lived daemons.
+#
+# Conservative by construction, because this box may be physically
+# unreachable for weeks:
+#   - carrier must be UP (a cable pulled for maintenance never accumulates)
+#   - a long window, not a blip
+#   - a reboot budget persisted in /userdata that fails CLOSED: if it cannot
+#     be written, no reboot happens
+#
+# OFF BY DEFAULT, deliberately. This daemon reboots the gateway; that is not a
+# behaviour to switch on under someone without them asking for it. Enable it per
+# installation, on boxes where an unattended reboot is the lesser evil — a remote
+# one you cannot power-cycle yourself:
+#
+#   echo 'ENABLED=1' >> /userdata/etc/netwatch.conf
+#
+# Tuning lives in /userdata/etc/netwatch.conf (optional):
+#   ENABLED=1            arm the daemon (default 0 = installed but inert)
+#   TARGETS="a.b.c.d …"  extra probe targets (default: default route only)
+#   FAIL_MIN=15          continuous unreachable minutes before acting
+#   POLL_SEC=30          probe period
+#   MAX_REBOOT=3         reboots allowed per window
+#   WINDOW_H=24          window for that budget
+#   DRY_RUN=0            1 = record the decision, never reboot
+#
+# J. Nilo - July 2026
+#
+
+NETWATCH=/userdata/usr/sbin/netwatch
+CONF=/userdata/etc/netwatch.conf
+
+. /userdata/etc/init.d/supervise.func
+
+ENABLED=0
+TARGETS=""
+FAIL_MIN=15
+POLL_SEC=30
+MAX_REBOOT=3
+WINDOW_H=24
+DRY_RUN=0
+
+[ -f "$CONF" ] && . "$CONF"
+
+case "$1" in
+start)
+    if [ "$ENABLED" != "1" ]; then
+        echo "  netwatch: disabled"
+        exit 0
+    fi
+    if [ ! -x "$NETWATCH" ]; then
+        echo "  netwatch: binary missing"
+        exit 0
+    fi
+
+    set -- -i eth0 -w "$FAIL_MIN" -p "$POLL_SEC" \
+           -m "$MAX_REBOOT" -W "$WINDOW_H"
+    for t in $TARGETS; do
+        set -- "$@" -t "$t"
+    done
+    [ "$DRY_RUN" = "1" ] && set -- "$@" -n
+
+    # Report what actually happened, not what was attempted. sup_start refuses
+    # to stack a second instance and returns non-zero when it does; announcing
+    # "armed" regardless would leave an unarmed safety daemon looking armed.
+    # Its check matches the NAME token against every command line on the box,
+    # so an interactive shell that merely mentions the binary path is enough to
+    # make it decline — silently, if the caller ignores the status.
+    if sup_start netwatch "$NETWATCH" "$@"; then
+        if [ "$DRY_RUN" = "1" ]; then
+            echo "  netwatch: armed (dry run, ${FAIL_MIN}min window)"
+        else
+            echo "  netwatch: armed (${FAIL_MIN}min window, max ${MAX_REBOOT}/${WINDOW_H}h)"
+        fi
+    else
+        echo "  netwatch: NOT armed (already supervised, or the name matched"
+        echo "            another command line - check with: ps w | grep -w netwatch)"
+        exit 1
+    fi
+    ;;
+
+stop)
+    sup_stop netwatch
+    echo "  netwatch: stopped"
+    ;;
+
+restart)
+    $0 stop
+    sleep 1
+    $0 start
+    ;;
+
+*)
+    echo "Usage: $0 {start|stop|restart}"
+    exit 1
+    ;;
+esac
+
+exit 0

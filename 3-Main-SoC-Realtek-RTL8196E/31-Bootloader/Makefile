@@ -12,8 +12,8 @@
 # track CFLAGS changes.
 #
 # Outputs:
-#   boot.bin              - flash image
-#   btcode/build/test.bin - RAM-loadable image for RAM testing
+#   boot-img/$(BOARD)/boot.bin - flash image (per-board slot, committed)
+#   btcode/build/test.bin      - RAM-loadable image for RAM testing
 #
 # Targets:
 #   all   - build both variants (default)
@@ -21,10 +21,12 @@
 #
 # Variables:
 #   JUMP_ADDR  - kernel entry point passed to stage-2 (default 0x80500000)
+#   BOARD      - board directory under boards/ (default lidl)
 #   XTOOLS_DIR - path to the Lexra cross-toolchain sysroot
 #   CROSS      - toolchain prefix (default mips-lexra-linux-musl-)
 
 JUMP_ADDR    ?= 0x80500000
+BOARD        ?= lidl
 XTOOLS_DIR   ?= $(HOME)/rtl8196e-gateway/x-tools/mips-lexra-linux-musl
 CROSS        ?= mips-lexra-linux-musl-
 PATH         := $(XTOOLS_DIR)/bin:$(PATH)
@@ -36,17 +38,19 @@ export PATH CROSS
 all:
 	# --- boot image ---
 	$(MAKE) -C boot clean
-	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR)
+	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD)
 	$(MAKE) -C btcode clean
-	$(MAKE) -C btcode
-	cp -f btcode/build/boot.bin boot.bin
+	$(MAKE) -C btcode BOARD=$(BOARD)
+	mkdir -p boot-img/$(BOARD)
+	cp -f btcode/build/boot.bin boot-img/$(BOARD)/boot.bin
 	# --- ramtest variant (btcode CFLAGS change -> clean btcode) ---
 	$(MAKE) -C boot clean
-	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) RAMTEST_TRACE=1
+	$(MAKE) -C boot boot JUMP_ADDR=$(JUMP_ADDR) BOARD=$(BOARD) RAMTEST_TRACE=1
 	$(MAKE) -C btcode clean
-	$(MAKE) -C btcode RAMTEST_TRACE=1
+	$(MAKE) -C btcode BOARD=$(BOARD) RAMTEST_TRACE=1
 
+# boot-img/<board>/boot.bin is a committed artifact, not a build output —
+# clean leaves it alone (git restores it if a build overwrote it).
 clean:
 	$(MAKE) -C boot clean
 	$(MAKE) -C btcode clean
-	rm -f boot.bin

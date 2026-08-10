@@ -1,197 +1,183 @@
 # Build Environment
 
-This directory contains the unified build environment for the Lidl/Silvercrest Gateway project. It provides all tools needed to build both:
+This environment is for developers who want to rebuild the RTL8196E Linux
+system or EFR32 radio firmware from source.
 
-- **Main SoC (RTL8196E)** — Linux kernel, root filesystem, userdata
-- **Zigbee Radio (Silabs EFR32)** — NCP/RCP firmware
+> **Installing pre-built firmware does not require this toolchain.** Follow the
+> [first-install guide](../docs/getting-started.md#3-prepare-the-computer) for
+> the much smaller host-package set. The complete environment below takes about
+> 45 minutes and several gigabytes.
 
-## Choose Your Build Method
+## Choose a build method
 
-| | Docker | Native Ubuntu |
-|---|---|---|
-| **Setup time** | ~45 min (one-time) | ~45 min (one-time) |
-| **Disk space** | ~8 GB (image) | ~4 GB (tools) |
-| **Best for** | Any OS, reproducible builds | Ubuntu 22.04, faster I/O |
-| **Windows** | Requires Docker Desktop | **Recommended:** WSL2 + native |
+| | Native Ubuntu / WSL2 | Docker |
+| --- | --- | --- |
+| Best for | Regular development, fastest I/O | Reproducible isolated setup |
+| Host | Ubuntu 22.04 or Ubuntu 22.04 under WSL2 | Any Docker host |
+| Setup time | About 45 minutes | About 45 minutes |
+| Disk use | About 4 GB in the project | About 8 GB Docker image |
+| Output ownership | Normal project user | Bind-mounted project files |
 
-> **Windows users:** WSL2 with Ubuntu 22.04 is the recommended approach. Native builds in WSL2 are simpler and faster than Docker Desktop.
+For Windows development, native Ubuntu 22.04 under WSL2 is normally faster and
+simpler than Docker Desktop. For occasional or CI builds, Docker provides the
+more reproducible boundary.
 
----
-
-## Option 1: Docker (Any OS)
-
-Build the Docker image once, then use it for all builds.
-
-### Build the Image
-
-```bash
-cd 1-Build-Environment
-docker build -t lidl-gateway-builder .
-```
-
-This takes ~45 minutes (downloads and compiles toolchains).
-
-### Use the Image
-
-From the `1-Build-Environment` directory:
+## Native setup
 
 ```bash
-# Interactive shell
-docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
-
-# Build Main SoC (bootloader + kernel + rootfs + userdata)
-docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
-    /workspace/3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
-
-# Build all EFR32 firmware (bootloader + NCP + RCP + OT-RCP + Router)
-docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
-    /workspace/2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
-```
-
-### Docker Options Explained
-
-| Option | Description |
-|--------|-------------|
-| `-it` | Interactive mode with terminal |
-| `--rm` | Remove container after exit |
-| `-v $(pwd)/..:/workspace` | Mount project root to `/workspace` |
-
-The `-v` mount is bidirectional: built files appear in your local directories.
-
----
-
-## Option 2: Native Build (Ubuntu 22.04 / WSL2)
-
-For native Ubuntu or WSL2 users. **Recommended for Windows users.**
-
-### Quick Start (One Command)
-
-```bash
-# Clone the repository (anywhere, rename if you want)
 git clone https://github.com/jnilo1/rtl8196e-gateway.git
 cd rtl8196e-gateway/1-Build-Environment
-
-# Install everything — takes ~45 minutes
 sudo ./install_deps.sh
 ```
 
-This single command installs everything:
-1. Ubuntu packages (build tools, Java, etc.)
-2. Lexra MIPS toolchain (for Main SoC)
-3. Realtek tools (cvimg, lzma)
-4. Silabs tools (slc-cli, Gecko SDK, ARM GCC, Commander)
+The script:
 
-All tools are installed inside the project directory:
-- `<project>/x-tools/` — Lexra toolchain
-- `<project>/silabs-tools/` — Silabs toolchain
+1. installs Ubuntu host packages and i386 compatibility libraries;
+2. builds the patched Lexra MIPS toolchain;
+3. builds the Realtek image tools;
+4. downloads ARM GCC, `slc-cli`, Gecko SDK 4.5.0, and Commander;
+5. writes the tools under the project directory where build scripts discover
+   them automatically.
 
-Build scripts auto-detect these locations — no PATH configuration needed.
+Created directories:
 
----
-
-## Directory Structure
-
-```
-<project>/
-├── x-tools/                    # Lexra toolchain (created by build)
-│   └── mips-lexra-linux-musl/
-│
-├── silabs-tools/               # Silabs toolchain (created by install)
-│   ├── slc_cli/
-│   ├── gecko_sdk/
-│   ├── arm-gnu-toolchain/
-│   ├── commander/
-│   ├── SimplicityStudio/       # slc workspace (kept here via JAVA_TOOL_OPTIONS)
-│   └── env.sh                  # Source to load Silabs environment
-│
-└── 1-Build-Environment/
-    ├── README.md               # This file
-    ├── CHANGELOG.md             # Build environment & toolchain changelog
-    ├── Dockerfile               # Docker image definition
-    ├── install_deps.sh          # Ubuntu package installation
-    │
-    ├── 10-lexra-toolchain/     # Lexra MIPS toolchain
-    │   ├── build_toolchain.sh  # Build script
-    │   ├── crosstool-ng.config # Crosstool-ng configuration
-    │   ├── TOOLCHAIN_UPDATE.md # Toolchain modernization spec (Alpine rebase)
-    │   └── patches/            # GCC / binutils / musl patches for Lexra
-    │
-    ├── 11-realtek-tools/       # Realtek image tools
-    │   ├── build_tools.sh      # Build script (also downloads mtd-utils for flash_erase)
-    │   ├── bin/                # Built binaries: cvimg, lzma, flash_erase (output)
-    │   ├── cvimg/              # cvimg source
-    │   ├── lzma-4.65/          # LZMA compressor source
-    │   └── lzma-loader/        # LZMA decompression loader source
-    │
-    └── 12-silabs-toolchain/    # Silicon Labs tools
-        └── install_silabs.sh   # Download and install slc-cli + SDK
+```text
+<project>/x-tools/mips-lexra-linux-musl/
+<project>/silabs-tools/
+<project>/1-Build-Environment/11-realtek-tools/bin/
 ```
 
----
+The installer must be invoked with `sudo`; it runs per-user build steps as the
+invoking user so the generated trees retain useful ownership.
 
-## Toolchains Reference
+## Docker setup
 
-### Lexra MIPS Toolchain
+From `1-Build-Environment`:
 
-| Item | Value |
-|------|-------|
-| Target | `mips-lexra-linux-musl` |
-| GCC | 15.2.0 |
-| binutils | 2.45.1 |
-| C library | musl 1.2.6 |
-| Location | `<project>/x-tools/mips-lexra-linux-musl/` |
+```bash
+docker build -t rtl8196e-gateway-builder .
+```
 
-The Lexra architecture is a MIPS variant without unaligned access instructions (`lwl`, `lwr`, `swl`, `swr`). Standard MIPS toolchains won't work.
+Open an interactive build shell:
 
-### Silabs ARM Toolchain
+```bash
+docker run -it --rm \
+  -v "$(pwd)/..:/workspace" \
+  rtl8196e-gateway-builder
+```
 
-| Item | Value |
-|------|-------|
-| Target | `arm-none-eabi` |
-| GCC | 12.2 |
-| SDK | Gecko SDK 4.5.0 |
-| CLI | slc-cli 5.11.1.0 |
-| Location | `<project>/silabs-tools/` |
+Or run a complete build directly:
 
-### Realtek Tools
+```bash
+# RTL8196E side
+docker run --rm \
+  -v "$(pwd)/..:/workspace" \
+  rtl8196e-gateway-builder \
+  /workspace/3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
 
-| Tool | Description |
-|------|-------------|
-| `cvimg` | Create Realtek flash images |
-| `lzma` | LZMA compressor |
-| `lzma-loader` | LZMA decompressor (legacy, replaced by zboot) |
+# EFR32 side
+docker run --rm \
+  -v "$(pwd)/..:/workspace" \
+  rtl8196e-gateway-builder \
+  /workspace/2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
+```
 
----
+The bind mount is bidirectional, so built images appear in the normal project
+directories. The container entrypoint links its internal toolchains into the
+same `/workspace/x-tools` and `/workspace/silabs-tools` locations expected by
+native build scripts.
+
+If you still have the pre-v4 image name, retag it rather than rebuilding:
+
+```bash
+docker tag lidl-gateway-builder rtl8196e-gateway-builder
+```
+
+## What is installed
+
+| Tool set | Used by | Version / source | Project location |
+| --- | --- | --- | --- |
+| Lexra MIPS GCC/binutils/musl | Bootloader, kernel, rootfs, userdata | GCC 15.2.0, binutils 2.45.1, musl 1.2.6 | `x-tools/mips-lexra-linux-musl/` |
+| Realtek `cvimg`, `lzma`, `flash_erase` | Image packaging and device tools | Built from source | `1-Build-Environment/11-realtek-tools/bin/` |
+| ARM GCC | EFR32 applications | 12.2 | `silabs-tools/arm-gnu-toolchain/` |
+| Silabs `slc-cli` + Gecko SDK | EFR32 generation/build | SLC 5.11, GSDK 4.5.0 | `silabs-tools/slc_cli/`, `silabs-tools/gecko_sdk/` |
+| Simplicity Commander | EFR32 inspection/recovery | Silabs pre-built tool | `silabs-tools/commander/` |
+
+The RTL8196E uses a Lexra core without standard MIPS unaligned-access
+instructions. Do not replace the supplied compiler with a generic
+`mips-linux-gnu-gcc`.
+
+EFR32 Series 1 is no longer supported by recent Silabs SDK lines. The on-chip
+firmware intentionally builds against Gecko SDK 4.5.0; the modern EmberZNet 8.x
+path moves the stack to host-side `zigbeed` rather than compiling 8.x for the
+radio.
+
+## Build targets
+
+### Complete RTL8196E system
+
+```bash
+./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
+BOARD=sengled-e39-g8c ./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
+KERNEL=7.1 ./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
+```
+
+Reference: [RTL8196E Linux system](../3-Main-SoC-Realtek-RTL8196E/README.md).
+
+### EFR32 firmware
+
+```bash
+./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
+./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh ncp rcp
+BOARD=sengled-e39-g8c ./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh ncp
+```
+
+Reference: [EFR32 radio firmware](../2-Zigbee-Radio-Silabs-EFR32/README.md).
+
+Each top-level builder supports targeted work; run it with `--help` before
+assuming a target name or environment variable.
+
+## Directory map
+
+| Path | Purpose |
+| --- | --- |
+| `10-lexra-toolchain/` | crosstool-ng configuration and Lexra compiler patches |
+| `10-lexra-toolchain/TOOLCHAIN_UPDATE.md` | Toolchain version history and bump procedure |
+| `11-realtek-tools/` | `cvimg`, legacy LZMA, and device-side flash utilities |
+| `12-silabs-toolchain/` | Silabs tool download and environment setup |
+| `Dockerfile` | Reproducible Ubuntu 22.04 environment |
+| `install_deps.sh` | Native installation orchestrator |
 
 ## Troubleshooting
 
-### Docker build fails
+### Downloads or Docker build fail
 
-If the toolchain build fails with network errors, retry:
+Toolchain setup downloads several upstream archives and can fail transiently.
+Retry the same command first. For a deliberately clean Docker retry:
+
 ```bash
-docker build --no-cache -t lidl-gateway-builder .
+docker build --no-cache -t rtl8196e-gateway-builder .
 ```
 
-### slc-cli download fails
+### `slc-cli` or Gecko SDK is missing
 
-The Silabs download may require login. If wget fails, manually download from:
-https://www.silabs.com/developers/simplicity-studio
+Confirm `silabs-tools/env.sh` exists and that the SDK download completed. Source
+it for manual tool use:
+
+```bash
+. ./silabs-tools/env.sh
+```
+
+Normal EFR32 build scripts source it automatically.
 
 ### Toolchain not found
 
-Both toolchains are auto-detected by build scripts when installed in the project directory:
-- Lexra: `<project>/x-tools/mips-lexra-linux-musl/`
-- Silabs: `<project>/silabs-tools/`
+Keep the generated directories at their default project-relative locations or
+put the compiler explicitly on `PATH`. An error that a valid MIPS binary cannot
+execute may indicate missing i386 compatibility libraries rather than a missing
+file.
 
-If you installed elsewhere, set the PATH manually or use the `env.sh` script generated during installation.
+### Git LFS content is incomplete
 
----
-
-## Next Steps
-
-After setting up the build environment:
-
-1. **Build Main SoC:** `./3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh` — See [3-Main-SoC-Realtek-RTL8196E](../3-Main-SoC-Realtek-RTL8196E/README.md)
-2. **Build EFR32 firmware:** `./2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh` — See [2-Zigbee-Radio-Silabs-EFR32](../2-Zigbee-Radio-Silabs-EFR32/README.md)
-
-Both scripts accept individual targets (e.g., `build_rtl8196e.sh kernel`, `build_efr32.sh ncp rcp`). Run with `--help` for details.
+The Gecko SDK needs Git LFS. Verify `git lfs version`, then fetch the missing
+objects in the relevant checkout. Both supported setup methods install Git LFS.

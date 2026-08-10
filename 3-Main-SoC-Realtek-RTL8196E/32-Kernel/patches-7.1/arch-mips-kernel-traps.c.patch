@@ -1,0 +1,24 @@
+--- a/arch/mips/kernel/traps.c
++++ b/arch/mips/kernel/traps.c
+@@ -698,6 +698,7 @@
+ 
+ static int simulate_sync(struct pt_regs *regs, unsigned int opcode)
+ {
++	/* SYNC emulation - silently succeed (too verbose for production) */
+ 	if ((opcode & OPCODE) == SPEC0 && (opcode & FUNC) == SYNC) {
+ 		perf_sw_event(PERF_COUNT_SW_EMULATION_FAULTS,
+ 				1, regs, 0);
+@@ -1231,8 +1232,12 @@
+ 			status = simulate_rdhwr_mm(regs, opcode);
+ 	}
+ 
+-	if (status < 0)
++	if (status < 0) {
++		/* Emulation failed - log for debugging */
++		pr_err("RLX: Unhandled reserved instruction at EPC=0x%08lx, opcode=0x%08x, pid=%d (%s)\n",
++		       regs->cp0_epc, opcode, current->pid, current->comm);
+ 		status = SIGILL;
++	}
+ 
+ 	if (unlikely(status > 0)) {
+ 		regs->cp0_epc = old_epc;		/* Undo skip-over.  */

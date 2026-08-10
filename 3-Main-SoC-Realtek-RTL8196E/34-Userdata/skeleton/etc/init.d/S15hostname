@@ -6,7 +6,8 @@
 #   1. Reads the hostname from /etc/hostname and sets it via the BusyBox `hostname` applet.
 #   2. Reads the current IP from /var/run/current_eth0_ip (written by DHCP client or static config).
 #   3. Updates /etc/hosts with localhost, and the current IP mapped to the hostname.
-#   4. If the IP is fallback (192.168.1.254), notes this in the logs but continues.
+#   4. If the IP is the DHCP-failure fallback from /userdata/etc/eth0.bak,
+#      notes this in the logs but continues.
 #
 # Dependencies:
 #   - /etc/hostname must exist and contain a valid hostname.
@@ -27,13 +28,17 @@ start)
 
     # Check if IP is valid
     if [ -z "$CURRENT_IP" ]; then
-        echo "⚠️  Warning: eth0 has no IP address configured"
+        echo "  hostname: WARNING eth0 has no IP address configured"
         # Use loopback as fallback (Debian convention for dynamic hosts)
         CURRENT_IP="127.0.1.1"
-    elif [ "$CURRENT_IP" = "192.168.1.254" ]; then
-        echo "ℹ️  Note: Using fallback IP address 192.168.1.254"
+    elif [ -f /userdata/etc/eth0.bak ] \
+         && grep -q "^IPADDR=${CURRENT_IP}\$" /userdata/etc/eth0.bak; then
+        # udhcpc.script applied the eth0.bak fallback — no lease was obtained.
+        # The address is no longer a fixed 192.168.1.254, so recognise it by
+        # matching the file rather than by hardcoding a value here.
+        echo "  hostname: using DHCP-failure fallback IP $CURRENT_IP"
     else
-        echo "🏷️  Hostname set to $HOSTNAME at $CURRENT_IP"
+        echo "  hostname: $HOSTNAME ($CURRENT_IP)"
     fi
 
     # Write /var/hosts (symlinked from /etc/hosts to avoid jffs2 writes)

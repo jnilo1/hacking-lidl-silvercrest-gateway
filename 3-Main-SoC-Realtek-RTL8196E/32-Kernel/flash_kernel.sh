@@ -5,21 +5,35 @@
 # WARNING: Flashing the kernel triggers an automatic reboot.
 #
 # Usage:
-#   ./flash_kernel.sh                         # flash kernel-6.18.img
+#   ./flash_kernel.sh                         # flash lidl / 6.18 (default)
+#   KERNEL=7.1 ./flash_kernel.sh              # flash the 7.1 line
+#   BOARD=sengled-e39-g8c ./flash_kernel.sh   # flash the Sengled G4 image
 #   ./flash_kernel.sh -i <file>               # flash an explicit file
 #   ./flash_kernel.sh 192.168.1.6             # override target IP (positional)
 #
 # Options:
-#   -i, --image FILE    Explicit image filename (default: kernel-6.18.img)
+#   -i, --image FILE    Explicit image (overrides BOARD/KERNEL resolution)
 #
 # Environment variables (optional, for non-interactive use):
-#   CONFIRM=y              Skip the "Proceed?" prompt
+#   BOARD=<name>          Board image (default: lidl; also sengled-e39-g8c)
+#   KERNEL=<line>         Kernel line (default: 6.18; also 7.1)
+#   CONFIRM=y             Skip the "Proceed?" prompt
+#   BOOT_IP=<addr>        Bootloader-mode address when no positional IP is
+#                         given. Falls back to gateway.env, then to an address
+#                         on this host's own segment (see lib/gwconf.sh).
 #
 # J. Nilo - December 2025, unified April 2026
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
+. "$SCRIPT_DIR/../../lib/flash_tftp.sh"
+# Shared (board, kernel) → pre-built image resolver (resolve_kernel_image).
+. "$SCRIPT_DIR/../../lib/kernel_image.sh"
+# Host-side gateway address resolution — see lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../lib/gwconf.sh"
 
 # ── Argument parsing ──────────────────────────────────────────────────────
 
@@ -39,16 +53,21 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-TARGET_IP="${POS_ARGS[0]:-192.168.1.6}"
+TARGET_IP="${POS_ARGS[0]:-${BOOT_IP:-$(gwconf_cold_boot_ip)}}"
 
-# Resolve image path
+# Resolve image path. Precedence: --image override > BOARD/KERNEL resolution.
+# BOARD (default lidl) and KERNEL (default 6.18) pick the pre-built image from
+# kernel-img/<board>/kernel-<kernel>.img (see lib/kernel_image.sh) — so a Lidl
+# user who sets neither gets exactly the old kernel-6.18.img behaviour.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
 if [ -n "$IMAGE_OVERRIDE" ]; then
     case "$IMAGE_OVERRIDE" in
         /*) IMAGE="$IMAGE_OVERRIDE" ;;
         *)  IMAGE="${SCRIPT_DIR}/${IMAGE_OVERRIDE}" ;;
     esac
 else
-    IMAGE="${SCRIPT_DIR}/kernel-6.18.img"
+    IMAGE="$(resolve_kernel_image "$BOARD" "$KERNEL")" || exit 1
 fi
 
 # Check prerequisites
@@ -111,13 +130,21 @@ if [ "${BOOTLOADER_CONFIRMED:-}" != "1" ]; then
 fi
 
 echo ""
-echo "Flashing ${IMAGE_BASENAME} (${SIZE} bytes) to ${TARGET_IP}..."
+if [ -z "$IMAGE_OVERRIDE" ]; then
+    echo "Flashing kernel: BOARD=${BOARD} KERNEL=${KERNEL} (${IMAGE_BASENAME}, ${SIZE} bytes) → ${TARGET_IP}"
+else
+    echo "Flashing ${IMAGE_BASENAME} (${SIZE} bytes) to ${TARGET_IP}..."
+fi
 echo ""
 if [ "${CONFIRM:-}" != "y" ]; then
+    # In bootloader mode Linux is not running, so the board cannot be read from
+    # /proc/device-tree/model (as flash_remote.sh does over SSH). The interactive
+    # confirmation is the safeguard here — show the selection and let the operator vet it.
+    echo "Note: in bootloader mode the board cannot be auto-verified — confirm this image matches your gateway."
     read -r -p "Proceed? [y/N] " confirm
     if [[ ! "$confirm" =~ ^[yY]$ ]]; then
         echo "Aborted."
-        echo "To flash manually: tftp -m binary ${TARGET_IP} -c put ${IMAGE_BASENAME}"
+        echo "To flash manually: tftp -m binary ${TARGET_IP} -c put ${IMAGE}"
         exit 0
     fi
 fi
@@ -130,13 +157,12 @@ notify_file=$(mktemp)
 nc_pid=$!
 sleep 0.2
 
-echo "Uploading..."
-cd "$SCRIPT_DIR"
-out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put "$IMAGE_BASENAME" 2>&1) || true
-if echo "$out" | grep -qiE \
-    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+# cd to the image's directory so tftp's basename upload finds it: the image now
+# lives under kernel-img/<board>/, not at SCRIPT_DIR.
+cd "$(dirname "$IMAGE")"
+if ! tftp_put_safe "$TARGET_IP" "$IMAGE_BASENAME" 3 30 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
-    echo "Error: transfer failed: $out" >&2
+    echo "Error: transfer failed after retries." >&2
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."

@@ -281,7 +281,7 @@ and tested in **four physical orientations** without changing its location:
   (180° rotation around the long-axis with respect to C1)
 
 For each orientation: 2 minutes of stabilization, then 8 minutes of sampling
-at 30 s intervals (17 samples per palier). The other 15 sensors were
+at 30 s intervals (17 samples per condition). The other 15 sensors were
 monitored simultaneously to verify the test sensor was the only thing
 changing in the RF environment.
 
@@ -300,7 +300,7 @@ orientation, all other sensors static.
 | C2 | vertical, front away from gateway | **−95 dBm** | 1 |
 
 Total span: **22 dB** between the best and worst orientation of the same
-sensor at the same physical location. RSSI was stable within each palier
+sensor at the same physical location. RSSI was stable within each condition
 (stddev ≤ 1 dB), so this is a real orientation effect, not measurement noise.
 
 **2. Front/back asymmetry is not negligible.**
@@ -318,7 +318,7 @@ device.
 
 **3. The other 14 sensors were unaffected.**
 
-Pooled mean RSSI of the other sensors across the four paliers: −72.4, −72.8,
+Pooled mean RSSI of the other sensors across the four conditions: −72.4, −72.8,
 −72.8, −72.8 dBm. Span: **0.4 dB**. Confirms that the 22 dB swing on the
 test sensor was a property of *its own orientation*, not of an RF
 environment shift triggered by handling the device.
@@ -585,10 +585,12 @@ If you want to reproduce these tests in your own deployment:
 - The gateway exposes `ot-ctl` for setting TX power (`ot-ctl txpower <N>`)
   and querying mesh state (`ot-ctl child table`, `ot-ctl neighbor table`)
 - Per-sensor RSSI/LQI is in `ot-ctl neighbor table` (gateway-side measurement)
-- The full test scripts (`range_test.sh`, `phase1_runner.sh`,
-  `phase2_runner.sh`) are not currently published in the repo but the
-  approach is straightforward to replicate: poll the neighbor table at
-  fixed intervals, log per-child RSSI/LQI to CSV, then aggregate offline.
+- The published [`thread-range-test`](gateway/thread-range-test) command
+  reproduces the sampling, TX-power, channel, and orientation experiments.
+  It polls the neighbor table at fixed intervals, logs per-child RSSI/LQI to
+  CSV, and restores the safe TX-power or original channel where applicable.
+- [`analyze-results.py`](analysis/analyze-results.py) aggregates the CSV files
+  offline and can optionally apply Home Assistant device labels.
 
 If you find your sensors detaching frequently or behaving differently from
 this report, please open a GitHub Discussion with your topology details

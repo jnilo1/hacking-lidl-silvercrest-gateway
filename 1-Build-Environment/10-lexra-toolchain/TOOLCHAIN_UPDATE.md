@@ -2,7 +2,7 @@
 
 ## Project scope
 
-This repository contains the build environment, toolchain, kernel, rootfs, and user-data components for the Lidl Silvercrest gateway based on Realtek RTL8196E / Lexra LX4380.
+This repository contains the build environment, toolchain, kernel, rootfs, and user-data components for RTL8196E gateways based on Realtek RTL8196E / Lexra LX4380.
 
 Your task is **not** to port Alpine Linux as a full distribution.
 

@@ -1,6 +1,6 @@
 # Open-Source Bootloader for RTL8196E
 
-Replacement bootloader for the Lidl Silvercrest Zigbee gateway (RTL8196E SoC).
+Replacement bootloader for RTL8196E gateways — the Lidl Silvercrest Zigbee gateway (`BOARD=lidl`, the default) and the Sengled Smart Hub G4 (`BOARD=sengled-e39-g8c`), each with its own prebuilt `boot.bin`.
 
 ## Why use this bootloader
 
@@ -12,7 +12,7 @@ This is the **last missing piece** that makes the entire gateway firmware stack 
 
 ```
 Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q128
-Bootloader: V2.7 - 2026.05.27 - J. Nilo
+Bootloader: V2.9 - 2026.06.20 - J. Nilo
 ```
 
 **Download progress in %** — The stock bootloader prints endless `.` or `#` characters that flood the serial console during TFTP transfers. This version shows a clean percentage indicator:
@@ -34,13 +34,22 @@ Flashing: 76%
 ## Building
 
 ```bash
-./build_bootloader.sh          # build all variants
-./build_bootloader.sh clean    # clean
+./build_bootloader.sh                              # Lidl (default)
+BOARD=sengled-e39-g8c ./build_bootloader.sh        # Sengled Smart Hub G4
+./build_bootloader.sh clean                        # clean
 ```
 
 Outputs:
-- `boot.bin` — flash image (stays in download mode after boot-code flash)
+- `boot-img/<board>/boot.bin` — flash image (stays in download mode after
+  boot-code flash). One pre-built image per board is committed; the build
+  writes only into the slot of the selected `BOARD`, so building for one
+  board never touches another board's binary.
 - `btcode/build/test.bin` — RAM-test image (test without flashing)
+
+Per-board constants (DRAM size and DDR bring-up values, boothold page
+placement) live under `boards/` — see `boards/README.md` for the
+contract and how to add a board. The build is reproducible: it regenerates
+the committed `boot-img/<board>/boot.bin` bit-for-bit.
 
 ## Flashing
 
@@ -67,13 +76,23 @@ Power on the gateway and press **ESC** repeatedly until the `<RealTek>` prompt a
 ### Step 2 — Send the bootloader via TFTP
 
 ```bash
-./flash_bootloader.sh          # checks ARP reachability, then uploads
+./flash_bootloader.sh                        # Lidl (default board)
+BOARD=sengled-e39-g8c ./flash_bootloader.sh  # Sengled G4 pre-built image
 ```
+
+The script checks ARP reachability, then uploads the pre-built
+`boot-img/<board>/boot.bin` matching `BOARD` (default `lidl`). The
+bootloader carries the board's DRAM bring-up — flashing another board's
+image bricks the gateway, so double-check `BOARD` here.
 
 Or manually:
 
 ```bash
-tftp -m binary 192.168.1.6 -c put boot.bin
+# Lidl
+tftp -m binary 192.168.1.6 -c put boot-img/lidl/boot.bin
+
+# Sengled G4 — never substitute the Lidl image here
+tftp -m binary 192.168.1.6 -c put boot-img/sengled-e39-g8c/boot.bin
 ```
 
 The bootloader auto-detects the image type and flashes it. After flashing, reboot manually:
@@ -86,10 +105,14 @@ The bootloader auto-detects the image type and flashes it. After flashing, reboo
 Same workflow — just send the image with the right Realtek header:
 
 ```bash
-tftp -m binary 192.168.1.6 -c put rootfs.bin        # Will not reboot
-tftp -m binary 192.168.1.6 -c put userdata.bin      # Will not reboot
-tftp -m binary 192.168.1.6 -c put kernel-6.18.img   # Will reboot
+tftp -m binary 192.168.1.6 -c put ../33-Rootfs/rootfs.bin       # Will not reboot
+tftp -m binary 192.168.1.6 -c put ../34-Userdata/userdata.bin   # Will not reboot
+tftp -m binary 192.168.1.6 -c put ../32-Kernel/kernel-img/lidl/kernel-6.18.img
+tftp -m binary 192.168.1.6 -c put ../32-Kernel/kernel-img/sengled-e39-g8c/kernel-6.18.img
 ```
+
+The kernel causes a reboot after flashing. Rootfs and userdata do not. The
+kernel image embeds the board's devicetree, so select the Sengled path on a G4.
 
 The bootloader identifies each image by its header signature and writes it to the correct flash partition.
 

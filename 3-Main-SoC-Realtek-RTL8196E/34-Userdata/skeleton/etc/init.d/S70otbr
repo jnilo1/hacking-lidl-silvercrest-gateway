@@ -33,11 +33,36 @@ if [ -f /userdata/etc/radio.conf ]; then
         115200|230400|460800|691200|892857) FW_BAUD="$val" ;;
     esac
 fi
-# uart-flow-control=true is REQUIRED on this SoC: it tells otbr-agent to set
-# CRTSCTS on the tty, which the 8250 core then propagates as MCR_AFE on the
-# 16550A. Without it, the gateway runs without hardware RTS/CTS and the RX
-# FIFO can overrun under bursty Spinel traffic at 460800 (#89).
-RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=${FW_BAUD}&uart-flow-control=true"
+# uart-flow-control tells otbr-agent to set CRTSCTS on the tty, which the 8250
+# core then propagates as MCR_AFE on the 16550A. On the Lidl board (RTS/CTS
+# wired) it is REQUIRED: without it the RX FIFO can overrun under bursty Spinel
+# traffic at 460800 (#89).
+#
+# OpenThread treats uart-flow-control as a PRESENCE flag: Url::HasParam() only
+# checks that the name occurs in the query string, so "uart-flow-control=false"
+# still enables CRTSCTS (#142, root-caused by @hlyi). To disable flow control
+# the parameter must be OMITTED from the URL entirely.
+#
+# Derived from FIRMWARE_FLOW_CTRL in radio.conf:
+#   hw (or absent) => uart-flow-control  (CRTSCTS — the Lidl reference board)
+#   sw             => uart-sw-flow-control (IXON|IXOFF — a board with no RTS/CTS,
+#                     e.g. the G4, whose OT-RCP runs the iostream backend and
+#                     really does emit XON/XOFF; without IXON those 0x11/0x13
+#                     bytes would reach the HDLC decoder as data and fail the FCS)
+#   none           => neither parameter
+# uart-sw-flow-control is not upstream: it comes from the patch build_otbr.sh
+# applies to OpenThread (#134, authored by @hlyi). otbr-agent speaks spinel
+# straight to /dev/ttyS1 — the bridge is not in the path — so this tty is the
+# radio's only flow partner.
+FC_PARAM="&uart-flow-control=true"
+if [ -f /userdata/etc/radio.conf ]; then
+    val=$(grep '^FIRMWARE_FLOW_CTRL=' /userdata/etc/radio.conf | tail -1 | cut -d= -f2)
+    case "$val" in
+        none) FC_PARAM="" ;;
+        sw)   FC_PARAM="&uart-sw-flow-control=true" ;;
+    esac
+fi
+RCP_URL="spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=${FW_BAUD}${FC_PARAM}"
 
 # Network interfaces
 THREAD_IF="wpan0"
@@ -52,28 +77,48 @@ FLASH_DIR="/userdata/thread"
 RAM_DIR="/tmp/thread"
 
 # Supervision (issue #109): otbr-agent and the housekeeping monitor are each
-# run under `keepalive`, a tiny C supervisor that restarts them on exit and
-# forwards SIGTERM for a clean stop. This makes OTBR self-heal from an agent
-# crash / RCP fault and from a busybox-ash SIGSEGV in the monitor loop, neither
-# of which used to recover. keepalive PIDs are tracked so stop can terminate
-# the supervisors (not just the children — killing a child alone would only
+# run under `keepalive` via the shared sup_start/sup_stop helpers, so OTBR
+# self-heals from an agent crash / RCP fault. otbr-monitor is a C daemon rather
+# than a busybox-ash loop — originally to dodge the #109 faults, which have
+# since been root-caused to our own TLB flush and fixed; it stays C because a
+# housekeeping loop that forks nothing is simply cheaper here. sup_stop
+# kills the supervisor before the child (killing a child alone would only
 # trigger a restart).
-KEEPALIVE="/usr/sbin/keepalive"
+. "$(dirname "$0")/supervise.func"
 OTBR_MONITOR="/usr/sbin/otbr-monitor"
-OTBR_SUP_PID="/tmp/otbr-agent.sup.pid"
-MON_SUP_PID="/tmp/otbr-monitor.sup.pid"
 SRP_DONE_FLAG="/tmp/otbr-srp-recovery.done"
 
 case "$1" in
 start)
-    [ -x "$OTBR_BIN" ] || exit 0
-
-    # Only start if radio mode is set to "otbr" in /userdata/etc/radio.conf
-    if ! [ -f /userdata/etc/radio.conf ] || ! grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
+    # Both bail-outs below announce themselves. This service does nothing on
+    # every gateway that is not a Thread border router — a Zigbee box, or any
+    # fresh install where the radio has not been flashed yet — and leaving
+    # "Starting S70otbr" with nothing under it reads as a service that failed.
+    if [ ! -x "$OTBR_BIN" ]; then
+        echo "  otbr: skipped (otbr-agent not installed)"
         exit 0
     fi
 
-    echo "Starting otbr-agent..."
+    # Only start if radio mode is set to "otbr" in /userdata/etc/radio.conf
+    if ! [ -f /userdata/etc/radio.conf ]; then
+        echo "  otbr: skipped (no radio configured)"
+        exit 0
+    fi
+    if ! grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
+        # Name the mode that won instead, the way S50uart_bridge does.
+        mode=$(grep '^MODE=' /userdata/etc/radio.conf | tail -1 | cut -d= -f2)
+        echo "  otbr: skipped (radio mode: ${mode:-unset})"
+        exit 0
+    fi
+
+    # Idempotent: refuse to stack a second supervised instance on top of one
+    # already running. Without this, a double start would re-run the dataset
+    # restore below and could orphan a live supervisor pair. (sup_start also
+    # guards per-service, but this bails out the whole bring-up early.)
+    if [ -n "$(sup_pids otbr-agent)$(sup_pids otbr-monitor)" ]; then
+        echo "  otbr: already running, skipping start"
+        exit 0
+    fi
 
     # Restore settings from flash to tmpfs
     mkdir -p "$FLASH_DIR" "$RAM_DIR"
@@ -88,44 +133,56 @@ start)
     # Clear the once-per-boot SRP recovery flag (tmpfs may survive a `restart`).
     rm -f "$SRP_DONE_FLAG"
 
+    # Board-derived BorderAgent identity (mDNS _meshcop._udp vn/mn TXT records).
+    # Default to the Lidl reference values so the reference board is unchanged;
+    # a ported board advertises its own vendor/model, keyed off the DT model
+    # string — the same board identity flash_efr32.sh keys off (#144). Matched
+    # with a case glob on the file contents: needs only cat + a shell builtin
+    # (no grep binary-file heuristic, no tr — the ash command substitution just
+    # drops the model node's trailing NUL, leaving the clean text to match).
+    # The G4 model string is the model number on the unit's own label
+    # ("Smart Hub, Model: E39-G8C"), not the marketing name — @hlyi's call
+    # (#144); with the vendor it reads "Sengled E39-G8C".
+    OTBR_VENDOR="Lidl"
+    OTBR_MODEL="Silvercrest"
+    case "$(cat /proc/device-tree/model 2>/dev/null)" in
+        *Sengled*) OTBR_VENDOR="Sengled"; OTBR_MODEL="E39-G8C" ;;
+    esac
+
     # Supervise otbr-agent under keepalive: restart on crash / RCP fault.
     # Post-start tuning (log level, TX power) is owned by otbr-monitor so it
     # re-applies on every restart, not just the first launch.
-    "$KEEPALIVE" -n otbr-agent \
+    sup_start otbr-agent \
         "$OTBR_BIN" \
         -d 4 \
         -I "$THREAD_IF" \
         -B "$BACKBONE_IF" \
         --rest-listen-address "$REST_LISTEN" \
         --rest-listen-port "$REST_PORT" \
-        --vendor-name "Lidl" \
-        --model-name "Silvercrest" \
+        --vendor-name "$OTBR_VENDOR" \
+        --model-name "$OTBR_MODEL" \
         --data-path "$RAM_DIR" \
-        "$RCP_URL" &
-    echo $! > "$OTBR_SUP_PID"
+        "$RCP_URL"
 
     # Supervise the housekeeping monitor (radio tuning, status LED, dataset
-    # sync, one-shot SRP recovery) under keepalive, so a busybox-ash crash in
-    # its long-lived loop is recovered instead of silently stopping it.
-    "$KEEPALIVE" -n otbr-monitor "$OTBR_MONITOR" &
-    echo $! > "$MON_SUP_PID"
+    # sync, one-shot SRP recovery). Its keepalive restart re-applies the radio
+    # tuning, so a monitor restart is transparent.
+    sup_start otbr-monitor "$OTBR_MONITOR"
+    echo "  otbr: border router started (otbr-agent + monitor)"
     ;;
 
 stop)
-    echo "Stopping otbr-agent..."
-    # Stop the supervisors first. keepalive forwards SIGTERM to its child and
-    # exits WITHOUT restarting; killing a child directly would only trigger a
-    # keepalive restart, so the order matters.
-    for pidf in "$OTBR_SUP_PID" "$MON_SUP_PID"; do
-        [ -f "$pidf" ] && kill "$(cat "$pidf")" 2>/dev/null
-        rm -f "$pidf"
-    done
-    # Give keepalive a moment to forward SIGTERM and reap its child.
-    sleep 1
-    # Fallback: clean up an orphaned agent if a supervisor was already gone.
-    killall otbr-agent 2>/dev/null
-    # Reset LED (also done by otbr-monitor's TERM trap)
+    # Stop each supervisor (and its child) via the shared helper: it kills the
+    # keepalive supervisor first, then re-signals any survivor matched by
+    # command line until dead (SIGKILL last resort) — killing a child alone
+    # would only trigger a restart. otbr-agent and otbr-monitor are stopped
+    # independently, each by its own command-line token.
+    sup_stop otbr-agent
+    sup_stop otbr-monitor
+
+    # Reset LED (also done by otbr-monitor on SIGTERM)
     echo 0 > /sys/class/leds/status/brightness
+    echo "  otbr: stopped"
     ;;
 
 restart)

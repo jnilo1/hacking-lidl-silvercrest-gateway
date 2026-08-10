@@ -10,9 +10,21 @@ ESC on the serial console.
 boothold && reboot
 ```
 
-The `boothold` binary writes the HOLD magic word to a fixed location in
-DRAM and exits.  The flag is **one-shot**: the bootloader clears it
-before entering download mode, so the next reboot boots Linux normally.
+The `boothold` binary writes the HOLD magic word to the top of the
+board's `boothold` reserved-memory page and exits.  The flag is
+**one-shot**: the bootloader clears it before entering download mode, so
+the next reboot boots Linux normally.
+
+Since boothold v1.2 the page is **discovered at runtime from the live
+device tree** (`/sys/firmware/devicetree/base/reserved-memory/boothold@*`,
+fields addressed relative to the page top), so a board that relocates
+the reservation in its DTS (different DRAM size, e.g. the 64 MiB Sengled
+G4) moves the flag without rebuilding the tool.  The bootloader read
+side, by contrast, is a **compile-time constant per board**
+(`BOOTHOLD_RAM` in `boot/main.c`) — a board's DTS and its bootloader
+build must agree on the page address.  All concrete addresses below are
+the **Lidl board's instantiation** (page `0x01FFE000`, size `0x1000`,
+top word `0x01FFEFFC`).
 
 ---
 

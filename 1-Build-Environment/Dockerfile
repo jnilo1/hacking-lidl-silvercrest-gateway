@@ -1,4 +1,4 @@
-# Dockerfile — Unified Build Environment for Lidl/Silvercrest Gateway
+# Dockerfile — Unified Build Environment for the RTL8196E Gateway project
 #
 # This image provides a complete build environment for both:
 #   - Main SoC (RTL8196E/Lexra MIPS) — Linux kernel, rootfs, userdata
@@ -6,17 +6,17 @@
 #
 # Usage:
 #   # Build the image (first time ~45 min)
-#   docker build -t lidl-gateway-builder .
+#   docker build -t rtl8196e-gateway-builder .
 #
 #   # Run interactive shell
-#   docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder
+#   docker run -it --rm -v $(pwd)/..:/workspace rtl8196e-gateway-builder
 #
 #   # Build Main SoC images
-#   docker run --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
+#   docker run --rm -v $(pwd)/..:/workspace rtl8196e-gateway-builder \
 #       /workspace/3-Main-SoC-Realtek-RTL8196E/build_rtl8196e.sh
 #
 #   # Build Zigbee firmware
-#   docker run --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
+#   docker run --rm -v $(pwd)/..:/workspace rtl8196e-gateway-builder \
 #       /workspace/2-Zigbee-Radio-Silabs-EFR32/24-NCP-UART-HW/build_ncp.sh
 #
 # J. Nilo - December 2025
@@ -24,7 +24,7 @@
 FROM ubuntu:22.04
 
 LABEL maintainer="J. Nilo"
-LABEL description="Unified build environment for Lidl/Silvercrest Gateway"
+LABEL description="Unified build environment for the RTL8196E Gateway project"
 
 # Avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
@@ -78,8 +78,6 @@ RUN dpkg --add-architecture i386 && \
         tftp-hpa \
         sshpass \
         iproute2 \
-        # Flash scripts (in-container flashing)
-        xxd \
         # Other
         sudo \
         rsync \

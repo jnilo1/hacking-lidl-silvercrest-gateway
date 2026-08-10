@@ -1,26 +1,30 @@
 --- a/drivers/clocksource/Kconfig
 +++ b/drivers/clocksource/Kconfig
-@@ -574,7 +574,7 @@
- 	  This enables build of a clocksource and clockevent driver for
- 	  the 48-bit System Timer (STI) hardware available on a SoCs
- 	  such as EMEV2 from former NEC Electronics.
--
-+	  
- config CLKSRC_QCOM
- 	bool "Qualcomm MSM timer" if COMPILE_TEST
- 	depends on ARM
-@@ -599,6 +599,15 @@
+@@ -599,6 +599,28 @@
  	select CLOCKSOURCE_WATCHDOG
  	select TIMER_OF
  
 +config CLKSRC_RTL819X
-+	bool "Realtek RTL819x Timer"
++	bool "Realtek RTL8196E Timer"
 +	depends on MIPS || COMPILE_TEST
 +	select TIMER_OF
 +	help
-+	  This enables support for the clocksource and clockevent device
-+	  on Realtek RTL819x SoCs (RTL8196E, RTL8197D, etc.). The hardware
-+	  provides two 28-bit timers for system timekeeping.
++	  This enables the clocksource and clockevent device tested on the
++	  Realtek RTL8196E. The hardware provides two 28-bit timers and a
++	  clock divider shared with the on-chip watchdog.
++
++config RTL819X_TC0_DNT
++	bool "Avoid TC0 enable-edge rearm (experimental canary)"
++	depends on CLKSRC_RTL819X
++	default n
++	help
++	  Keep Timer0 enabled in TIMER mode and reprogram its reload value instead
++	  of generating a Timer0 enable edge for every one-shot event. This avoids
++	  a suspected slow-domain enable capture failure on RTL8196E.
++
++	  Say N for the protected COUNTER-mode verified-arm path. Say Y only for a
++	  controlled canary: this is build-time policy, with no DT, sysfs, debugfs,
++	  or userspace runtime switch.
 +
  config CLKSRC_PXA
  	bool "Clocksource for PXA or SA-11x0 platform" if COMPILE_TEST

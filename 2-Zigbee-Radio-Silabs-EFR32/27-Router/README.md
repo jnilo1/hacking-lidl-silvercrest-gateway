@@ -1,8 +1,16 @@
-# Zigbee 3.0 Router Firmware for Lidl Silvercrest Gateway
+# Zigbee 3.0 Router Firmware
 
-Minimal Zigbee 3.0 Router (SoC) firmware for the EFR32MG1B232F256GM48 chip found in the Lidl Silvercrest Smart Home Gateway.
+Minimal Zigbee 3.0 Router (SoC) firmware for the EFR32 radio: EFR32MG1B232F256GM48 on the Lidl Silvercrest Smart Home Gateway (`BOARD=lidl`, the default), EFR32MG13P732F512IM32 on the Sengled Smart Hub G4 (`BOARD=sengled-e39-g8c`). Both ship prebuilt, but the G4 image has never been run on hardware — see [Per-board builds](../boards/README.md).
 
 This firmware transforms the gateway into an autonomous Zigbee router that extends your mesh network coverage.
+
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`, #143); e.g. `BOARD=sengled-e39-g8c ./build_router.sh` for the
+> Sengled Smart Hub G4 (MG13 target, software flow). A G4 prebuilt is committed
+> at 115200 — the router's only baud — but it has **not** been run on G4
+> hardware, so validate it on yours before trusting it. Non-lidl artefacts carry a
+> `-<board>` filename suffix, and `flash_efr32.sh` resolves them from the same
+> `BOARD=` selector — see [`../boards/README.md`](../boards/README.md).
 
 ## Features
 
@@ -32,7 +40,7 @@ Pre-built firmware is available in the `firmware/` directory. From the
 repository root:
 
 ```bash
-./flash_efr32.sh -y router                   # default baud 115200, default IP 192.168.1.88
+./flash_efr32.sh -y router                   # default baud 115200, gateway from gateway.env
 ./flash_efr32.sh -y -g 10.0.0.5 router       # custom gateway IP
 ./flash_efr32.sh --help                      # full CLI reference
 ```
@@ -110,7 +118,7 @@ cd 2-Zigbee-Radio-Silabs-EFR32/27-Router
 
 ```
 firmware/
-└── z3-router-7.5.1-115200.gbl   # filename embeds EmberZNet version + baud
+└── z3-router-7.5.1-115200-hw.gbl   # filename embeds EmberZNet version, baud, flow (#145)
 ```
 
 `flash_efr32.sh` resolves the right file via a glob.

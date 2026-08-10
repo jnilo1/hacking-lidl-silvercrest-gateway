@@ -1,0 +1,11 @@
+# Copy to /userdata/etc/wireguard/wg0.conf, replace every placeholder, then
+# set ENABLED=1 in /userdata/etc/wireguard.conf.  Keep the real file mode 0600.
+[Interface]
+PrivateKey = REPLACE_WITH_PRIVATE_KEY
+ListenPort = 51820
+
+[Peer]
+PublicKey = REPLACE_WITH_PEER_PUBLIC_KEY
+AllowedIPs = 10.202.0.1/32
+Endpoint = vpn.example.net:51820
+PersistentKeepalive = 25

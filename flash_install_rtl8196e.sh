@@ -14,7 +14,7 @@
 #
 # Interactive vs non-interactive:
 #   By default the script is interactive: it prompts for backup, flash
-#   confirmation, and (on first flash) network/radio configuration.
+#   confirmation and (on first flash) network configuration.
 #   Pass -y (or CONFIRM=y) for non-interactive mode — all prompts are skipped.
 #   This enables unattended remote upgrades over SSH.
 #   Note: if auto-flash fails and falls back to manual FLW, a terminal (tty)
@@ -54,12 +54,19 @@
 # Options:
 #   -y, --yes       Non-interactive mode: skip all confirmation prompts
 #   --boot-ip <IP>  Bootloader-mode / TFTP server IP. Overrides the BOOT_IP
-#                   env var (precedence: flag > env > default 192.168.1.6).
+#                   env var (precedence: flag > env > gateway.env > derived).
+#   --force         Skip the board-mismatch safety check (upgrade path).
+#
+# Addresses. Nothing here is hardcoded to one subnet any more: BOOT_IP and the
+# network settings offered at install time fall back to gateway.env, then to an
+# address derived from THIS host's own LAN, then to the project's historic
+# 192.168.1.x constants. See lib/gwconf.sh and gateway.env.example.
 #
 # Environment variables:
-#   BOOT_IP      - Gateway IP in bootloader (default: 192.168.1.6). On the
-#                  boothold path it is handed to the bootloader (V2.7+) so the
-#                  gateway comes up on this address in download mode.
+#   BOOT_IP      - Gateway IP in bootloader mode. On the boothold path it is
+#                  handed to the bootloader (V2.7+) so the gateway comes up on
+#                  this address in download mode. It must be on the same L2
+#                  segment as this host — TFTP does not cross a router.
 #                  The --boot-ip flag takes precedence when both are given.
 #   SSH_TIMEOUT  - TCP probe timeout in seconds (default: 2)
 #   SSH_PASSWORD - Root password for non-interactive auth (CI / no tty).
@@ -67,10 +74,11 @@
 #                  ControlMaster takes over for the rest. Requires sshpass
 #                  (sudo apt install sshpass).
 #   NET_MODE     - "static" or "dhcp" (skip network prompt)
-#   IPADDR       - Static IP address (default: 192.168.1.88)
-#   NETMASK      - Netmask (default: 255.255.255.0)
-#   GATEWAY      - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE   - "zigbee" or "thread" (skip radio prompt)
+#   IPADDR       - Static IP address for the gateway (default: see above)
+#   NETMASK      - Netmask (default: this host's own netmask)
+#   GATEWAY      - Default gateway (default: this host's own default route)
+#   BOARD        - "lidl" (default) or "sengled-e39-g8c" (kernel image baked in)
+#   KERNEL       - "6.18" (default) or "7.1" (kernel line baked in)
 #   CONFIRM      - Set to "y" to skip confirmation prompts (same as -y)
 #
 # J. Nilo - March 2026
@@ -82,6 +90,13 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Hardened SSH helpers — see lib/ssh.sh.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/ssh.sh"
+# Safe-retry TFTP upload helpers — see lib/flash_tftp.sh.
+. "${SCRIPT_DIR}/lib/flash_tftp.sh"
+# (board, kernel) validation — see lib/kernel_image.sh.
+. "${SCRIPT_DIR}/lib/kernel_image.sh"
+# Host-side gateway config — see lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/gwconf.sh"
 LINUX_IP=""
 FW_VERSION=""
 # Default entry mode. Overridden to "auto" only when a running Linux exposes
@@ -92,11 +107,42 @@ ENTRY="manual"
 # re-injection into the new image (upgrade path). Drives the flash-warning
 # wording so we don't claim "all data will be replaced" when it is preserved.
 CONFIG_SAVED=""
-# BOOT_IP precedence: --boot-ip flag > BOOT_IP env > default. The flag is
-# captured into BOOT_IP_FLAG during parsing and applied after the loop.
-BOOT_IP="${BOOT_IP:-192.168.1.6}"
+# BOOT_IP precedence: --boot-ip flag > BOOT_IP env > gateway.env > a default that
+# depends on how we reach the bootloader. This script has both paths, and they
+# differ in a way that matters:
+#
+#   - first flash / manual entry: the gateway is ALREADY at a bootloader prompt,
+#     reached by a cold boot and a serial ESC. Nothing can move it, so it sits at
+#     its compiled address whatever LAN this host is on. Deriving here would look
+#     for it in the wrong subnet.
+#   - upgrade via boothold: we hand the bootloader its address, so the host-LAN
+#     derivation applies. Done further down, once the entry mode is known.
+#
+# BOOT_IP_STATED records whether the user named an address, in which case neither
+# default applies. The flag is captured into BOOT_IP_FLAG and applied after the
+# parsing loop.
+BOOT_IP_STATED=0
+if [ -n "${BOOT_IP:-}" ]; then
+    BOOT_IP_STATED=1
+else
+    gwconf_resolve_boot_ip
+    if gwconf_boot_ip_is_derived; then
+        BOOT_IP="$GWCONF_BOOTLOADER_COLD_IP"     # safe for the first-flash path
+    else
+        BOOT_IP="$GWCONF_BOOT"                   # gateway.env named one
+        BOOT_IP_STATED=1
+    fi
+fi
 BOOT_IP_FLAG=""
 SSH_TIMEOUT="${SSH_TIMEOUT:-2}"
+# BOARD/KERNEL select the pre-built kernel image baked into the fullflash
+# (default lidl / 6.18 = the historical image). Exported so build_fullflash.sh
+# (child) resolves the same pair.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+export BOARD KERNEL
+# --force overrides the board-mismatch guard (upgrade path).
+FORCE=0
 
 # --- argument parsing --------------------------------------------------------
 
@@ -106,7 +152,7 @@ while [ $# -gt 0 ]; do
         --help|-h)
             echo "Usage: $0 [-y] [--boot-ip <IP|host>] [LINUX_IP]"
             echo ""
-            echo "Installs custom firmware on the Lidl Silvercrest Gateway."
+            echo "Installs custom firmware on an RTL8196E gateway (see BOARD below)."
             echo ""
             echo "Arguments:"
             echo "  LINUX_IP         Gateway IP when running Linux (upgrade with config save)"
@@ -115,11 +161,12 @@ while [ $# -gt 0 ]; do
             echo "Options:"
             echo "  -y, --yes        Non-interactive mode (skip all prompts)"
             echo "  --boot-ip <IP|host>  Bootloader-mode / TFTP server IP (overrides BOOT_IP"
-            echo "                   env; default: 192.168.1.6). A hostname is resolved host-side."
+            echo "                   env; default: ${BOOT_IP}). A hostname is resolved host-side."
+            echo "  --force          Skip the board-mismatch safety check (upgrade path)."
             echo ""
-            echo "Environment: BOOT_IP (default: 192.168.1.6), SSH_TIMEOUT,"
-            echo "  SSH_PASSWORD (sshpass), NET_MODE, RADIO_MODE, CONFIRM,"
-            echo "  IPADDR, NETMASK, GATEWAY (network default gateway)"
+            echo "Environment: BOOT_IP (default: ${BOOT_IP}), BOARD, KERNEL,"
+            echo "  SSH_TIMEOUT, SSH_PASSWORD (sshpass), NET_MODE,"
+            echo "  CONFIRM, IPADDR, NETMASK, GATEWAY (network default gateway)"
             exit 0
             ;;
         --boot-ip)
@@ -128,6 +175,7 @@ while [ $# -gt 0 ]; do
             BOOT_IP_FLAG="$1"
             ;;
         --boot-ip=*) BOOT_IP_FLAG="${1#*=}" ;;
+        --force) FORCE=1 ;;
         --*) echo "Unknown option: $1. Use --help for usage."; exit 1 ;;
         *)
             if [ -n "$LINUX_IP" ]; then
@@ -143,7 +191,7 @@ done
 # Apply --boot-ip override (flag > env > default), resolving a hostname if one
 # was given (the on-device boothold/bootloader need a literal IPv4 — resolve
 # host-side). A dotted-quad passes through unchanged.
-[ -n "$BOOT_IP_FLAG" ] && BOOT_IP="$BOOT_IP_FLAG"
+[ -n "$BOOT_IP_FLAG" ] && { BOOT_IP="$BOOT_IP_FLAG"; BOOT_IP_STATED=1; }
 if BOOT_IP_RESOLVED="$(resolve_ipv4 "$BOOT_IP")"; then
     [ "$BOOT_IP_RESOLVED" != "$BOOT_IP" ] && echo "Resolved BOOT_IP '$BOOT_IP' -> $BOOT_IP_RESOLVED"
     BOOT_IP="$BOOT_IP_RESOLVED"
@@ -190,6 +238,11 @@ if [ "${#missing_pkgs[@]}" -gt 0 ]; then
     exit 1
 fi
 
+# Fail fast on a bad BOARD/KERNEL, or a missing per-board pre-built bootloader,
+# before touching the gateway or building (build_fullflash.sh re-resolves both).
+kernel_image_validate "$BOARD" "$KERNEL" || exit 1
+resolve_boot_image "$BOARD" >/dev/null || exit 1
+
 # Resolve IFACE for BOOT_IP and require L2 reachability — the bootloader's TFTP
 # server only answers on the same L2 segment. Sets IFACE on success; exits with
 # an actionable hint when the host has no interface in the bootloader's subnet.
@@ -212,34 +265,22 @@ require_boot_l2() {
     fi
 }
 
-# Probe the bootloader's TFTP server with a 1-byte WRQ (PUT). The bootloader
-# ACKs a WRQ immediately; anything else — a Linux still shutting down, a
-# proxy-ARP router answering for an address that is not up, no device at all —
-# gives no UDP response and tftp-hpa hangs until timeout kills it (rc 124).
-# Use PUT, not GET: the bootloader silently drops RRQ (error on serial only).
-# The 1-byte payload is harmless: the bootloader receives it, fails the image
-# signature check, and discards it (one_tftp_lock is released on completion).
-probe_tftp_wrq() {
-    local probe_file rc=0
-    probe_file=$(mktemp)
-    echo -n X > "$probe_file"
-    timeout 3 tftp -m binary "$BOOT_IP" -c put "$probe_file" >/dev/null 2>&1 || rc=$?
-    rm -f "$probe_file"
-    [ "$rc" -ne 124 ]
-}
+# probe_tftp_wrq <ip> and tftp_put_safe come from lib/flash_tftp.sh (sourced
+# above) — a 1-byte WRQ probe that ACKs only when the bootloader's TFTP server is
+# idle, and the safe re-probe-gated upload retry built on it.
 
 # Build fullflash.bin, sanity-check it, and ask the final confirmation.
 # On the upgrade (auto) path this runs while Linux is still up — BEFORE boothold —
 # so the slow image build does not happen with the gateway stranded in the
 # bootloader, and an abort (or a build failure) leaves Linux untouched. On a
 # first flash / manual entry it runs at the convergence point (gateway already in
-# the bootloader), where build_fullflash.sh prompts interactively for IP/radio.
+# the bootloader), where build_fullflash.sh prompts interactively for networking.
 # Sets GW_HINT_IP, FULLFLASH and the IMAGE_READY guard so the convergence point
 # does not build a second time.
 build_image_and_confirm() {
     # In the upgrade path SKELETON_DIR is already exported (with saved config
     # from the running gateway). On a first flash the parent has no SKEL_WORK
-    # yet, but build_fullflash.sh will prompt for IP/radio and write into
+    # yet, but build_fullflash.sh will prompt for networking and write into
     # whatever SKELETON_DIR points to. We pre-create one here so the parent
     # can read back the chosen IPADDR for the post-install hint, instead of
     # losing it when build_fullflash's own mktemp dir is reaped.
@@ -259,9 +300,11 @@ build_image_and_confirm() {
     # show the right address. Fall back to LINUX_IP (upgrade path) or the
     # default for first-time installs that chose DHCP / left the default.
     if [ -z "${IPADDR:-}" ] && [ -f "${SKELETON_DIR}/etc/eth0.conf" ]; then
-        IPADDR=$(awk -F= '$1=="IPADDR"{print $2; exit}' "${SKELETON_DIR}/etc/eth0.conf" 2>/dev/null || true)
+        IPADDR=$(gwconf_read_key "${SKELETON_DIR}/etc/eth0.conf" IPADDR || true)
     fi
-    GW_HINT_IP="${LINUX_IP:-${IPADDR:-192.168.1.88}}"
+    # Last resort is whatever this host knows about the gateway (gateway.env, a
+    # previous install, the device's hostname) rather than a fixed address.
+    GW_HINT_IP="${LINUX_IP:-${IPADDR:-$(gwconf_gateway_addr)}}"
 
     FULLFLASH="${SCRIPT_DIR}/fullflash.bin"
     if [ ! -f "$FULLFLASH" ]; then
@@ -296,6 +339,36 @@ build_image_and_confirm() {
     fi
 
     IMAGE_READY=1
+}
+
+# Board-mismatch guard for the upgrade path: the running gateway's
+# /proc/device-tree/model identifies the board. A full flash bundles a
+# board-specific kernel AND bootloader, so flashing a mismatched BOARD can brick
+# the gateway (the bootloader's DRAM config is per-board). Refuse on a clear
+# mismatch unless --force. An unreadable/unrecognised model is non-fatal (warn
+# and proceed). cat runs on the gateway (BusyBox has no tr); the trailing NUL is
+# stripped host-side. Expects FI_SSH_OPTS / FI_SSH_TARGET in scope (port-22 path).
+fi_check_board_match() {
+    local model sig
+    model="$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "cat /proc/device-tree/model" 2>/dev/null | tr -d '\0' || true)"
+    if [ -z "$model" ]; then
+        echo "Note: could not read the gateway's board model — skipping board check." >&2
+        return 0
+    fi
+    case "$BOARD" in
+        lidl)            sig="Lidl" ;;
+        sengled-e39-g8c) sig="Sengled" ;;
+        *)               return 0 ;;
+    esac
+    if printf '%s' "$model" | grep -q "$sig"; then
+        return 0
+    fi
+    echo "Error: board mismatch — selected BOARD='$BOARD', but the gateway reports:" >&2
+    echo "         model = \"$model\"" >&2
+    echo "  A full flash bundles a board-specific kernel and bootloader; flashing the" >&2
+    echo "  wrong board can brick the gateway (DRAM config). Re-run with the matching" >&2
+    echo "  BOARD=, or pass --force to override." >&2
+    return 1
 }
 
 
@@ -365,6 +438,12 @@ if [ -n "$LINUX_RUNNING" ]; then
             exit 1
         fi
 
+        # Board-mismatch guard: a full flash carries a board-specific kernel and
+        # bootloader; refuse a different board than the gateway reports (--force overrides).
+        if [ "$FORCE" != "1" ]; then
+            fi_check_board_match || exit 1
+        fi
+
         # boothold present = custom firmware we can warm-reboot into the
         # bootloader. Absent = Tuya, or custom too old to have boothold
         # (pre-v1.1.0) — either way, automated entry is impossible.
@@ -410,6 +489,8 @@ if [ -n "$LINUX_RUNNING" ]; then
         export SKELETON_DIR="$SKEL_WORK"
 
         SAVE_TAR=$(mktemp)
+        # User-configurable files; other user-added paths under /userdata are
+        # carried by preserve_user_additions below.
         SAVE_FILES="etc/eth0.conf etc/mac_address etc/radio.conf etc/leds.conf etc/passwd etc/TZ etc/hostname etc/dropbear ssh thread"
         ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" \
             "tar cf - -C /userdata $SAVE_FILES 2>/dev/null" > "$SAVE_TAR" 2>/dev/null || true
@@ -418,9 +499,18 @@ if [ -n "$LINUX_RUNNING" ]; then
             echo "Gateway config saved."
             CONFIG_SAVED=1
             export NET_MODE="skip"
-            export RADIO_MODE="skip"
+            # Remember where this box was and what it calls itself, so the
+            # host-side tools can find it again without an argument. The
+            # hostname comes out of the config we just pulled — no extra SSH.
+            gwconf_record_seen "$fw_host" \
+                "$(head -1 "${SKEL_WORK}/etc/hostname" 2>/dev/null || true)"
         fi
         rm -f "$SAVE_TAR"
+
+        # Also carry any user-added paths under /userdata (custom programs,
+        # scripts, whole new directories) — anything not shipped in the skeleton
+        # and not already re-injected above — into the new image.
+        preserve_user_additions "$SKEL_WORK" "$FI_SSH_TARGET" "${FI_SSH_OPTS[@]}"
 
         # v2 → v3 migration: pre-v3.0 firmware shipped serialgateway and
         # had no /userdata/etc/radio.conf — the EFR32-side baud was hard-
@@ -443,6 +533,18 @@ if [ -n "$LINUX_RUNNING" ]; then
 FIRMWARE=ncp
 FIRMWARE_BAUD=115200
 EOF
+        fi
+
+        # From here the bootloader's address is OURS to choose — boothold hands
+        # it over — so the host-LAN derivation applies, unlike the first-flash
+        # path above where the bootloader is already up at its compiled default.
+        # Only when the user named no address.
+        if [ "$BOOT_IP_STATED" = 0 ]; then
+            gwconf_resolve_boot_ip
+            if gwconf_boot_ip_is_derived && [ "$GWCONF_BOOT" != "$BOOT_IP" ]; then
+                BOOT_IP="$GWCONF_BOOT"
+                echo "Bootloader address: ${BOOT_IP}$(gwconf_source_note "$GWCONF_BOOT_SOURCE")"
+            fi
         fi
 
         # Confirm the host can TFTP to the bootloader before tipping the
@@ -511,7 +613,7 @@ EOF
         sleep 1
         nei="$(ip neigh show "$BOOT_IP" dev "$IFACE" 2>/dev/null || true)"
         if echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}' \
-           && probe_tftp_wrq; then
+           && probe_tftp_wrq "$BOOT_IP"; then
             BOOTLOADER_UP=1
             break
         fi
@@ -547,13 +649,13 @@ else
         echo "  - Then re-run:  $0"
         echo ""
         echo "For upgrade (with config save):"
-        echo "  - Run:  $0 <LINUX_IP>   (e.g. $0 192.168.1.88)"
+        echo "  - Run:  $0 <LINUX_IP>   (e.g. $0 $(gwconf_gateway_addr))"
         echo ""
         exit 1
     fi
 
     # ARP resolved — but is it really bootloader? Probe TFTP to confirm.
-    if ! probe_tftp_wrq; then
+    if ! probe_tftp_wrq "$BOOT_IP"; then
         echo "Device at ${BOOT_IP} is not in bootloader mode (no TFTP server)."
         echo "If the gateway is running Linux, run:  $0 <LINUX_IP>"
         exit 1
@@ -561,8 +663,8 @@ else
 
     # ARP resolved + TFTP responding = bootloader.
     echo ""
-    echo "Bootloader detected. No config files/variables will be imported"
-    echo "You will be prompted for network and radio settings."
+    echo "Bootloader detected. No config files will be imported."
+    echo "You will be prompted for the gateway network settings."
     if [ "${CONFIRM:-}" != "y" ]; then
         read -r -p "Proceed? [y/N] " r
         if [[ ! "$r" =~ ^[yY]$ ]]; then
@@ -592,7 +694,7 @@ fi
 # On the upgrade (auto) path this already ran before boothold, while Linux was
 # still up — IMAGE_READY is set, so we skip it here. On a first flash / manual
 # entry the gateway is already in the bootloader and nothing was built yet:
-# build now (build_fullflash.sh prompts interactively for IP/radio).
+# build now (build_fullflash.sh prompts interactively for networking).
 [ "${IMAGE_READY:-}" = "1" ] || build_image_and_confirm
 
 # --- flash --------------------------------------------------------------------
@@ -604,11 +706,6 @@ fi
 #     16 MiB (single-threaded, can't answer ICMP) → wait for the UDP:9999 OK.
 #   - pre-upload ICMP up, stays up post-upload → custom bootloader without
 #     auto-flash (e.g. old v1.x) → guided FLW. Decided in seconds, no dead wait.
-
-check_tftp_error() {
-    echo "$1" | grep -qiE \
-        "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"
-}
 
 # Manual FLW guidance — the uploaded image is already in RAM at 0x80500000; the
 # user finishes on the serial console. Interactive by design: show the FLW step,
@@ -729,6 +826,11 @@ print_complete() {
     echo "========================================="
     echo ""
     echo "SSH: root@${GW_HINT_IP}:22 (no password) in ~30 seconds."
+    echo ""
+    echo "If it does not come back (a first full-flash from a pre-V2.9 bootloader"
+    echo "can loop once): unplug the gateway for a few seconds and plug it back in."
+    echo "A cold power cycle clears it; a warm reboot will not. V2.9 onward boots"
+    echo "clean automatically after a full-flash."
 }
 
 # Post-flash SSH probe target for confirm_autoflash — only set when the
@@ -786,18 +888,28 @@ if [ "$ENTRY" != "auto" ]; then
 fi
 
 echo ""
-echo "Uploading fullflash.bin via TFTP (16 MiB)..."
 cd "$SCRIPT_DIR"
-out=$(timeout 300 tftp -m binary "$BOOT_IP" -c put fullflash.bin 2>&1) || true
-if check_tftp_error "$out"; then
-    echo "Error: TFTP transfer failed: $out" >&2
-    echo "" >&2
-    echo "Nothing was written. The gateway is still at the bootloader prompt at" >&2
-    echo "${BOOT_IP} — re-run this script to retry the upload, or power-cycle the" >&2
-    echo "gateway to boot its existing firmware." >&2
-    exit 1
-fi
-echo "Upload OK."
+
+# Upload the 16 MiB image via the shared safe-retry helper (lib/flash_tftp.sh):
+# on a mid-transfer stall (discussion #135) it re-probes and retries only while
+# the bootloader is still idle, never re-sending onto an in-progress auto-flash.
+# The bootloader here is custom-by-construction (its WRQ probe gated the wait
+# loop), so AUTOFLASH — probe gone quiet — means the image most likely landed and
+# it is writing flash: fall through to confirm_and_report.
+status=$(tftp_put_safe "$BOOT_IP" fullflash.bin 3 300) || true
+case "$status" in
+    OK)
+        echo "Upload OK." ;;
+    AUTOFLASH)
+        : ;;   # likely already auto-flashing; fall through to confirmation
+    *)
+        echo "Error: TFTP transfer failed after retries." >&2
+        echo "" >&2
+        echo "Nothing was written (the bootloader kept answering its TFTP probe between" >&2
+        echo "attempts, so no image landed). The gateway is still at the bootloader prompt" >&2
+        echo "at ${BOOT_IP} — re-run this script, or power-cycle to boot existing firmware." >&2
+        exit 1 ;;
+esac
 
 if [ "$ENTRY" = "auto" ]; then
     # Boothold path: the bootloader ACKed the WRQ probe and auto-flashes by
@@ -817,33 +929,15 @@ else
     print_complete
 fi
 
-# --- Restore skeleton if we injected gateway config -------------------------
 # --- EFR32 radio firmware info -----------------------------------------------
 if [ "${CONFIRM:-}" != "y" ] && [ -t 0 ]; then
-    RADIO="${NET_MODE:+${RADIO_MODE}}"
-    # Determine radio mode from radio.conf if not set by env
-    if [ -z "$RADIO" ]; then
-        RADIO_CONF="${SKEL_WORK:-${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/34-Userdata/skeleton}/etc/radio.conf"
-        if [ -f "$RADIO_CONF" ] && grep -q '^MODE=otbr' "$RADIO_CONF" 2>/dev/null; then
-            RADIO="thread"
-        else
-            RADIO="zigbee"
-        fi
-    fi
-
     echo ""
-    echo "Make sure the EFR32 radio firmware matches your configuration."
-    echo "Compatible firmware(s):"
+    echo "The separate EFR32 radio has not been changed. Choose and flash it next:"
     echo ""
-    if [ "$RADIO" = "thread" ]; then
-        echo "  ot-rcp.gbl             — OpenThread RCP (required for OTBR)"
-        echo ""
-        echo "Flash with:  ./flash_efr32.sh -g ${GW_HINT_IP} otrcp"
-    else
-        echo "  ncp-uart-hw-7.5.1.gbl  — Zigbee NCP for in-kernel UART bridge + Z2M"
-        echo "  rcp-uart-802154.gbl    — Zigbee RCP for cpcd + zigbeed (Docker)"
-        echo "  z3-router-7.5.1.gbl    — Zigbee 3.0 Router (standalone, no coordinator)"
-        echo ""
-        echo "Flash with:  ./flash_efr32.sh -g ${GW_HINT_IP} ncp   (or rcp / router)"
-    fi
+    echo "  ./flash_efr32.sh -g ${GW_HINT_IP} ncp      # Zigbee2MQTT / ZHA"
+    echo "  ./flash_efr32.sh -g ${GW_HINT_IP} rcp      # cpcd + zigbeed"
+    echo "  ./flash_efr32.sh -g ${GW_HINT_IP} otrcp    # Thread / OTBR"
+    echo "  ./flash_efr32.sh -g ${GW_HINT_IP} router   # standalone Zigbee router"
+    echo ""
+    echo "flash_efr32.sh writes radio.conf to match the firmware it installs."
 fi

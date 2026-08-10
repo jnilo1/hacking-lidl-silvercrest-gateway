@@ -8,25 +8,49 @@
 # Author: J. Nilo - May 2025
 #
 
-# Note: syslogd timestamps are UTC regardless of TZ — this is standard
-# for embedded systems and avoids DST ambiguities in log analysis.
+# Timestamps are rendered in the local timezone, so /var/log/messages lines up
+# with whatever an incident gets correlated against — the login shell, a home
+# automation history, a capture taken on another host. Two things are needed
+# for that, and neither works on its own:
+#
+#   - TZ has to be in syslogd's own environment. Only /etc/profile exports it,
+#     and only for login shells; init runs each S* script in a separate shell,
+#     so a daemon started here inherits nothing and falls back to UTC.
+#   - -t has to strip client-supplied timestamps. syslog(3) embeds its own
+#     timestamp in the message, and without -t syslogd copies that verbatim
+#     instead of stamping the line itself — so every line written by a daemon
+#     would keep the client's rendering and ignore the TZ set above. Checked
+#     on the bench: with -t, even a client forced to TZ=UTC is restamped local.
+#
+# The cost is the one-hour fold at the DST fallback. Kernel lines still carry
+# the monotonic [ seconds ] prefix, which disambiguates those.
 
 [ "$INIT_VERBOSE" = "0" ] && exec >/dev/null
 
 # Check if /etc/nosyslog file exists
 if [ -f /etc/nosyslog ]; then
-    echo "📝 Skipping syslogd & klogd"
+    echo "  syslog: skipped (/etc/nosyslog present)"
     exit 0
 fi
 
 case "$1" in
 start)
-    echo "📝 Starting syslogd and klogd"
-    syslogd -O /var/log/messages -s 32 -b 2 -m 0
+    [ -f /etc/TZ ] && export TZ=$(cat /etc/TZ)
+    # syslogd reads the hostname once, before forking, and stamps every line
+    # with that copy for as long as it runs. It starts here, ahead of
+    # S15hostname, so without this the entire log reads "(none)" — the kernel's
+    # compiled-in default — for the whole uptime, which makes a log useless the
+    # moment two gateways are read side by side. Setting it here rather than
+    # reordering the scripts keeps the ordering constraint where it belongs:
+    # S15hostname still owns /etc/hosts, which needs an IP this early script
+    # does not have yet. Re-running hostname there is harmless.
+    [ -f /etc/hostname ] && hostname -F /etc/hostname
+    echo "  syslog: started (syslogd + klogd)"
+    syslogd -O /var/log/messages -s 32 -b 2 -m 0 -t
     klogd &
     ;;
 stop)
-    echo "🔴 Stopping syslogd and klogd"
+    echo "  syslog: stopped"
     killall syslogd
     killall klogd
     ;;

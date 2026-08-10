@@ -5,15 +5,16 @@
 # Source: https://mirrors.edge.kernel.org/pub/software/network/ethtool/
 # License: GPL-2.0
 #
-# This component is NOT installed in skeleton/usr/bin/ — the binary lives
-# under build/ethtool here and is left for the operator to copy on demand.
+# This component is NOT installed in skeleton/usr/bin/ — the cross-compiled
+# binary is written next to this script (./ethtool, same directory level)
+# and committed, left for the operator to copy on demand.
 # It is intentionally excluded from the default userdata image so that the
 # 12 MB JFFS2 partition stays lean: ethtool is a debug-only tool, useful
 # when investigating link state or rtl8196e-eth driver counters, but not
 # something most users need.
 #
 # Deploy on a running gateway with:
-#   scp -O build/ethtool root@<gateway-ip>:/userdata/usr/bin/
+#   scp -O ethtool root@<gateway-ip>:/userdata/usr/bin/
 #
 # /userdata/usr/bin is in PATH and is JFFS2-persistent across reboots.
 #
@@ -33,7 +34,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 VERSION="${1:-6.10}"
 SOURCE_DIR="${SCRIPT_DIR}/ethtool-${VERSION}"
-BUILD_DIR="${SCRIPT_DIR}/build"
+OUT_BIN="${SCRIPT_DIR}/ethtool"   # installed next to this script and committed
 
 # Lexra toolchain (musl)
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
@@ -80,23 +81,22 @@ cd "${SOURCE_DIR}"
 
 make
 
-mkdir -p "${BUILD_DIR}"
 ${STRIP} ethtool
-cp -f ethtool "${BUILD_DIR}/ethtool"
+cp -f ethtool "${OUT_BIN}"
 
-SIZE=$(ls -lh "${BUILD_DIR}/ethtool" | awk '{print $5}')
+SIZE=$(ls -lh "${OUT_BIN}" | awk '{print $5}')
 
 echo ""
 echo "========================================="
 echo "  BUILD SUMMARY"
 echo "========================================="
 echo "  Version: ${VERSION}"
-echo "  Binary:  ${BUILD_DIR}/ethtool (${SIZE})"
+echo "  Binary:  ${OUT_BIN} (${SIZE})"
 echo ""
 echo "  ethtool is intentionally NOT installed in skeleton/usr/bin/."
 echo "  To deploy on a running gateway:"
 echo ""
-echo "    scp -O ${BUILD_DIR}/ethtool root@<gateway>:/userdata/usr/bin/"
+echo "    scp -O ${OUT_BIN} root@<gateway>:/userdata/usr/bin/"
 echo ""
 echo "  Then on the gateway:"
 echo "    ethtool -i eth0"

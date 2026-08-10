@@ -17,6 +17,11 @@
 #                         127.0.0.1 to restrict to loopback and reach
 #                         the bridge only via an SSH tunnel — see
 #                         drivers/net/rtl8196e-uart-bridge/SECURITY.md)
+#   FIRMWARE_FLOW_CTRL=none|sw|hw  (optional; absent => the devicetree
+#                         per-board default stands. Selects the flow-control
+#                         mode for a radio firmware that differs from the board
+#                         default, e.g. an XON/XOFF NCP build. hw is clamped to
+#                         sw by the bridge on boards that do not wire RTS/CTS.)
 #
 # Skipped when radio mode is "otbr" (otbr-agent manages the UART).
 #
@@ -34,7 +39,7 @@ start)
 
     # Skip if radio is configured for OTBR
     if [ -f /userdata/etc/radio.conf ] && grep -q '^MODE=otbr' /userdata/etc/radio.conf; then
-        echo "Skipping uart_bridge (radio mode: otbr)"
+        echo "  uart-bridge: skipped (radio mode: otbr)"
         exit 0
     fi
 
@@ -58,6 +63,21 @@ start)
         [ -n "$val" ] && BIND="$val"
     fi
 
+    # Read flow-control firmware mode (optional). none|sw|hw are written
+    # verbatim to the bridge's flow_control knob; an invalid value is ignored
+    # with a warning. Absent => don't write, leaving flow_control at its
+    # devicetree per-board default. The bridge clamps hw to sw on boards that
+    # do not wire RTS/CTS, so this can never wedge the UART.
+    FW_FC=
+    if [ -f /userdata/etc/radio.conf ]; then
+        val=$(grep '^FIRMWARE_FLOW_CTRL=' /userdata/etc/radio.conf | tail -1 | cut -d= -f2)
+        case "$val" in
+            none|sw|hw) FW_FC="$val" ;;
+            "")         : ;;
+            *) echo "  uart-bridge: WARNING ignoring invalid FIRMWARE_FLOW_CTRL '$val'" >&2 ;;
+        esac
+    fi
+
     # Map eth0 led_mode to a STATUS LED brightness for the bridge to fire
     # on TCP client connect. The bridge extinguishes the LED on disconnect.
     # Users who want a different intensity can override status_led_brightness
@@ -78,12 +98,13 @@ start)
 
     echo "$BAUD" > "$SYSFS/baud"
     echo "$BIND" > "$SYSFS/bind_addr"
+    [ -n "$FW_FC" ] && echo "$FW_FC" > "$SYSFS/flow_control"
     echo 1 > "$SYSFS/enable"
 
     # The kernel driver logs "armed on <tty> @ <baud> baud, listening on ..."
     # on success — no need to echo from here. Only complain on failure.
     if [ "$(cat "$SYSFS/armed")" != "1" ]; then
-        echo "UART bridge failed to arm!" >&2
+        echo "  uart-bridge: ERROR failed to arm" >&2
         exit 1
     fi
     ;;

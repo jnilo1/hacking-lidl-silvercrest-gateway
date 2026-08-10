@@ -1,11 +1,20 @@
-# OpenThread RCP Firmware for Lidl Silvercrest Gateway
+# OpenThread RCP Firmware
 
-OpenThread Radio Co-Processor (RCP) firmware for the EFR32MG1B232F256GM48 chip
-found in the Lidl Silvercrest Smart Home Gateway.
+OpenThread Radio Co-Processor (RCP) firmware for the EFR32 radio:
+EFR32MG1B232F256GM48 on the Lidl Silvercrest Smart Home Gateway
+(`BOARD=lidl`, the default), EFR32MG13P732F512IM32 on the Sengled Smart Hub G4
+(`BOARD=sengled-e39-g8c`). Both ship prebuilt.
 
 This firmware transforms the EFR32 into a **raw 802.15.4 radio** using the
 Spinel/HDLC protocol. It is the **single firmware** shared by all 3 use cases
 described below.
+
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`); e.g. `BOARD=sengled-e39-g8c` for the Sengled Smart Hub G4,
+> whose UART routing was confirmed on hardware (#130). Its prebuilt is committed
+> at **230400** — the operating point @hlyi measured on that board (#134, #142),
+> where 460800 overruns the host's 16-byte RX FIFO — and `flash_efr32.sh` picks
+> it there by default. See [`../boards/README.md`](../boards/README.md).
 
 ---
 
@@ -26,8 +35,13 @@ described below.
 From the repository root:
 
 ```bash
-./flash_efr32.sh -y otrcp                    # default IP 192.168.1.88
+# Lidl Silvercrest (default board and default baud 460800)
+./flash_efr32.sh -y otrcp                    # gateway from gateway.env
 ./flash_efr32.sh -y -g 10.0.0.5 otrcp        # custom IP
+
+# Sengled Smart Hub G4: board-safe default baud 230400
+./flash_efr32.sh -y --board sengled-e39-g8c -g 10.0.0.6 otrcp
+
 ./flash_efr32.sh --help                      # full CLI reference
 ```
 
@@ -42,8 +56,10 @@ For **use case 1 (ZoH)** or **use case 2 (OTBR on host)**, drop the
 [`docker/README.md`](docker/README.md) for the per-use-case Quick Start
 that includes the radio-mode switch.
 
-> OT-RCP supports only **460800 baud** (otbr-agent ceiling per
-> CHANGELOG v3.0.0); the script and the build matrix both reflect this.
+> OT-RCP supports **230400 and 460800 baud** (460800 is the default and the
+> otbr-agent ceiling per CHANGELOG v3.0.0; 230400 is the operating point for
+> boards without RTS/CTS wiring — see discussion #134). The committed lidl
+> matrix carries 460800 only; build other bauds with `build_ot_rcp.sh <BAUD>`.
 
 > **Legacy env-var interface** (deprecated):
 > `FW_CHOICE=4 CONFIRM=y ./flash_efr32.sh` still works with a deprecation
@@ -83,13 +99,25 @@ cd 2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP
 ./build_ot_rcp.sh --help         # show baud options
 ```
 
-Output: `firmware/ot-rcp-460800.gbl` (UART flash) and
-`firmware/ot-rcp-460800.s37` (J-Link/SWD).
+Output: `firmware/ot-rcp-460800-hw-uartdrv.gbl` (UART flash) and
+`firmware/ot-rcp-460800-hw-uartdrv.s37` (J-Link/SWD). The name embeds the flow
+type (`hw`) and UART driver (`uartdrv`; a `sw` board builds `-sw-iostream`, #145).
 
 ### Technical Notes
 
-- **UART driver:** Uses `uartdrv_usart` (low-level, DMA, async), not `iostream_usart`
-  which would corrupt the binary Spinel stream with LF→CRLF conversion.
+- **UART driver — selected per board (#142):** boards with RTS/CTS
+  (`BOARD_UART_FLOW=hw`) or no flow control build on `uartdrv_usart` (DMA,
+  near-zero CPU per byte — the historical default, unchanged for Lidl);
+  boards with software flow (`sw`, e.g. the Sengled G4) build on
+  `iostream_usart`, the only backend whose XON/XOFF support is complete
+  (watermark-driven emission + inbound honor — uartdrv's is "partial only"
+  per Silabs' own docs, see discussion #134). The old concern that iostream
+  corrupts the binary Spinel stream via LF→CRLF conversion was a config
+  default, not a driver property — our header disables the conversion
+  (`SL_IOSTREAM_USART_VCOM_CONVERT_BY_DEFAULT_LF_TO_CRLF 0`), verified with
+  live spinel traffic at 460800. Force a backend for experiments with
+  `UART_DRIVER=uartdrv|iostream` (forced builds get a `-<driver>` filename
+  suffix and are never auto-resolved by `flash_efr32.sh`).
 - **RTL8196E boot delay:** 1-second delay at startup for host UART initialization.
 - **Hardware flow control:** RTS/CTS enabled in the EFR32 firmware, **and**
   enabled on the host side via `&uart-flow-control=true` in the spinel
@@ -268,19 +296,14 @@ alternative, and troubleshooting.
 └── range-testing/               # Thread mesh range-test toolset + field-test report
     ├── README.md                # Layout, install, quick start
     ├── REPORT.md                # 16-sensor home deployment results + recipes
-    ├── gateway/                 # Scripts that run on the gateway (BusyBox sh)
-    │   ├── range_test.sh             # Generic CSV sampler (one palier per run)
-    │   ├── phase1_tx_sweep.sh        # TX power sweep, abort on detach
-    │   ├── phase2_channel_migration.sh   # Channel migration via Pending Op Dataset
-    │   ├── orientation_runner.sh     # Operator-paced orientation runner
-    │   ├── healthmon.sh              # Opt-in host-side health sampler (1 sample/min)
-    │   ├── ha_link_publisher.sh      # Opt-in Thread RSSI/LQI → HA push daemon
-    │   ├── ha_link_publisher.conf.example   # Annotated config template
-    │   └── examples/                  # Optional helpers (per-gateway, not in skeleton)
-    │       └── S75ha_link_publisher  # Init script to auto-start the publisher
+    ├── gateway/
+    │   ├── thread-range-test         # Sampling, power, channel, and orientation
+    │   └── optional/
+    │       ├── thread-health-monitor # Host health sampler (1 sample/min)
+    │       └── home-assistant/       # Opt-in RSSI/LQI publisher + config/init files
     └── analysis/                # Developer-machine tooling (Python 3.10+)
-        ├── ha_matter_map.py     # HA WS API → label/node_id/ext_mac mapping
-        └── analyze.py           # Per-palier and per-sensor stats (stdlib only)
+        ├── map-ha-devices.py    # HA WS API → label/node_id/ext_mac mapping
+        └── analyze-results.py   # Per-condition and per-sensor stats (stdlib only)
 ```
 
 See [`range-testing/README.md`](range-testing/README.md) for the test

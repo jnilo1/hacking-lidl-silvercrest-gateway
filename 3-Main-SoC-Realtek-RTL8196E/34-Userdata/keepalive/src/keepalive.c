@@ -10,10 +10,16 @@
  *
  * Written in C on purpose: the supervisor must outlive long-running services
  * without itself executing the busybox ash interpreter, whose long-lived loops
- * take intermittent SIGSEGV/SIGILL on this platform (issue #109 — the S70otbr
+ * were then taking intermittent SIGSEGV/SIGILL here (issue #109 — the S70otbr
  * monitor sub-shell; the same fault class that retired the s40button shell
- * loop in v3.3.1). A C parent blocked in waitpid() never runs ash, so it
- * cannot hit that fault and can reliably restart whatever it supervises.
+ * loop in v3.3.1). A C parent blocked in waitpid() never runs ash.
+ *
+ * That fault class no longer exists: it was root-caused to our own
+ * local_flush_tlb_all() sweeping from a hardcoded TLB index instead of the
+ * Wired boundary (0 on this core, so slots 0-7 were never invalidated) and
+ * fixed. Do not cite it as a reason to avoid ash in new code. C is still the
+ * right shape for a supervisor for its own reasons — a parent that blocks in
+ * waitpid() forks nothing per cycle and has no shell of its own to reap.
  *
  * Usage: keepalive [-n NAME] CMD [ARG...]
  *   -n NAME   tag for syslog messages (default: basename of CMD)

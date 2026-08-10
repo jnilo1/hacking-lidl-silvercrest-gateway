@@ -21,24 +21,39 @@ DROPBEAR_OPTS="-p 22 -K 300"
 KEYDIR="/etc/dropbear"
 PIDFILE="/var/run/dropbear.pid"
 
-# Generate server keys only once at the first login
+# Generate server keys only once, on the first boot.
+#
+# No RSA host key. Measured on this SoC: ed25519 takes 0.2 s, ecdsa 0.3 s, and
+# RSA-2048 takes 32 s — sixty-five times the other two together. This function
+# runs synchronously in the boot sequence, so that cost used to delay every
+# service after it while the network was already up: the gateway answered ping
+# but refused SSH for half a minute, which reads as a hang.
+#
+# Dropbear is started without -r and without -R, so it serves exactly the host
+# keys that exist here and offers no other algorithm. ed25519 has been accepted
+# by OpenSSH since 6.5 and PuTTY since 0.68, ecdsa by OpenSSH since 5.7, so any
+# client of the last decade connects. This is the HOST key only — logging in
+# with an RSA *user* key is unaffected.
+#
+# Gateways installed before this change keep the RSA key they already have:
+# nothing here deletes keys, and etc/dropbear is preserved across upgrades, so
+# no one gets a host-key-changed warning. Anyone who needs RSA for an old client
+# can create it once:
+#
+#   dropbearkey -t rsa -f /userdata/etc/dropbear/dropbear_rsa_host_key && reboot
 generate_keys() {
-    echo "🔐 Checking Dropbear host keys..."
+    echo "  dropbear: checking host keys"
 
     mkdir -p "$KEYDIR"
     chmod 700 "$KEYDIR"
-    [ -f "$KEYDIR/dropbear_rsa_host_key" ] || {
-        echo "🔑 Generating RSA host key..."
-        dropbearkey -t rsa -f "$KEYDIR/dropbear_rsa_host_key"
-    }
 
     [ -f "$KEYDIR/dropbear_ecdsa_host_key" ] || {
-        echo "🔑 Generating ECDSA host key..."
+        echo "  dropbear: generating ECDSA host key"
         dropbearkey -t ecdsa -f "$KEYDIR/dropbear_ecdsa_host_key"
     }
 
     [ -f "$KEYDIR/dropbear_ed25519_host_key" ] || {
-        echo "🔑 Generating ED25519 host key..."
+        echo "  dropbear: generating ED25519 host key"
         dropbearkey -t ed25519 -f "$KEYDIR/dropbear_ed25519_host_key"
     }
 }
@@ -53,11 +68,11 @@ case "$1" in
 start)
     fix_permissions
     generate_keys
-    echo "🚀 Starting Dropbear with options: $DROPBEAR_OPTS"
+    echo "  dropbear: sshd started ($DROPBEAR_OPTS)"
     dropbear $DROPBEAR_OPTS
     ;;
 stop)
-    echo "🔴 Stopping Dropbear..."
+    echo "  dropbear: stopped"
     if [ -f "$PIDFILE" ]; then
         kill "$(cat "$PIDFILE")" && rm -f "$PIDFILE"
     else
@@ -70,7 +85,7 @@ restart)
     "$0" start
     ;;
 *)
-    echo "ℹ️  Usage: $0 {start|stop|restart}"
+    echo "Usage: $0 {start|stop|restart}"
     exit 1
     ;;
 esac

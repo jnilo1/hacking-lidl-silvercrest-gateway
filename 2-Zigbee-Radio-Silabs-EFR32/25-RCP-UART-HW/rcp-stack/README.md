@@ -33,10 +33,10 @@ RCP (EFR32) ←kernel UART bridge (TCP:8888)→ cpcd ←CPC→ zigbeed ←PTY→
           │
           │ TCP :8888 (in-kernel UART bridge)
           ▼
-   ┌─────────────────┐
-   │  Lidl Gateway   │
-   │  (RCP firmware) │
-   └─────────────────┘
+   ┌──────────────────┐
+   │ RTL8196E Gateway │
+   │  (RCP firmware)  │
+   └──────────────────┘
 ```
 
 ## Prerequisites

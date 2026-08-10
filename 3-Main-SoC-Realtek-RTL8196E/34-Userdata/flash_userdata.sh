@@ -5,14 +5,19 @@
 # then uploads it to the device in download mode via TFTP.
 #
 # Usage: ./flash_userdata.sh [IP]
-#   IP - Target IP (default: 192.168.1.6)
+#   IP - Target IP in bootloader mode. Defaults to BOOT_IP, then gateway.env,
+#        then an address on this host's own segment (see lib/gwconf.sh).
 #
 # Environment variables (optional, for non-interactive use):
 #   NET_MODE       - "static" or "dhcp" (skip network prompt)
-#   IPADDR         - Static IP address (default: 192.168.1.88)
-#   NETMASK        - Netmask (default: 255.255.255.0)
-#   GATEWAY        - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE     - "zigbee" or "thread" (skip radio prompt)
+#   IPADDR         - Static IP address for the gateway
+#   NETMASK        - Netmask
+#   GATEWAY        - Default gateway
+#
+# Unset network values are not fixed constants: they fall back to gateway.env,
+# then to the last install, then to an address derived from THIS host's own LAN
+# (see lib/gwconf.sh and gateway.env.example), and only then to the project's
+# historic 192.168.1.x.
 #   CONFIRM        - Set to "y" to skip the "Proceed?" prompt
 #   TRIES          - ARP probe attempts (default: 10)
 #   PORT           - UDP port used to trigger ARP (default: 69)
@@ -23,7 +28,16 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET_IP="${1:-192.168.1.6}"
+# Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
+. "$SCRIPT_DIR/../../lib/flash_tftp.sh"
+# Host-side gateway config: network proposals derived from this machine's LAN,
+# and the write-back that remembers what we install. See lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../lib/gwconf.sh"
+# Bootloader-mode address: argument > BOOT_IP env > gateway.env > the
+# bootloader's compiled default. NOT derived from this host's LAN: the gateway is
+# already at a bootloader prompt (lib/gwconf.sh, gwconf_cold_boot_ip).
+TARGET_IP="${1:-${BOOT_IP:-$(gwconf_cold_boot_ip)}}"
 
 # Check prerequisites
 tftp_usage="$(tftp --help 2>&1 || true)"
@@ -55,12 +69,25 @@ else
 fi
 
 ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
-RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
+ETH0_BAK="${SKEL_WORK}/etc/eth0.bak"
 
 # --- Network configuration -------------------------------------------------
 
 # "skip" = config already in skeleton (preserved by caller)
-if [ "${NET_MODE:-}" != "skip" ]; then
+if [ "${NET_MODE:-}" = "skip" ]; then
+    # Record the preserved config so the host-side tools keep pointing at this
+    # box after the flash. No eth0.conf means the gateway was on DHCP.
+    if [ -f "$ETH0_CONF" ]; then
+        keep_ip="$(gwconf_read_key "$ETH0_CONF" IPADDR  || true)"
+        keep_mask="$(gwconf_read_key "$ETH0_CONF" NETMASK || true)"
+        keep_gw="$(gwconf_read_key "$ETH0_CONF" GATEWAY || true)"
+        gwconf_record_install static "$keep_ip" "$keep_mask" "$keep_gw"
+        gwconf_write_eth0_bak "$ETH0_BAK" "$keep_ip" "$keep_mask" "$keep_gw"
+    else
+        gwconf_record_install dhcp
+        gwconf_write_eth0_bak "$ETH0_BAK"
+    fi
+else
     if [ -n "${NET_MODE:-}" ]; then
         net_choice="$NET_MODE"
     else
@@ -72,14 +99,19 @@ if [ "${NET_MODE:-}" != "skip" ]; then
     fi
 
     if [ "$net_choice" = "static" ] || [ "$net_choice" = "1" ]; then
+        # Proposals come from what was configured or installed before, else from
+        # this host's own LAN, else from the historic 192.168.1.x constants —
+        # never a fixed subnet the user may not be on.
+        gwconf_suggest_static
         if [ -z "${NET_MODE:-}" ]; then
-            read -r -p "IP address [192.168.1.88]: " IPADDR
-            read -r -p "Netmask    [255.255.255.0]: " NETMASK
-            read -r -p "Gateway    [192.168.1.1]:   " GATEWAY
+            echo "Proposed defaults: ${GWCONF_SUGGEST_SOURCE}."
+            read -r -p "IP address [${GWCONF_SUGGEST_IPADDR}]: " IPADDR
+            read -r -p "Netmask    [${GWCONF_SUGGEST_NETMASK}]: " NETMASK
+            read -r -p "Gateway    [${GWCONF_SUGGEST_GATEWAY}]:   " GATEWAY
         fi
-        IPADDR="${IPADDR:-192.168.1.88}"
-        NETMASK="${NETMASK:-255.255.255.0}"
-        GATEWAY="${GATEWAY:-192.168.1.1}"
+        IPADDR="${IPADDR:-$GWCONF_SUGGEST_IPADDR}"
+        NETMASK="${NETMASK:-$GWCONF_SUGGEST_NETMASK}"
+        GATEWAY="${GATEWAY:-$GWCONF_SUGGEST_GATEWAY}"
         printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
         # Optional DNS/domain (defaults: gateway IP, no search domain)
         if [ -z "${NET_MODE:-}" ]; then
@@ -89,43 +121,37 @@ if [ "${NET_MODE:-}" != "skip" ]; then
         [ -n "${DNS:-}" ] && echo "DNS=$DNS" >> "$ETH0_CONF"
         [ -n "${DOMAIN:-}" ] && echo "DOMAIN=$DOMAIN" >> "$ETH0_CONF"
         echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+        [ -z "${NET_MODE:-}" ] && gwconf_warn_if_taken "$IPADDR" "address"
+        gwconf_record_install static "$IPADDR" "$NETMASK" "$GATEWAY"
+        # The device's DHCP-failure fallback, in the same subnet.
+        gwconf_write_eth0_bak "$ETH0_BAK" "$IPADDR" "$NETMASK" "$GATEWAY"
 
-        # Update gateway IP in Docker Compose and Z2M config files
+        # Hand the address to the host-side Docker stacks. This used to sed the
+        # address into the committed compose file and into z2m/configuration.yaml,
+        # which left the working tree dirty after every install. The OTBR compose
+        # file now reads RCP_HOST from this .env instead — Compose picks it up
+        # automatically from the compose file's own directory — and .env is
+        # gitignored. Zigbee2MQTT reads its port from configuration.yaml, which
+        # the docs already have the user edit, so we print the value rather than
+        # rewrite a tracked file behind their back.
         DOCKER_DIR="${SCRIPT_DIR}/../../2-Zigbee-Radio-Silabs-EFR32/26-OT-RCP/docker"
-        if [ -d "$DOCKER_DIR" ]; then
-            sed -i "s|RCP_HOST=[0-9.]*|RCP_HOST=${IPADDR}|" \
-                "$DOCKER_DIR/docker-compose-otbr-host.yml" 2>/dev/null || true
-            sed -i "s|tcp://[0-9.]*:8888|tcp://${IPADDR}:8888|" \
-                "$DOCKER_DIR/z2m/configuration.yaml" 2>/dev/null || true
+        if [ -d "$DOCKER_DIR" ] && [ -w "$DOCKER_DIR" ]; then
+            if {
+                   echo "# Written by flash_userdata.sh — the gateway address the"
+                   echo "# compose files in this directory point at. Safe to edit."
+                   echo "RCP_HOST=${IPADDR}"
+               } > "$DOCKER_DIR/.env" 2>/dev/null; then
+                echo "→ OTBR docker stack pointed at ${IPADDR} (26-OT-RCP/docker/.env)"
+                echo "  For the Zigbee2MQTT stack, set this in 26-OT-RCP/docker/z2m/configuration.yaml:"
+                echo "      serial: { port: tcp://${IPADDR}:8888 }"
+            fi
         fi
     else
         rm -f "$ETH0_CONF"
         echo "→ DHCP"
-    fi
-fi
-
-# --- Radio mode configuration ----------------------------------------------
-
-if [ "${RADIO_MODE:-}" = "skip" ]; then
-    : # config already in skeleton (preserved by caller)
-elif [ -n "${RADIO_MODE:-}" ]; then
-    radio_choice="$RADIO_MODE"
-else
-    echo ""
-    echo "Radio mode (EFR32 firmware must match):"
-    echo "  [1] Zigbee — in-kernel UART bridge on port 8888 (NCP or RCP+zigbeed)"
-    echo "  [2] Thread — OTBR border router, REST API on port 8081 (OT-RCP)"
-    read -r -p "Choice [1]: " radio_choice
-    radio_choice="${radio_choice:-1}"
-fi
-
-if [ "${RADIO_MODE:-}" != "skip" ]; then
-    if [ "${radio_choice:-}" = "thread" ] || [ "${radio_choice:-}" = "2" ]; then
-        echo "MODE=otbr" > "$RADIO_CONF"
-        echo "→ Thread Border Router (otbr-agent)"
-    else
-        rm -f "$RADIO_CONF"
-        echo "→ Zigbee (in-kernel UART bridge)"
+        gwconf_record_install dhcp
+        # No lease may ever arrive: leave a reachable fallback behind.
+        gwconf_write_eth0_bak "$ETH0_BAK"
     fi
 fi
 
@@ -217,13 +243,10 @@ nc_pid=$!
 sleep 0.2
 
 echo "Note: userdata is 12 MB — transfer and flash may take 1-2 minutes."
-echo "Uploading..."
 cd "$SCRIPT_DIR"
-out=$(timeout 120 tftp -m binary "$TARGET_IP" -c put userdata.bin 2>&1) || true
-if echo "$out" | grep -qiE \
-    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+if ! tftp_put_safe "$TARGET_IP" userdata.bin 3 120 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
-    echo "Error: transfer failed: $out" >&2
+    echo "Error: transfer failed after retries." >&2
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."

@@ -1,0 +1,11 @@
+--- a/arch/mips/Makefile
++++ b/arch/mips/Makefile
+@@ -187,6 +187,8 @@
+ 			$(call cc-option,-march=loongson3a,-march=mips64r2) -Wa,--trap
+ cflags-$(CONFIG_CPU_LOONGSON64) += $(call cc-option,-mno-loongson-mmi)
+ 
++cflags-$(CONFIG_CPU_RLX4181)	+= -march=lx4380
++
+ cflags-$(CONFIG_CPU_R4000_WORKAROUNDS)	+= $(call cc-option,-mfix-r4000,)
+ cflags-$(CONFIG_CPU_R4400_WORKAROUNDS)	+= $(call cc-option,-mfix-r4400,)
+ cflags-$(CONFIG_CPU_DADDI_WORKAROUNDS)	+= $(call cc-option,-mno-daddi,)

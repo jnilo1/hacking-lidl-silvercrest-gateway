@@ -78,9 +78,9 @@ network name, channel, security key, and other parameters needed to join the
 network. During Matter commissioning, this dataset is transferred to the
 device over BLE.
 
-### What Role Does the Lidl Gateway Play?
+### What Role Does the Gateway Play?
 
-In this project, the Lidl gateway is a **Radio Co-Processor (RCP)** — it is
+In this project, the gateway is a **Radio Co-Processor (RCP)** — it is
 **not** a Thread router or border router. The EFR32 chip only handles the
 802.15.4 radio layer (transmit/receive frames). All Thread networking logic
 runs on the Docker host in the OTBR container.
@@ -102,7 +102,7 @@ runs on the Docker host in the OTBR container.
 └────────────────┼─────────────────────────────────────┘
                  │
      ┌───────────┼───────────┐
-     │  Lidl Gateway (RCP)   │
+     │     Gateway (RCP)     │
      │  ┌────────┴────────┐  │
      │  │  kernel UART     │  │
      │  │  bridge (TCP↔UART)│ │
@@ -171,11 +171,14 @@ you just "permit join" and hope), Matter uses a secure, deliberate process:
 This is fundamentally different from Zigbee pairing, which happens entirely
 over 802.15.4.
 
-**Matter Server (python-matter-server)**
+**Matter Server (matterjs-server)**
 The Matter "controller" that manages your fabric — it holds the encryption
 keys, the list of commissioned devices, and handles communication with them.
 In this project, it runs as a Docker container. Think of it as the equivalent
-of Zigbee2MQTT but for Matter devices.
+of Zigbee2MQTT but for Matter devices. The implementation is
+[matterjs-server](https://github.com/matter-js/matterjs-server) (matter.js),
+the same code Home Assistant ships as its "Matter Server" add-on; the earlier
+Python implementation, `python-matter-server`, is frozen and no longer updated.
 
 **Matter Controller (Home Assistant / Companion App)**
 The user interface that talks to the Matter Server. Home Assistant is the

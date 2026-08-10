@@ -2,6 +2,11 @@
 
 This directory contains the root filesystem for the gateway.
 
+> **Board- and kernel-agnostic:** the same `rootfs.bin` works for every board
+> (`lidl`, `sengled-e39-g8c`) and kernel line (`6.18`, `7.1`) — board specifics
+> live in the device tree and bootloader, persistent config in `/userdata`. No
+> `BOARD`/`KERNEL` selection applies here.
+
 ## Overview
 
 The root filesystem is a minimal Linux system based on:
@@ -111,11 +116,11 @@ This allows you to enable/disable applets (utilities), adjust features, and opti
 Dropbear is a lightweight SSH server designed for embedded systems. The build script supports version selection:
 
 ```bash
-# Default version (2025.89)
+# Default version (2026.94)
 ./build_dropbear.sh
 
 # Specific version
-./build_dropbear.sh 2024.86
+./build_dropbear.sh 2025.89
 ```
 
 The build produces a multi-call binary (`dropbearmulti`) with symlinks for `dropbear` and `dropbearkey`.

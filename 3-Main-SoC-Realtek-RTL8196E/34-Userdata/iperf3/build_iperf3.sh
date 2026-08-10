@@ -6,13 +6,14 @@
 # License: BSD-3-Clause
 #
 # Like the sibling ethtool/ build, this component is NOT installed in
-# skeleton/usr/bin/. The binary lives under build/iperf3 here and is left
-# for the operator to copy on demand. iperf3 is a perf-tuning tool, not
+# skeleton/usr/bin/. The cross-compiled binary is written next to this
+# script (./iperf3, same directory level) and committed, left for the
+# operator to copy on demand. iperf3 is a perf-tuning tool, not
 # something most users need; keeping it out of the default 12 MB JFFS2
 # image leaves room for OTBR + nano + s40button + boothold without juggling.
 #
 # Deploy on a running gateway with:
-#   scp -O build/iperf3 root@<gateway-ip>:/userdata/usr/bin/
+#   scp -O iperf3 root@<gateway-ip>:/userdata/usr/bin/
 #
 # /userdata/usr/bin is in PATH and is JFFS2-persistent across reboots.
 #
@@ -32,7 +33,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
 VERSION="${1:-3.18}"
 SOURCE_DIR="${SCRIPT_DIR}/iperf-${VERSION}"
-BUILD_DIR="${SCRIPT_DIR}/build"
+OUT_BIN="${SCRIPT_DIR}/iperf3"   # installed next to this script and committed
 
 # Lexra toolchain (musl)
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
@@ -44,7 +45,13 @@ export CC="${CROSS_COMPILE}gcc"
 export AR="${CROSS_COMPILE}ar"
 export RANLIB="${CROSS_COMPILE}ranlib"
 export STRIP="${CROSS_COMPILE}strip"
-export CFLAGS="-Os -fno-stack-protector"
+# -Wno-error=incompatible-pointer-types: iperf-3.18's public callback setters
+# (iperf_set_on_*_callback in src/iperf_api.c) are declared K&R-style as
+# "void (*callback)()" and assigned to typed members. GCC 14+ promotes
+# -Wincompatible-pointer-types from a warning to a hard error by default, so
+# the build aborts with the current Lexra toolchain (GCC 15.x). Downgrading it
+# back to a warning keeps the build working; harmless on older compilers.
+export CFLAGS="-Os -fno-stack-protector -Wno-error=incompatible-pointer-types"
 # LDFLAGS at configure time: hardening flags only. iperf3 is libtool-built;
 # libtool intercepts a bare "-static" and silently drops it. The fully-static
 # link is forced at make time via LDFLAGS="-all-static" below — that's the
@@ -82,23 +89,22 @@ cd "${SOURCE_DIR}"
 
 make LDFLAGS="-all-static -Wl,-z,noexecstack,-z,relro,-z,now"
 
-mkdir -p "${BUILD_DIR}"
 ${STRIP} src/iperf3
-cp -f src/iperf3 "${BUILD_DIR}/iperf3"
+cp -f src/iperf3 "${OUT_BIN}"
 
-SIZE=$(ls -lh "${BUILD_DIR}/iperf3" | awk '{print $5}')
+SIZE=$(ls -lh "${OUT_BIN}" | awk '{print $5}')
 
 echo ""
 echo "========================================="
 echo "  BUILD SUMMARY"
 echo "========================================="
 echo "  Version: ${VERSION}"
-echo "  Binary:  ${BUILD_DIR}/iperf3 (${SIZE})"
+echo "  Binary:  ${OUT_BIN} (${SIZE})"
 echo ""
 echo "  iperf3 is intentionally NOT installed in skeleton/usr/bin/."
 echo "  To deploy on a running gateway:"
 echo ""
-echo "    scp -O ${BUILD_DIR}/iperf3 root@<gateway>:/userdata/usr/bin/"
+echo "    scp -O ${OUT_BIN} root@<gateway>:/userdata/usr/bin/"
 echo ""
 echo "  Then on the gateway (server side):"
 echo "    iperf3 -s"

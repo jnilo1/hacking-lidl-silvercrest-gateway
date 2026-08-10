@@ -1,105 +1,147 @@
-# Lidl / Silvercrest Zigbee Gateway — Hardware Overview
+# Lidl / Silvercrest Gateway Hardware
 
-This section provides a detailed breakdown of the Lidl Silvercrest Zigbee
-gateway's hardware. It includes component identification, debug interface
-pinout, and serial specifications to help you understand and repurpose the
-device.
+This page documents the Lidl Silvercrest / Tuya reference board: case opening,
+the J1 serial/SWD header, PCB identification, and the main components.
 
-______________________________________________________________________
+If you are preparing a first installation, use this page to identify the
+connector, then return to the
+[step-by-step installation guide](../docs/getting-started.md). Sengled owners
+must use the [Sengled Smart Hub G4 hardware page](./sengled-e39-g8c/README.md)
+because its PCB and debug connector are different.
 
-## 🧱 Physical Construction
+## Safety and tools
 
-- Screwless case held by 8 plastic clips evenly distributed along the edges
-- Clips require careful prying to open the lid
-- Single PCB housing all components
+- Disconnect the normal power supply before opening the case or moving wires.
+- Use a **3.3 V TTL** USB-to-UART adapter, not RS-232 and not 5 V logic.
+- Do not power the gateway from the UART adapter.
+- J1 is not populated at the factory. A 2.54 mm header can be soldered in, or
+  suitable test hooks can be used if they make reliable contact.
+- Avoid loose probes during a flash; an intermittent ground or serial contact
+  can turn a recoverable operation into a difficult recovery.
 
-______________________________________________________________________
+## Open the case
 
-## 📸 Main PCB Overview
+The case has no screws. Eight plastic clips are distributed around the edges.
+Work gradually around the perimeter with a non-conductive opening tool rather
+than forcing one corner. Remove the PCB only after power is disconnected.
+
+## PCB overview and J1 location
+
+The **cyan rectangle** in this photo marks J1, the vertical six-pin connector
+used for the RTL8196E serial console and EFR32 SWD signals.
 
 <p align="center">
-  <img src="./media/image1.png" alt="Lidl gateway board" width="70%">
+  <img src="./media/image1.png" alt="Lidl gateway PCB with J1 highlighted in cyan, flash in green, RTL8196E in red, RAM in purple, and EFR32 module in yellow" width="75%">
 </p>
 
-______________________________________________________________________
+The other highlighted components are:
 
-## 🔩 Main Components
+- **red** — RTL8196E main processor;
+- **green** — 16 MiB SPI NOR flash;
+- **purple** — 32 MiB SDRAM;
+- **yellow** — TYZS4 module containing the EFR32 radio.
 
-### 1. Main Processor (U2) — _Red Box_
+## J1 pinout
 
-- **SoC**:
-  [Realtek RTL8196E](./datasheet/RTL8196E-CG-datasheet.PDF)
-- 32-bit Lexra RLX4181 core (MIPS32-compatible, big-endian)
-- Lacks unaligned memory access; uses MIPS16e compressed instructions
-- Runs at 400 MHz
-- Embedded Ethernet switch with 3 logical interfaces: `eth0`, `eth1`, and
-  `peth0` (virtual)
-- Serial: two 16550A-compatible UARTs at MMIO addresses `0x18002000` and
-  `0x18002100`
-- SPI controller used to access external NOR flash
+Pin 1 is the bottom pin in the documented board orientation shown above.
 
-### 2. Flash Memory (U3) — _Green Box_
+| Pin | Signal | First-install use |
+| --- | --- | --- |
+| 1 | 3.3 V VCC | Leave disconnected |
+| 2 | Ground | UART adapter GND |
+| 3 | RTL8196E serial TX | UART adapter RX |
+| 4 | RTL8196E serial RX | UART adapter TX |
+| 5 | EFR32 SWDIO | Do not connect for a normal install |
+| 6 | EFR32 SWCLK | Do not connect for a normal install |
 
-- 16MB SPI NOR Flash
-  ([GD25Q127](./datasheet/GD25Q127C_datasheet.pdf))
-- 64KB erase blocks
-- Stores bootloader, Linux kernel, SquashFS rootfs, and JFFS2 persistent
-  data
+The three-wire serial connection is therefore:
 
-### 3. RAM (U5) — _Purple Box_
+```text
+Gateway J1 pin 2 GND  --------  adapter GND
+Gateway J1 pin 3 TX   --------  adapter RX
+Gateway J1 pin 4 RX   --------  adapter TX
+Gateway normal power supply    (adapter VCC not connected)
+```
 
-- 32MB SDRAM
-  ([ESMT M13S2561616A](https://www.alldatasheet.com/datasheet-pdf/pdf/302727/ESMT/M13S2561616A.html))
-  or equivalent
+TX and RX are intentionally crossed. The UART adapter is a signal interface,
+not the gateway power source.
 
-### 4. Zigbee Module (CN1) — _Yellow Box_
+## RTL8196E serial console settings
 
-- [Tuya TYZS4](./datasheet/Tuya%20TYZS4%20datasheet.pdf)
-- Based on Silicon Labs
-  [EFR32MG1B232F256GM48](./datasheet/EFR32MG1-datasheet.pdf)
-- ARM Cortex-M4 core with integrated Zigbee stack
-- Connected to RTL8196E via UART1
-- Hosts the Zigbee firmware (typically NCP/UART)
+| Setting | Value |
+| --- | --- |
+| Logic level | 3.3 V TTL |
+| Speed | 38400 baud |
+| Data format | 8 data bits, no parity, 1 stop bit (8N1) |
+| Flow control | None |
 
-### 5. Debug/Programming Interface (J1) — _Cyan Box_
+Example with picocom:
 
-- Combined serial + SWD debug port
-- Not populated by default (2.54mm header needed)
-- Pinout:
-  ```
-  Pin 1: 3.3V VCC (bottom)
-  Pin 2: Ground
-  Pin 3: U2 Serial TX
-  Pin 4: U2 Serial RX
-  Pin 5: Zigbee module SWDIO
-  Pin 6: Zigbee module SWCLK
-  ```
+```bash
+picocom --baud 38400 --flow n /dev/ttyUSB0
+```
 
-______________________________________________________________________
+Power on the gateway and press `Esc` repeatedly to stop at the `<RealTek>`
+bootloader prompt. Serial text that is unreadable usually means the baud is
+wrong; no text usually means the device, ground, TX/RX, or contact is wrong.
+See [Troubleshooting](../docs/troubleshooting.md#no-readable-serial-output).
 
-## 🔌 Serial Port Specifications
+## Main components
 
-- Logic level: TTL 3.3V
-- Baud rate: 38400 bps
-- Configuration: 8 data bits, no parity, 1 stop bit (8N1)
+### RTL8196E main processor (U2)
 
-______________________________________________________________________
+- Realtek RTL8196E with a 32-bit Lexra RLX4181 core
+- 400 MHz CPU
+- integrated Ethernet switch
+- SPI controller for external NOR flash
+- two 16550A-compatible UARTs at MMIO `0x18002000` and `0x18002100`
 
-## 🧩 Additional Components
+The RTL8196E runs the custom bootloader and Linux. UART0 is the J1 console;
+UART1 connects to the EFR32 radio.
 
-- Ethernet magnetics
-- Status LEDs:
-  - Ethernet activity
-  - Zigbee communication
-- Clearly labeled test points on PCB (Side B)
-- Supporting discrete components (caps, resistors, etc.)
+Datasheet: [RTL8196E-CG](./datasheet/RTL8196E-CG-datasheet.PDF).
 
-______________________________________________________________________
+### SPI NOR flash (U3)
 
-## 🧠 Design Summary
+- GigaDevice GD25Q127C family
+- 16 MiB capacity
+- 64 KiB erase blocks
+- stores bootloader, Linux kernel, read-only rootfs, and persistent userdata
 
-- Clean, well-structured single-board design
-- Minimalist layout with clearly separated domains (SoC / Zigbee)
-- Accessible debug interface and test points for hardware hacking
-- Suitable for firmware customization and hardware-based reverse
-  engineering
+Datasheet: [GD25Q127C](./datasheet/GD25Q127C_datasheet.pdf).
+
+### SDRAM (U5)
+
+- 32 MiB SDRAM
+- ESMT M13S2561616A or equivalent
+
+### TYZS4 radio module (CN1)
+
+- Tuya TYZS4 module
+- Silicon Labs EFR32MG1B232F256GM48
+- ARM Cortex-M4 with IEEE 802.15.4 radio
+- connected to RTL8196E UART1
+- can run NCP, RCP, OT-RCP, or standalone Zigbee router firmware
+
+Datasheets: [TYZS4](./datasheet/Tuya%20TYZS4%20datasheet.pdf) and
+[EFR32MG1](./datasheet/EFR32MG1-datasheet.pdf).
+
+## Two debug functions, two use cases
+
+J1 combines unrelated interfaces:
+
+- **Pins 2–4, UART0** — RTL8196E console. This is what a normal first Linux
+  installation uses.
+- **Pins 1, 2, 5, 6, SWD** — low-level EFR32 programming. This is required only
+  for a virgin/corrupted EFR32 Stage-1 bootloader or specialist recovery.
+
+Do not confuse the first-install UART connection with the internal UART1 link
+between the two chips. The user-facing serial console runs at 38400; EFR32
+applications normally run at 115200 or faster on a different UART.
+
+## Next steps
+
+- [First installation](../docs/getting-started.md)
+- [Backup and restore](../3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/README.md)
+- [Choose a radio mode](../docs/radio-options.md)
+- [Sengled Smart Hub G4 hardware](./sengled-e39-g8c/README.md)

@@ -1,0 +1,13 @@
+--- a/arch/mips/include/asm/cpu-type.h
++++ b/arch/mips/include/asm/cpu-type.h
+@@ -104,6 +104,10 @@
+ 	case CPU_R3081E:
+ #endif
+ 
++#ifdef CONFIG_SYS_HAS_CPU_RLX4181
++	case CPU_RLX4181:
++#endif
++
+ #ifdef CONFIG_SYS_HAS_CPU_R4300
+ 	case CPU_R4300:
+ 	case CPU_R4310:

@@ -23,7 +23,7 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 SOURCE_DIR="${SCRIPT_DIR}/src"
 INSTALL_DIR="${USERDATA_PART}/skeleton/usr/sbin"
 
-VERSION="2.0"
+VERSION="2.1"
 
 if [ ! -f "${SOURCE_DIR}/s40button.c" ]; then
     echo "Error: source file not found in ${SOURCE_DIR}"

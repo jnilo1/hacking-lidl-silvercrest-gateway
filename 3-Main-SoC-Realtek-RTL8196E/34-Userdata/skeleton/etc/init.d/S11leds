@@ -42,15 +42,15 @@ case "$1" in
         case "$MODE" in
             off)
                 echo off > "$LED_MODE"
-                echo "LEDs: off"
+                echo "  leds: off"
                 ;;
             dim)
                 echo dim > "$LED_MODE"
-                echo "LEDs: dim mode (STATUS LED idle until a service lights it)"
+                echo "  leds: dim mode (status LED idle until a service lights it)"
                 ;;
             *)
                 echo bright > "$LED_MODE"
-                echo "LEDs: bright mode (STATUS LED idle until a service lights it)"
+                echo "  leds: bright mode (status LED idle until a service lights it)"
                 ;;
         esac
         ;;

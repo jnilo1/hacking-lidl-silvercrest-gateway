@@ -1,0 +1,10 @@
+--- a/arch/mips/lib/memcpy.S
++++ b/arch/mips/lib/memcpy.S
+@@ -656,6 +656,7 @@
+  * the number of uncopied bytes.
+  * memcpy sets v0 to dst.
+  */
++	.section .iram, "ax"
+ 	.align	5
+ LEAF(memcpy)					/* a0=dst a1=src a2=len */
+ EXPORT_SYMBOL(memcpy)

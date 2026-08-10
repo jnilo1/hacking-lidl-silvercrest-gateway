@@ -19,7 +19,13 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-BOOT_IP="${BOOT_IP:-192.168.1.6}"
+# Host-side gateway address resolution — see lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/gwconf.sh"
+# Bootloader-mode address: flag > BOOT_IP env > gateway.env > the bootloader's
+# compiled default. NOT derived from this host's LAN: the gateway is already at a
+# bootloader prompt and cannot be told to move (lib/gwconf.sh, gwconf_cold_boot_ip).
+BOOT_IP="${BOOT_IP:-$(gwconf_cold_boot_ip)}"
 IMAGE=""
 
 # --- argument parsing --------------------------------------------------------
@@ -34,7 +40,7 @@ while [ $# -gt 0 ]; do
             echo "The gateway must be in bootloader mode (<RealTek> prompt)."
             echo ""
             echo "Options:"
-            echo "  --boot-ip ADDR   Gateway IP in bootloader mode (default: 192.168.1.6)"
+            echo "  --boot-ip ADDR   Gateway IP in bootloader mode (default: ${BOOT_IP})"
             echo ""
             echo "Environment variables: BOOT_IP"
             exit 0

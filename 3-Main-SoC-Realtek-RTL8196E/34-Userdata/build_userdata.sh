@@ -3,7 +3,8 @@
 #
 # By default, this script packages the JFFS2 image from the binaries already
 # committed in skeleton/usr/bin/ — boothold, nano, otbr-agent, ot-ctl, vi —
-# and skeleton/usr/sbin/ — s40button.
+# and skeleton/usr/sbin/ — s40button and friends.  WireGuard is NOT built or
+# installed here: see wireguard/README.md.
 # It does NOT rebuild those binaries in the default flow.
 #
 # To rebuild all userland binaries (boothold, s40button, nano, otbr-agent,
@@ -150,6 +151,8 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
     echo "========================================="
     echo "  boothold          reboot-to-bootloader helper"
     echo "  s40button         front-panel button daemon"
+    echo "  keepalive         process supervisor (issue #109)"
+    echo "  otbr-monitor      OTBR housekeeping daemon (C)"
     echo "  nano              editor (with vi symlink)"
     echo "  otbr-agent+ot-ctl OpenThread Border Router (~30 min on first run)"
     echo ""
@@ -190,6 +193,18 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
     fi
     echo ""
 
+    # Build otbr-monitor (C rewrite of the ash housekeeping loop, #109)
+    echo "========================================="
+    echo "  BUILDING OTBR-MONITOR"
+    echo "========================================="
+    if [ -x "${SCRIPT_DIR}/otbr-monitor/build_otbr-monitor.sh" ]; then
+        "${SCRIPT_DIR}/otbr-monitor/build_otbr-monitor.sh"
+    else
+        echo "Error: otbr-monitor/build_otbr-monitor.sh not found or not executable"
+        exit 1
+    fi
+    echo ""
+
     # Clean previous nano binaries, then rebuild
     rm -f "${INSTALL_DIR}/nano" "${INSTALL_DIR}/vi"
 
@@ -216,6 +231,7 @@ if [ "$BUILD_COMPONENTS" -eq 1 ]; then
         exit 1
     fi
     echo ""
+
 fi
 
 # Stop here if the caller asked for components only

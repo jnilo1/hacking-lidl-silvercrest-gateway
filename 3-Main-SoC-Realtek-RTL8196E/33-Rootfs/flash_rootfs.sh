@@ -4,7 +4,8 @@
 # The device must be in download mode (<RealTek> prompt) before running.
 #
 # Usage: ./flash_rootfs.sh [IP]
-#   IP - Target IP (default: 192.168.1.6)
+#   IP - Target IP in bootloader mode. Defaults to BOOT_IP, then gateway.env,
+#        then an address on this host's own segment (see lib/gwconf.sh).
 #
 # Environment variables (optional, for non-interactive use):
 #   CONFIRM=y  - Skip the "Proceed?" prompt
@@ -14,7 +15,12 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGET_IP="${1:-192.168.1.6}"
+# Shared safe-retry TFTP upload helper (probe_tftp_wrq, tftp_put_safe).
+. "$SCRIPT_DIR/../../lib/flash_tftp.sh"
+# Host-side gateway address resolution — see lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/../../lib/gwconf.sh"
+TARGET_IP="${1:-${BOOT_IP:-$(gwconf_cold_boot_ip)}}"
 IMAGE="${SCRIPT_DIR}/rootfs.bin"
 
 # Check prerequisites
@@ -95,13 +101,10 @@ notify_file=$(mktemp)
 nc_pid=$!
 sleep 0.2
 
-echo "Uploading..."
 cd "$SCRIPT_DIR"
-out=$(timeout 30 tftp -m binary "$TARGET_IP" -c put rootfs.bin 2>&1) || true
-if echo "$out" | grep -qiE \
-    "error|timeout|timed out|refused|failed|unknown host|access denied|disk full|illegal|not connected|unknown transfer"; then
+if ! tftp_put_safe "$TARGET_IP" rootfs.bin 3 30 >/dev/null; then
     kill "$nc_pid" 2>/dev/null; wait "$nc_pid" 2>/dev/null; rm -f "$notify_file"
-    echo "Error: transfer failed: $out" >&2
+    echo "Error: transfer failed after retries." >&2
     exit 1
 fi
 echo "Uploaded. Waiting for flash write..."

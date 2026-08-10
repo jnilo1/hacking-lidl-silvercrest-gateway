@@ -4,7 +4,7 @@ Cross-compilation of [ot-br-posix](https://github.com/openthread/ot-br-posix) fo
 
 ## Status
 
-Tested on the Lidl Silvercrest Zigbee gateway (RTL8196E + EFR32MG21) with
+Tested on the Lidl Silvercrest Zigbee gateway (RTL8196E + EFR32MG1B) with
 an IKEA TIMMERFLOTTE Thread sensor commissioned via Home Assistant Companion App.
 
 The gateway runs as Thread Border Router leader with ~20 MB free RAM (out of 32 MB).
@@ -187,6 +187,12 @@ otbr-agent -I wpan0 -B eth0 \
     --vendor-name "Lidl" --model-name "Silvercrest" \
     spinel+hdlc+uart:///dev/ttyS1?uart-baudrate=460800
 ```
+
+`--vendor-name`/`--model-name` become the `vn`/`mn` TXT records of the
+`_meshcop._udp` mDNS service. The values above are the Lidl ones, shown here
+because this page documents a hand-run command; on the device `S70otbr` derives
+them from the devicetree `model` property, so a Sengled G4 announces
+`Sengled`/`E39-G8C` instead.
 
 ### Using ot-ctl
 

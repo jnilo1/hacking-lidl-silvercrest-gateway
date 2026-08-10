@@ -1,0 +1,31 @@
+--- a/drivers/clocksource/Kconfig
++++ b/drivers/clocksource/Kconfig
+@@ -598,6 +598,28 @@
+ 	depends on MIPS_GIC
+ 	select TIMER_OF
+ 
++config CLKSRC_RTL819X
++	bool "Realtek RTL8196E Timer"
++	depends on MIPS || COMPILE_TEST
++	select TIMER_OF
++	help
++	  This enables the clocksource and clockevent device tested on the
++	  Realtek RTL8196E. The hardware provides two 28-bit timers and a
++	  clock divider shared with the on-chip watchdog.
++
++config RTL819X_TC0_DNT
++	bool "Avoid TC0 enable-edge rearm (experimental canary)"
++	depends on CLKSRC_RTL819X
++	default n
++	help
++	  Keep Timer0 enabled in TIMER mode and reprogram its reload value instead
++	  of generating a Timer0 enable edge for every one-shot event. This avoids
++	  a suspected slow-domain enable capture failure on RTL8196E.
++
++	  Say N for the protected COUNTER-mode verified-arm path. Say Y only for a
++	  controlled canary: this is build-time policy, with no DT, sysfs, debugfs,
++	  or userspace runtime switch.
++
+ config CLKSRC_PXA
+ 	bool "Clocksource for PXA or SA-11x0 platform" if COMPILE_TEST
+ 	depends on HAS_IOMEM

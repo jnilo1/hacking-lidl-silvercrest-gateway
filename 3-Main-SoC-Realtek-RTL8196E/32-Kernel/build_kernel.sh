@@ -1,27 +1,24 @@
 #!/bin/bash
-# build_kernel.sh — Build Linux 6.18.x for Realtek RTL8196E (Lexra MIPS)
+# build_kernel.sh — Build Linux for Realtek RTL8196E (Lexra MIPS)
 #
-# Layout:
-#   patches-6.18/, files-6.18/, config-6.18-realtek.txt  →  kernel-6.18.img
-#
-# KERNEL_VERSION pins the exact stable point release (e.g. 6.18.35).
-# KERNEL_MAJOR_MINOR is the family used in file/directory names
-# (patches-6.18/, linux-6.18-rtl8196e/, kernel-6.18.img) so point bumps
-# don't churn paths.
-#
-# Uses arch/mips/boot/compressed/ (zboot) — no external lzma or lzma-loader.
+# Two coexisting kernel lines, selected by KERNEL (default 6.18):
+#   6.18 (production)   → patches-6.18/ files-6.18/ config-6.18-realtek.txt
+#   7.1  (supported)    → patches-7.1/  files-7.1/  config-7.1-realtek.txt
+# Output: kernel-img/<board>/kernel-<KERNEL>.img (zboot; in-tree decompressor).
 #
 # Usage:
-#   ./build_kernel.sh                # build → kernel-6.18.img
-#   ./build_kernel.sh clean          # wipe build tree, rebuild from scratch
-#   ./build_kernel.sh menuconfig     # open menuconfig
-#   ./build_kernel.sh olddefconfig   # update .config non-interactively
-#   ./build_kernel.sh vmlinux        # build vmlinux only (no packaging)
+#   ./build_kernel.sh                        # 6.18 / lidl → kernel-img/lidl/kernel-6.18.img
+#   KERNEL=7.1 ./build_kernel.sh             # build the 7.1 line
+#   BOARD=sengled-e39-g8c ./build_kernel.sh  # build for the Sengled G4 board
+#   ./build_kernel.sh clean                  # wipe build tree, rebuild from scratch
+#   ./build_kernel.sh menuconfig             # open menuconfig
+#   ./build_kernel.sh olddefconfig           # update .config non-interactively
+#   ./build_kernel.sh vmlinux                # build vmlinux only (no packaging)
 #   ./build_kernel.sh --help
 #
-#   BOARD=<name> selects the board devicetree built into the image
-#   (default: lidl). See files-6.18/arch/mips/boot/dts/realtek/Makefile
-#   for the add-a-board recipe.
+#   BOARD=<name>   board devicetree built in (default: lidl; also sengled-e39-g8c).
+#   KERNEL=<line>  kernel line (default: 6.18; also 7.1).
+#   Add-a-board recipe: the realtek dts Makefile of the selected line.
 #
 # J. Nilo — February 2026, unified April 2026
 
@@ -30,11 +27,30 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-# ── Kernel source + overlay layout (6.18.x) ───────────────────────────────
+# ── Kernel line selection ─────────────────────────────────────────────────
+# KERNEL picks the line (default: 6.18, the shipped production line).
+# KERNEL_VERSION pins the exact stable point release (drives the tarball name);
+# KERNEL_MAJOR_MINOR is the family used in file/dir names (patches-<MM>/,
+# files-<MM>/, config-<MM>-realtek.txt, linux-<MM>-rtl8196e/) so point bumps
+# don't churn paths.
 
-KERNEL_VERSION="6.18.35"            # exact tarball version
-KERNEL_MAJOR_MINOR="6.18"           # stable family (paths, image name)
-KERNEL_MAJOR="6.x"                  # kernel.org /pub/linux/kernel/v${MAJOR}/
+KERNEL="${KERNEL:-6.18}"
+case "$KERNEL" in
+    6.18)
+        KERNEL_VERSION="6.18.41"        # exact tarball version
+        KERNEL_MAJOR_MINOR="6.18"       # stable family (paths, image name)
+        KERNEL_MAJOR="6.x"              # kernel.org /pub/linux/kernel/v${MAJOR}/
+        ;;
+    7.1)
+        KERNEL_VERSION="7.1.7"          # exact tarball version (linux-7.1.7.tar.xz)
+        KERNEL_MAJOR_MINOR="7.1"
+        KERNEL_MAJOR="7.x"
+        ;;
+    *)
+        echo "ERROR: unknown KERNEL '$KERNEL' (known lines: 6.18, 7.1)" >&2
+        exit 1
+        ;;
+esac
 KERNEL_TARBALL="linux-${KERNEL_VERSION}.tar.xz"
 KERNEL_URL="https://cdn.kernel.org/pub/linux/kernel/v${KERNEL_MAJOR}/${KERNEL_TARBALL}"
 VANILLA_DIR="linux-${KERNEL_VERSION}"
@@ -42,7 +58,7 @@ VANILLA_DIR="linux-${KERNEL_VERSION}"
 PATCHES_DIR="${SCRIPT_DIR}/patches-${KERNEL_MAJOR_MINOR}"
 FILES_DIR="${SCRIPT_DIR}/files-${KERNEL_MAJOR_MINOR}"
 CONFIG_FILE="${SCRIPT_DIR}/config-${KERNEL_MAJOR_MINOR}-realtek.txt"
-IMAGE="${SCRIPT_DIR}/kernel-${KERNEL_MAJOR_MINOR}.img"
+# IMAGE depends on BOARD too; defined after the board selection below.
 
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
 # Add toolchain to PATH only if not already available (avoids GLIBC mismatch in Docker)
@@ -92,11 +108,17 @@ SIGNATURE="cs6c"
 BOARD="${BOARD:-lidl}"
 case "$BOARD" in
     lidl) BOARD_DTB_SYM="CONFIG_DTB_RTL8196E_GEN" ;;
+    sengled-e39-g8c) BOARD_DTB_SYM="CONFIG_DTB_RTL8196E_SENGLED_E39_G8C" ;;
     *)
-        echo "ERROR: unknown BOARD '$BOARD' (known boards: lidl)" >&2
+        echo "ERROR: unknown BOARD '$BOARD' (known boards: lidl, sengled-e39-g8c)" >&2
         exit 1
         ;;
 esac
+
+# Pre-built image slot for this (board, kernel) pair. build_kernel.sh writes
+# straight into the shippable kernel-img/<board>/kernel-<line>.img layout that
+# the flash scripts resolve from BOARD/KERNEL (see lib/kernel_image.sh).
+IMAGE="${SCRIPT_DIR}/kernel-img/${BOARD}/kernel-${KERNEL_MAJOR_MINOR}.img"
 
 # ── Option parsing ────────────────────────────────────────────────────────
 
@@ -225,6 +247,8 @@ echo "Syncing overlay from $(basename "$FILES_DIR")..."
 [ -d "${FILES_DIR}/arch" ]    && rsync -a "${FILES_DIR}/arch/"    "$BUILD_DIR/arch/"
 [ -d "${FILES_DIR}/drivers" ] && rsync -a "${FILES_DIR}/drivers/" "$BUILD_DIR/drivers/"
 [ -d "${FILES_DIR}/include" ] && rsync -a "${FILES_DIR}/include/" "$BUILD_DIR/include/"
+[ -d "${FILES_DIR}/Documentation" ] && \
+	rsync -a "${FILES_DIR}/Documentation/" "$BUILD_DIR/Documentation/"
 echo ""
 
 # ── Config ─────────────────────────────────────────────────────────────────
@@ -311,6 +335,29 @@ echo ""
 echo "=== COMPILATION OK ==="
 echo ""
 
+# ── Staleness guard ────────────────────────────────────────────────────────
+# "COMPILATION OK" only means make had nothing left to do — NOT that the
+# overlay actually reached the binary. The overlay is re-synced with
+# `rsync -a`, which PRESERVES mtimes: an object left behind by a manual
+# `make drivers/.../foo.o` can be NEWER than the freshly synced source, so
+# make skips it and the image silently ships the old code (hit 2026-07-25:
+# a v3.4 driver shipped inside an image believed to be v3.5).
+# Assert here on the linked binary, not on the sources.
+# Usage: EXPECT_IN_VMLINUX='some string' ./build_kernel.sh
+if [ -n "${EXPECT_IN_VMLINUX:-}" ]; then
+    if strings -a vmlinux | grep -qF -- "$EXPECT_IN_VMLINUX"; then
+        echo "vmlinux contient bien: $EXPECT_IN_VMLINUX"
+    else
+        echo ""
+        echo "=== STALE BUILD ==="
+        echo "vmlinux ne contient PAS: $EXPECT_IN_VMLINUX"
+        echo "L'objet concerne est probablement plus recent que sa source."
+        echo "Remede: rm l'objet dans $BUILD_DIR, touch la source dans"
+        echo "${FILES_DIR}, puis relancer."
+        exit 1
+    fi
+fi
+
 if [ "$BUILD_VMLINUX_ONLY" = true ]; then
     ls -lh vmlinux
     exit 0
@@ -324,6 +371,7 @@ if [ -z "$CVIMG" ]; then
     exit 0
 fi
 
+mkdir -p "$(dirname "$IMAGE")"
 rm -f "$IMAGE"
 echo "Packaging (zboot)..."
 
@@ -366,4 +414,8 @@ echo "  vmlinuz.bin  : $(numfmt --to=iec-i --suffix=B $vmlinuz_size)  (decompres
 echo "  Final image  : $(numfmt --to=iec-i --suffix=B $img_size)"
 echo ""
 echo "Image ready: $IMAGE"
-echo "Flash with:  ./flash_kernel.sh"
+if [ "$BOARD" = "lidl" ] && [ "$KERNEL_MAJOR_MINOR" = "6.18" ]; then
+    echo "Flash with:  ./flash_kernel.sh"
+else
+    echo "Flash with:  BOARD=${BOARD} KERNEL=${KERNEL_MAJOR_MINOR} ./flash_kernel.sh"
+fi

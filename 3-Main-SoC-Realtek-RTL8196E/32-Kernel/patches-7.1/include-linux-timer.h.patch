@@ -1,0 +1,23 @@
+--- a/include/linux/timer.h
++++ b/include/linux/timer.h
+@@ -152,6 +152,20 @@
+ extern int mod_timer_pending(struct timer_list *timer, unsigned long expires);
+ extern int timer_reduce(struct timer_list *timer, unsigned long expires);
+ 
++/* Running timer callback on this (UP) CPU, or NULL — for the watchdog
++ * panic notifier (drivers/watchdog/rtl819x_wdt.c). */
++void *timer_get_running_fn(void);
++
++/* Collect up to @max .function pointers of timers queued in the wheel on this
++ * CPU (nearest-expiry first, delayed_work resolved to its work function);
++ * returns the count. Watchdog panic notifier. */
++int timer_collect_pending_fns(void **out, int max);
++
++/* How far the wheel on this CPU has fallen behind: jiffies the earliest
++ * queued timer is past expiry, and total queued timers. Watchdog panic
++ * notifier. */
++void timer_wheel_stats(unsigned long *overdue, unsigned int *nr_pending);
++
+ /*
+  * The jiffies value which is added to now, when there is no timer
+  * in the timer wheel:

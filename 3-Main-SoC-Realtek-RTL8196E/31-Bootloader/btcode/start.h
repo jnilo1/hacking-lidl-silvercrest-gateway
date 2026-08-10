@@ -1,6 +1,8 @@
 #ifndef __RTL_START_H__
 #define __RTL_START_H__
 
+#include "board.h" /* per-board values: boards/$(BOARD)/board.h via -I */
+
 #define BOOT_ADDR 0x80100000 // compress
 // #define	BOOT_ADDR		0x80000000    // no compress
 
@@ -28,10 +30,12 @@
 #define MPMR_DEFAULT 0x3FFFFF80
 #define MPMR_PDN 0x7FFFFF80
 
+/* DDR bring-up values come from the board header (BOARD_DDR_REG_1004 /
+ * BOARD_DDR_REG_1008, named by register address) — the former in-place
+ * names (DDR_TIMING_VAL, DDR1_32MB_193MHZ) were swapped vs the usual
+ * DCR/DTR convention and are gone; go by the address. */
 #define DDR_TIMING_REG 0xB8001004
-#define DDR_TIMING_VAL 0x54480000
 #define DDR_CFG_REG 0xB8001008
-#define DDR1_32MB_193MHZ 0x90E36920
 #define DDCR_REG 0xB8001050
 #define DDCR_INIT_VAL 0x50800000
 

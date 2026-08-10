@@ -1,0 +1,130 @@
+#!/bin/sh
+# wireguardctl — lifecycle helper for the opt-in gateway WireGuard tunnel.
+
+set -u
+set -f
+
+CONFIG=/userdata/etc/wireguard.conf
+WG_CONFIG_DIR=/userdata/etc/wireguard
+WG=/userdata/usr/bin/wg
+WG_LINK=/userdata/usr/sbin/wg-link
+
+die() { echo "wireguardctl: $*" >&2; exit 1; }
+
+value() {
+    key=$1
+    default=$2
+    [ -f "$CONFIG" ] || { echo "$default"; return; }
+    found=$(grep "^${key}=" "$CONFIG" | tail -n 1 | cut -d= -f2-)
+    echo "${found:-$default}"
+}
+
+load_config() {
+    ENABLED=$(value ENABLED 0)
+    INTERFACE=$(value INTERFACE wg0)
+    ADDRESS=$(value ADDRESS '')
+    MTU=$(value MTU 1420)
+    ROUTES=$(value ROUTES '')
+    WG_CONFIG="${WG_CONFIG_DIR}/${INTERFACE}.conf"
+}
+
+valid_interface() { case "$1" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; *) return 0 ;; esac; }
+valid_address() { case "$1" in *[!0-9A-Fa-f:./]*|'') return 1 ;; *) return 0 ;; esac; }
+valid_mtu() { case "$1" in *[!0-9]*|'') return 1 ;; *) [ "$1" -ge 576 ] && [ "$1" -le 65535 ] ;; esac; }
+
+validate() {
+    valid_interface "$INTERFACE" || die "invalid INTERFACE"
+    valid_address "$ADDRESS" || die "ADDRESS must be an IPv4 or IPv6 prefix"
+    valid_mtu "$MTU" || die "MTU must be between 576 and 65535"
+    [ -x "$WG" ] || die "wg binary is missing"
+    [ -x "$WG_LINK" ] || die "wg-link binary is missing"
+    [ -d /sys/module/wireguard ] || die "kernel WireGuard support is unavailable"
+    [ -f "$WG_CONFIG" ] || die "missing $WG_CONFIG"
+    [ ! -L "$WG_CONFIG" ] || die "$WG_CONFIG must not be a symlink"
+}
+
+down() {
+    load_config
+    [ -e "/sys/class/net/${INTERFACE}" ] && "$WG_LINK" del "$INTERFACE" || true
+}
+
+up() {
+    load_config
+    validate
+    down
+    "$WG_LINK" add "$INTERFACE" || die "cannot create ${INTERFACE}"
+    "$WG" setconf "$INTERFACE" "$WG_CONFIG" || { down; die "wg setconf failed"; }
+    ip addr add "$ADDRESS" dev "$INTERFACE" || { down; die "cannot set address"; }
+    ip link set "$INTERFACE" mtu "$MTU" up || { down; die "cannot bring link up"; }
+    for route in $ROUTES; do
+        valid_address "$route" || { down; die "invalid route: $route"; }
+        ip route replace "$route" dev "$INTERFACE" || { down; die "cannot add route: $route"; }
+    done
+}
+
+set_enabled() {
+    wanted=$1
+    [ -f "$CONFIG" ] || die "missing $CONFIG"
+    sed -i "s/^ENABLED=.*/ENABLED=${wanted}/" "$CONFIG"
+    grep -q "^ENABLED=${wanted}$" "$CONFIG" || echo "ENABLED=${wanted}" >> "$CONFIG"
+}
+
+genkey() {
+    load_config
+    valid_interface "$INTERFACE" || die "invalid INTERFACE"
+    mkdir -p "$WG_CONFIG_DIR"
+    chmod 700 "$WG_CONFIG_DIR"
+    [ ! -e "$WG_CONFIG" ] || die "$WG_CONFIG already exists"
+    [ -x "$WG" ] || die "wg binary is missing"
+    umask 077
+    private=$($WG genkey) || die "key generation failed"
+    public=$(printf '%s\n' "$private" | "$WG" pubkey) || die "public-key generation failed"
+    {
+        echo "[Interface]"
+        echo "PrivateKey = $private"
+        echo "ListenPort = 51820"
+    } > "$WG_CONFIG"
+    chmod 600 "$WG_CONFIG"
+    echo "Public key: $public"
+    echo "Add a [Peer] section to $WG_CONFIG before enabling the tunnel."
+}
+
+load_config
+case "${1:-}" in
+    # Two voices, on purpose. start/stop/restart are the init lifecycle, driven
+    # by S60wireguard, and speak the boot-log convention every other init script
+    # uses ("  service: state"). up/down/enable/disable are typed by a human at a
+    # prompt and keep this tool's own voice. up() and down() therefore print
+    # nothing themselves — up() also calls down() internally, which would emit a
+    # spurious line — and each branch below says its piece.
+    start)
+        if [ "$ENABLED" = 1 ]; then
+            up
+            echo "  wireguard: started (${INTERFACE}, ${ADDRESS})"
+        else
+            echo "  wireguard: skipped (disabled)"
+        fi
+        ;;
+    stop)
+        down
+        # Unconditional, like every other service at shutdown: a log where one
+        # service says nothing reads as a service that failed to stop.
+        echo "  wireguard: stopped"
+        ;;
+    restart)
+        down
+        if [ "$ENABLED" = 1 ]; then
+            up
+            echo "  wireguard: started (${INTERFACE}, ${ADDRESS})"
+        else
+            echo "  wireguard: skipped (disabled)"
+        fi
+        ;;
+    up) up; echo "wireguardctl: ${INTERFACE} is up" ;;
+    down) down; echo "wireguardctl: ${INTERFACE} is down" ;;
+    enable) set_enabled 1; up; echo "wireguardctl: ${INTERFACE} enabled and up" ;;
+    disable) set_enabled 0; down; echo "wireguardctl: ${INTERFACE} disabled and down" ;;
+    status) [ -e "/sys/class/net/${INTERFACE}" ] && "$WG" show "$INTERFACE" || exit 3 ;;
+    genkey) genkey ;;
+    *) echo "Usage: $0 {start|stop|restart|up|down|enable|disable|status|genkey}" >&2; exit 1 ;;
+esac

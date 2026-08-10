@@ -12,9 +12,22 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SPLIT_FLASH="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E/30-Backup-Restore/split_flash.sh"
+# Host-side gateway address resolution — see lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/gwconf.sh"
 
-LINUX_IP="${LINUX_IP:-192.168.1.88}"
-BOOT_IP="${BOOT_IP:-192.168.1.6}"
+# Addresses: flag > env > gateway.env > last install / last box reached > a
+# value derived from this host's own LAN > the historic 192.168.1.x constants.
+# LINUX_IP_SOURCE feeds the banner; it stays empty when the address was stated
+# explicitly (env here, --linux-ip below), which is when there is nothing to
+# explain. Resolved through the variable-setting form so the source survives.
+LINUX_IP_SOURCE=""
+if [ -z "${LINUX_IP:-}" ]; then
+    gwconf_resolve_gateway
+    LINUX_IP="$GWCONF_ADDR"
+    LINUX_IP_SOURCE="$GWCONF_ADDR_SOURCE"
+fi
+BOOT_IP="${BOOT_IP:-$(gwconf_cold_boot_ip)}"
 SSH_USER="${SSH_USER:-root}"
 BACKUP_DIR="${BACKUP_DIR:-}"
 FLASH_SIZE=$((16 * 1024 * 1024))  # 16 MiB
@@ -23,7 +36,7 @@ FLASH_SIZE=$((16 * 1024 * 1024))  # 16 MiB
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --linux-ip) shift; LINUX_IP="$1" ;;
+        --linux-ip) shift; LINUX_IP="$1"; LINUX_IP_SOURCE="" ;;
         --boot-ip)  shift; BOOT_IP="$1" ;;
         --output)   shift; BACKUP_DIR="$1" ;;
         --help|-h)
@@ -32,8 +45,8 @@ while [ $# -gt 0 ]; do
             echo "Detects gateway state and backs up all flash partitions."
             echo ""
             echo "Options:"
-            echo "  --linux-ip IP   Gateway IP under Linux (default: 192.168.1.88)"
-            echo "  --boot-ip  IP   Gateway IP in bootloader (default: 192.168.1.6)"
+            echo "  --linux-ip IP   Gateway IP under Linux (default: ${LINUX_IP})"
+            echo "  --boot-ip  IP   Gateway IP in bootloader (default: ${BOOT_IP})"
             echo "  --output   DIR  Output directory (default: backups/YYYYMMDD-HHMM)"
             echo ""
             echo "Environment variables: LINUX_IP, BOOT_IP, BACKUP_DIR, SSH_USER"
@@ -208,7 +221,7 @@ echo "========================================="
 echo "  GATEWAY BACKUP"
 echo "========================================="
 echo ""
-echo "Linux IP:    ${LINUX_IP}"
+echo "Linux IP:    ${LINUX_IP}$(gwconf_source_note "$LINUX_IP_SOURCE")"
 echo "Boot IP:     ${BOOT_IP}"
 echo "Output:      ${BACKUP_DIR}"
 echo ""
@@ -229,6 +242,9 @@ case "$STATE" in
         echo "Backing up via SSH (port 22, custom firmware)..."
         echo ""
         backup_via_ssh 22
+        # We just held a session with our own firmware at this address —
+        # remember it so the other scripts can find the box without an argument.
+        gwconf_record_seen "$LINUX_IP"
         ;;
     tuya_linux)
         echo "Backing up via SSH (port 2333, Tuya firmware)..."

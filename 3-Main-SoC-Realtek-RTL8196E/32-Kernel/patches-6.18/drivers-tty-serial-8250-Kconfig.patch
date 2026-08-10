@@ -5,8 +5,8 @@
  	  will be called 8250_ni.
  
 +config SERIAL_8250_RTL819X
-+	tristate "Realtek RTL819X UART support"
-+	depends on SERIAL_8250
++	bool "Realtek RTL819X UART support"
++	depends on SERIAL_8250=y
 +	depends on OF_FLATTREE
 +	depends on MACH_REALTEK || MIPS || COMPILE_TEST
 +	help

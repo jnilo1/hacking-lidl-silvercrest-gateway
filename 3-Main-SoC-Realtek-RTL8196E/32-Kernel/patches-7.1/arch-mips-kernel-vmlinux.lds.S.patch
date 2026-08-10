@@ -1,0 +1,37 @@
+--- a/arch/mips/kernel/vmlinux.lds.S
++++ b/arch/mips/kernel/vmlinux.lds.S
+@@ -84,6 +84,34 @@
+ 		__stop___dbe_table = .;
+ 	}
+ 
++#ifdef CONFIG_RTL8196E_IMEM
++	/*
++	 * On-chip I-MEM (instruction SRAM): 16 KB.
++	 * Functions in .iram-gen/.iram-fwd are copied to on-chip SRAM
++	 * at boot by _imem_dmem_init() via COP3 IRAM Fill.
++	 * 16 KB alignment required by COP3 IW base/top mask.
++	 */
++	. = ALIGN(16384);
++	__iram = .;
++	.iram : {
++		*(.iram-gen)
++		*(.iram-fwd)
++		*(.iram)
++	}
++	__iram_tail = .;
++	ASSERT(__iram_tail - __iram <= 0x4000, "I-MEM section exceeds 16 KB")
++	. = ALIGN(16384);
++
++	. = ALIGN(8192);
++	__dram_start = .;
++	.dram : {
++		*(.dram-gen)
++		*(.dram-fwd)
++		*(.dram)
++	}
++	__dram_end = .;
++#endif
++
+ 	_sdata = .;			/* Start of data section */
+ 	RO_DATA(4096)
+ 

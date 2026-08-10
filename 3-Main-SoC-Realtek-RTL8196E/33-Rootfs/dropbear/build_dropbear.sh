@@ -1,12 +1,12 @@
 #!/bin/sh
-# build_dropbear.sh — Build dropbear pour RTL8196E
+# build_dropbear.sh — Build dropbear for the RTL8196E
 #
 # Usage:
 #   ./build_dropbear.sh [version]
 #
 # Examples:
-#   ./build_dropbear.sh              # Default version (2025.89)
-#   ./build_dropbear.sh 2024.86      # Specific version
+#   ./build_dropbear.sh              # Default version (2026.94)
+#   ./build_dropbear.sh 2025.89      # Specific version
 #
 # J. Nilo April 2025
 
@@ -17,8 +17,13 @@ ROOTFS_PART="${SCRIPT_DIR}/.."
 # Project root is 4 levels up: dropbear -> 33-Rootfs -> 3-Main-SoC -> project root
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 
+# Source trees are extracted next to this script, whatever the caller's cwd —
+# every path below the download is relative, so running it from elsewhere used
+# to scatter a DROPBEAR_<version>/ tree wherever the shell happened to be.
+cd "${SCRIPT_DIR}"
+
 # Parse version argument
-VERSION="${1:-2025.89}"
+VERSION="${1:-2026.94}"
 SOURCE_DIR="DROPBEAR_${VERSION}"
 INSTALL_DIR="${ROOTFS_PART}/skeleton/bin"
 

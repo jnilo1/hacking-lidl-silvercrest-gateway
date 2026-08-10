@@ -1,0 +1,45 @@
+--- a/arch/mips/include/asm/pgtable-bits.h
++++ b/arch/mips/include/asm/pgtable-bits.h
+@@ -7,6 +7,7 @@
+  * Copyright (C) 1999, 2000, 2001 Silicon Graphics, Inc.
+  * Copyright (C) 2002  Maciej W. Rozycki
+  */
++#include <linux/types.h>
+ #ifndef _ASM_PGTABLE_BITS_H
+ #define _ASM_PGTABLE_BITS_H
+ 
+@@ -92,7 +93,7 @@
+ #endif
+ };
+ 
+-#elif defined(CONFIG_CPU_R3K_TLB)
++#elif defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX) || defined(CONFIG_CPU_RLX4181)
+ 
+ /* Page table bits used for r3k systems */
+ enum pgtable_bits {
+@@ -114,6 +115,7 @@
+ 	_PAGE_VALID_SHIFT,
+ 	_PAGE_DIRTY_SHIFT,
+ 	_CACHE_UNCACHED_SHIFT,
++	_CACHE_SHIFT,  /* Defined for compatibility with other MIPS CPUs, unused by R3000/TX39XX/RLX4181 */
+ };
+ 
+ #else
+@@ -179,7 +181,7 @@
+ #define _PAGE_GLOBAL		(1 << _PAGE_GLOBAL_SHIFT)
+ #define _PAGE_VALID		(1 << _PAGE_VALID_SHIFT)
+ #define _PAGE_DIRTY		(1 << _PAGE_DIRTY_SHIFT)
+-#if defined(CONFIG_CPU_R3K_TLB)
++#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX) || defined(CONFIG_CPU_RLX4181)
+ # define _CACHE_UNCACHED	(1 << _CACHE_UNCACHED_SHIFT)
+ # define _CACHE_MASK		_CACHE_UNCACHED
+ # define PFN_PTE_SHIFT		PAGE_SHIFT
+@@ -237,7 +239,7 @@
+ /*
+  * Cache attributes
+  */
+-#if defined(CONFIG_CPU_R3K_TLB)
++#if defined(CONFIG_CPU_R3000) || defined(CONFIG_CPU_TX39XX) || defined(CONFIG_CPU_RLX4181)
+ 
+ #define _CACHE_CACHABLE_NONCOHERENT 0
+ #define _CACHE_UNCACHED_ACCELERATED _CACHE_UNCACHED

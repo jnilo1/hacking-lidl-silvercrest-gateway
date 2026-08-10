@@ -1,0 +1,40 @@
+# thread-link-publisher.conf — Home Assistant publisher configuration
+#
+# Copy this file to /userdata/etc/thread-link-publisher.conf on the gateway
+# and fill in HA_URL + HA_TOKEN. The LABEL_<ext_mac> lines are optional
+# but strongly recommended — without them, HA entities are named after
+# the first 8 hex chars of the ext_mac, which is unreadable.
+#
+# This file is shell-sourced at every cycle; comments must use `#`.
+
+# Home Assistant base URL (no trailing slash). Use http:// unless your
+# HA front-end terminates TLS internally.
+HA_URL="http://homeassistant.local:8123"
+
+# Long-lived access token. Create one in HA → Profile → Security →
+# Long-Lived Access Tokens → Create Token. Read+write on /api/states/
+# is enough; this script never reads other endpoints.
+HA_TOKEN="REPLACE_ME"
+
+# Polling interval in seconds. 60 s is fine for 16 sensors; raise to
+# 120 / 300 if you want to be more conservative on resources.
+INTERVAL=60
+
+# Friendly labels for each ext_mac. The publisher uses these to build
+# the HA entity slug (e.g. "MYGGBETT 5202" → sensor.myggbett_5202_rssi)
+# and the friendly_name attribute.
+#
+# Generate this list once with the existing analysis tool:
+#
+#   HA_URL=192.168.1.200:8123 HA_TOKEN=$TOK \
+#     analysis/map-ha-devices.py | \
+#     awk -F, 'NR>1 {printf "LABEL_%s=\"%s\"\n", $3, $1}'
+#
+# and paste the output here.
+#
+# Example (replace with your own ext_macs and labels):
+# LABEL_a2dc0577892ddaec="TIMMERFLOTTE 3541"
+# LABEL_12a68d017d0d2743="TIMMERFLOTTE 4729"
+# LABEL_563784e9bea2ed1b="MYGGBETT 5202"
+# LABEL_de98c98b1fffca98="MYGGBETT 6617"
+# LABEL_f28520ab67ebafb4="MYGGSPRAY"

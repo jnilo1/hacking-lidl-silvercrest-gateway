@@ -1,8 +1,17 @@
-# Linux 6.18 Kernel for RTL8196E
+# Linux Kernel for RTL8196E (6.18 + 7.1)
 
 This directory contains everything needed to build a modern Linux kernel for the Realtek RTL8196E gateway.
 
-**Current version**: [Linux 6.18.35](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — tracks the stable 6.18.x LTS family (6.18.0 was released 2025-12-01; the exact point release pinned in `build_kernel.sh` is bumped periodically to pick up CVE and bug fixes).
+**Two kernel lines** are shipped and selectable with the `KERNEL` environment variable
+(default `6.18`):
+
+| `KERNEL` | Version | Sources |
+|----------|---------|---------|
+| `6.18` *(default)* | [Linux 6.18.38](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — stable 6.18.x LTS family | `patches-6.18/`, `files-6.18/`, `config-6.18-realtek.txt` |
+| `7.1` | [Linux 7.1.3](https://cdn.kernel.org/pub/linux/kernel/v7.x/) | `patches-7.1/`, `files-7.1/`, `config-7.1-realtek.txt` |
+
+The two lines coexist — each has its own patch/overlay/config triplet and its own pre-built
+images. A Lidl user who sets nothing builds and flashes the `6.18` line exactly as before.
 
 ## Why Linux 6.18?
 
@@ -27,15 +36,19 @@ The result is a clean, maintainable kernel that can be updated to newer 6.18.x p
 
 | Directory/File | Description |
 |----------------|-------------|
-| [`patches-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18) | Patches to apply on vanilla Linux 6.18 |
-| [`files-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18) | New files to add to the kernel tree (Realtek platform support, custom drivers) |
-| [`config-6.18-realtek.txt`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/config-6.18-realtek.txt) | Kernel configuration |
+| [`patches-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/patches-6.18) · `patches-7.1/` | Patches to apply on vanilla Linux 6.18 / 7.1 |
+| [`files-6.18/`](https://github.com/jnilo1/rtl8196e-gateway/tree/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/files-6.18) · `files-7.1/` | New files to add to the kernel tree (Realtek platform support, custom drivers) |
+| [`config-6.18-realtek.txt`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/config-6.18-realtek.txt) · `config-7.1-realtek.txt` | Kernel configuration (one per line) |
+| `kernel-img/<board>/kernel-<line>.img` | Pre-built flashable images, one per (board, kernel) pair |
 | [`build_kernel.sh`](https://github.com/jnilo1/rtl8196e-gateway/blob/main/3-Main-SoC-Realtek-RTL8196E/32-Kernel/build_kernel.sh) | Build script |
+| [`tools/`](tools/README.md) | Optional on-gateway kernel diagnostic tools |
 
 ## Building
 
 ```bash
-./build_kernel.sh [clean|menuconfig|olddefconfig|vmlinux]
+./build_kernel.sh [clean|menuconfig|olddefconfig|vmlinux]   # 6.18 / lidl (defaults)
+KERNEL=7.1 ./build_kernel.sh                                # build the 7.1 line
+BOARD=sengled-e39-g8c ./build_kernel.sh                     # build for the Sengled G4
 ```
 
 ### Options
@@ -48,35 +61,44 @@ The result is a clean, maintainable kernel that can be updated to newer 6.18.x p
 | `olddefconfig` | Update `.config` non-interactively against the current Kconfig |
 | `vmlinux` | Build `vmlinux` only (skip packaging) |
 
-### Board selection
+### Board and kernel selection
 
-The image embeds a single device tree, selected at build time with the
-`BOARD` environment variable (default: `lidl`, the Lidl Silvercrest
-gateway):
+Two environment variables pick what `build_kernel.sh` produces; both default to
+the Lidl 6.18 build, and the output lands in `kernel-img/<board>/kernel-<line>.img`:
+
+| Variable | Default | Values |
+|----------|---------|--------|
+| `BOARD`  | `lidl`  | `lidl`, `sengled-e39-g8c` (Sengled Smart Hub G4) |
+| `KERNEL` | `6.18`  | `6.18`, `7.1` |
 
 ```bash
-BOARD=lidl ./build_kernel.sh        # default — builds rtl8196e.dtb
+./build_kernel.sh                                  # lidl / 6.18  → kernel-img/lidl/kernel-6.18.img
+KERNEL=7.1 ./build_kernel.sh                       # lidl / 7.1
+BOARD=sengled-e39-g8c ./build_kernel.sh            # G4 / 6.18
+BOARD=sengled-e39-g8c KERNEL=7.1 ./build_kernel.sh # G4 / 7.1
 ```
 
-Porting to another RTL8196E board means adding an `rtl8196e-<board>.dts`,
-one Kconfig entry and one Makefile line — the recipe is documented in
-`files-6.18/arch/mips/boot/dts/realtek/Makefile` and in the devicetree
-Kconfig choice (`files-6.18/arch/mips/realtek/Kconfig`).
+`BOARD` selects the device tree built into the image. Porting to another RTL8196E
+board means adding an `rtl8196e-<board>.dts`, one Kconfig entry and one Makefile
+line — the recipe is documented in `files-<line>/arch/mips/boot/dts/realtek/Makefile`
+and in the devicetree Kconfig choice (`files-<line>/arch/mips/realtek/Kconfig`).
 
 ### Build process
 
 The script will:
 1. Download Linux 6.18.x source (if not present)
 2. Apply all patches from `patches-6.18/`
-3. Overlay Realtek platform files from `files-6.18/`
+3. Overlay Realtek platform files from `files-<line>/`
 4. Compile the kernel
-5. Package the compressed kernel image (zboot) into `kernel-6.18.img`, ready to flash
+5. Package the compressed kernel image (zboot) into `kernel-img/<board>/kernel-<line>.img`, ready to flash
 
 **Requirements**: [Toolchain](../../1-Build-Environment/README.md) must be built first.
 
 ## Output
 
-- `kernel-6.18.img` — Flashable kernel image with Realtek header (~1.2 MB)
+- `kernel-img/<board>/kernel-<line>.img` — Flashable kernel image with Realtek
+  header (~1.4 MB). The four shipped pre-built images are
+  `kernel-img/{lidl,sengled-e39-g8c}/kernel-{6.18,7.1}.img`.
 
 ## Technical Details
 
@@ -87,7 +109,7 @@ The kernel uses the in-tree `arch/mips/boot/compressed/` (zboot) decompressor �
 1. Compile kernel → `vmlinux`
 2. zboot compresses the kernel with LZMA and prepends a small decompressor → `vmlinuz` (ELF)
 3. Strip to raw binary → `vmlinuz.bin`
-4. Add Realtek header (cvimg) → `kernel-6.18.img`
+4. Add Realtek header (cvimg) → `kernel-img/<board>/kernel-<line>.img`
 
 ### Key patches
 

@@ -1,0 +1,386 @@
+#!/bin/sh
+# thread-range-test — Thread mesh range-test suite for the RTL8196E gateway
+#
+# One command exposes the four supported experiments:
+#
+#   thread-range-test sample <label> <duration_sec> [interval_sec]
+#   thread-range-test tx-power [key=value ...]
+#   thread-range-test channel [key=value ...]
+#   thread-range-test orientation <subject> <orientations> [key=value ...]
+#
+# Environment:
+#   OT_CTL   path to ot-ctl (default: ot-ctl on PATH)
+#   LOG_DIR  CSV output directory (default: /userdata/log)
+#
+# Designed for the gateway's minimal BusyBox shell. Do not add dependencies on
+# absent applets such as tee, find, tr, or pkill.
+
+set -u
+
+OT_CTL="${OT_CTL:-ot-ctl}"
+LOG_DIR="${LOG_DIR:-/userdata/log}"
+
+usage() {
+    cat <<'EOF'
+Usage:
+  thread-range-test sample <label> <duration_sec> [interval_sec]
+  thread-range-test tx-power [key=value ...]
+  thread-range-test channel [key=value ...]
+  thread-range-test orientation <subject> <orientations> [key=value ...]
+
+Commands:
+  sample       Record neighbor RSSI/LQI rows in range_<label>.csv.
+  tx-power     Sweep calibrated TX powers; restore a safe value on exit.
+  channel      Compare the current channel with a target, then migrate back.
+  orientation  Operator-paced samples for physical device orientations.
+
+Examples:
+  thread-range-test sample smoke 120 30
+  thread-range-test tx-power expected_children=16 sample_sec=300
+  thread-range-test channel to=20 sample_sec=300
+  thread-range-test orientation gateway 'front left right' sample_sec=300
+
+Run `thread-range-test <command> --help` for command-specific options.
+EOF
+}
+
+die() {
+    echo "Error: $*" >&2
+    exit 2
+}
+
+sleep_wait() {
+    sleep "$1" & wait $!
+}
+
+ot_query() {
+    timeout 3 "$OT_CTL" "$@" 2>/dev/null |
+        sed 's/\r$//' | grep -v '^Done$' | head -1
+}
+
+current_channel() {
+    "$OT_CTL" channel 2>/dev/null |
+        sed 's/\r$//' | grep -E '^[0-9]+$' | head -1
+}
+
+children_count() {
+    "$OT_CTL" child table 2>/dev/null | sed 's/\r$//' |
+        awk -F'|' '/^\| *[0-9]/ {n++} END {print 0+n}'
+}
+
+log_open() {
+    SUMMARY=$1
+    : > "$SUMMARY"
+}
+
+log() {
+    line="[$(date)] $*"
+    echo "$line"
+    echo "$line" >> "$SUMMARY"
+}
+
+run_sample() {
+    label=$1
+    duration=$2
+    interval=${3:-60}
+
+    case "$label" in
+        ''|*[!A-Za-z0-9_.-]*)
+            die "label may contain only letters, digits, dot, underscore, and hyphen"
+            ;;
+    esac
+    case "$duration:$interval" in
+        *[!0-9:]*|:*|*:0) die "duration and interval must be positive integers" ;;
+    esac
+    [ "$duration" -gt 0 ] && [ "$interval" -gt 0 ] ||
+        die "duration and interval must be positive integers"
+
+    mkdir -p "$LOG_DIR"
+    out="$LOG_DIR/range_${label}.csv"
+
+    txpwr=$("$OT_CTL" txpower 2>/dev/null |
+        sed 's/\r$//' | grep -oE '[0-9-]+ dBm' | head -1)
+    chan=$(ot_query channel)
+    panid=$(ot_query panid)
+    state=$(ot_query state)
+    start_ts=$(date -u +%s)
+
+    {
+        echo "# label=${label} duration=${duration}s interval=${interval}s"
+        echo "# txpower=${txpwr} channel=${chan} panid=${panid} state=${state}"
+        echo "# start=${start_ts} (utc=$(date -u))"
+        echo "ts,label,rloc,role,age,avg_rssi,last_rssi,lq_in,ext_mac"
+    } > "$out"
+
+    echo "sample: writing to $out"
+    echo "  txpower=$txpwr channel=$chan state=$state"
+    echo "  duration=${duration}s interval=${interval}s"
+
+    end=$((start_ts + duration))
+    while :; do
+        now=$(date +%s)
+        [ "$now" -ge "$end" ] && break
+        ts=$(date +%s)
+        timeout 3 "$OT_CTL" neighbor table 2>/dev/null |
+            sed 's/\r$//' |
+            awk -F'|' -v ts="$ts" -v lbl="$label" '
+                /^\| *[CR] *\|/ {
+                    for (i=1; i<=NF; i++)
+                        gsub(/^[[:space:]]+|[[:space:]]+$/, "", $i)
+                    print ts "," lbl "," $3 "," $2 "," $4 "," $5 "," $6 "," $7 "," $11
+                }
+            ' >> "$out"
+
+        now=$(date +%s)
+        remain=$((end - now))
+        [ "$remain" -le 0 ] && break
+        delay=$interval
+        [ "$delay" -gt "$remain" ] && delay=$remain
+        sleep_wait "$delay"
+    done
+
+    lines=$(grep -c '^[0-9]' "$out" 2>/dev/null || :)
+    lines=${lines:-0}
+    echo "sample: done; ${lines} rows in $out"
+}
+
+cmd_sample() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<'EOF'
+Usage: thread-range-test sample <label> <duration_sec> [interval_sec]
+
+One invocation records one experimental condition. Output is written to
+$LOG_DIR/range_<label>.csv (default LOG_DIR=/userdata/log).
+EOF
+            return 0
+            ;;
+    esac
+    [ $# -ge 2 ] && [ $# -le 3 ] || die "sample expects label, duration, and optional interval"
+    run_sample "$1" "$2" "${3:-60}"
+}
+
+cmd_tx_power() {
+    steps="10:tx10 7:tx07 5:tx05 3:tx03 1:tx01 0:tx00"
+    expected_children=""
+    stab_sec=120
+    sample_sec=600
+    restore_value=7
+
+    for arg in "$@"; do
+        case "$arg" in
+            steps=*)             steps=${arg#steps=} ;;
+            expected_children=*) expected_children=${arg#expected_children=} ;;
+            stab_sec=*)          stab_sec=${arg#stab_sec=} ;;
+            sample_sec=*)        sample_sec=${arg#sample_sec=} ;;
+            restore_tx=*)        restore_value=${arg#restore_tx=} ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: thread-range-test tx-power [key=value ...]
+
+Options:
+  steps="10:tx10 7:tx07 ..."    requested-power:label pairs
+  expected_children=N           auto-detected when omitted
+  stab_sec=120                   stabilization before each sample
+  sample_sec=600                 sample duration per power
+  restore_tx=7                   value restored on completion or signal
+EOF
+                return 0
+                ;;
+            *) die "unknown tx-power option: $arg" ;;
+        esac
+    done
+
+    log_open /tmp/thread-range-tx-power.log
+    [ -n "$expected_children" ] || expected_children=$(children_count)
+
+    restore_tx() {
+        "$OT_CTL" txpower "$restore_value" >/dev/null 2>&1
+        log "TX restored to ${restore_value} dBm"
+    }
+    trap 'restore_tx; exit 130' INT TERM
+
+    log "TX-power sweep starting"
+    log "steps=$steps expected_children=$expected_children"
+    log "stab_sec=$stab_sec sample_sec=$sample_sec restore_tx=$restore_value"
+
+    for step in $steps; do
+        requested=${step%%:*}
+        label=${step##*:}
+        log "$label: requesting TX=$requested dBm"
+        "$OT_CTL" txpower "$requested" >/dev/null 2>&1
+        sleep_wait "$stab_sec"
+
+        actual=$("$OT_CTL" txpower 2>/dev/null | sed 's/\r$//' |
+            grep -oE '[0-9-]+ dBm' | head -1)
+        log "$label: actual TX=$actual; sampling ${sample_sec}s"
+        run_sample "$label" "$sample_sec" 30
+
+        attached=$(children_count)
+        log "$label: children attached=$attached/$expected_children"
+        if [ "$attached" -lt "$expected_children" ]; then
+            log "ABORT at $label: child count dropped"
+            restore_tx
+            trap - INT TERM
+            return 1
+        fi
+    done
+
+    log "TX-power sweep complete"
+    restore_tx
+    trap - INT TERM
+}
+
+migrate_channel() {
+    target=$1
+    log "migration: pending operational dataset for channel $target (delay ${delay_ms}ms)"
+    "$OT_CTL" dataset init active >/dev/null 2>&1
+    "$OT_CTL" dataset channel "$target" >/dev/null 2>&1
+    now_s=$(date +%s)
+    "$OT_CTL" dataset pendingtimestamp "${now_s}000000" >/dev/null 2>&1
+    "$OT_CTL" dataset activetimestamp "$((now_s + 300))000000" >/dev/null 2>&1
+    "$OT_CTL" dataset delay "$delay_ms" >/dev/null 2>&1
+    "$OT_CTL" dataset commit pending >/dev/null 2>&1
+    log "pending dataset committed; waiting ${settle_sec}s"
+    sleep_wait "$settle_sec"
+    actual=$(current_channel)
+    attached=$(children_count)
+    log "post-migration: channel=$actual children=$attached"
+    [ "$actual" = "$target" ] || {
+        log "ERROR: channel did not switch to $target"
+        return 1
+    }
+}
+
+cmd_channel() {
+    from=""
+    to=""
+    delay_ms=120000
+    settle_sec=180
+    sample_sec=600
+
+    for arg in "$@"; do
+        case "$arg" in
+            from=*)       from=${arg#from=} ;;
+            to=*)         to=${arg#to=} ;;
+            delay_ms=*)   delay_ms=${arg#delay_ms=} ;;
+            settle_sec=*) settle_sec=${arg#settle_sec=} ;;
+            sample_sec=*) sample_sec=${arg#sample_sec=} ;;
+            -h|--help)
+                cat <<'EOF'
+Usage: thread-range-test channel [key=value ...]
+
+Options:
+  from=<channel>    current channel when omitted
+  to=<channel>      26 by default, or 15 when current channel is 26
+  delay_ms=120000   Thread pending-dataset activation delay
+  settle_sec=180    wait after each scheduled migration
+  sample_sec=600    baseline and target sample duration
+
+The command samples the original channel, migrates using a Pending Operational
+Dataset, samples the target, migrates back, and records a control sample.
+EOF
+                return 0
+                ;;
+            *) die "unknown channel option: $arg" ;;
+        esac
+    done
+
+    [ -n "$from" ] || from=$(current_channel)
+    if [ -z "$to" ]; then
+        if [ "$from" = 26 ]; then to=15; else to=26; fi
+    fi
+
+    log_open /tmp/thread-range-channel.log
+    log "channel test starting: from=$from to=$to"
+    log "delay_ms=$delay_ms settle_sec=$settle_sec sample_sec=$sample_sec"
+
+    log "baseline on channel $from"
+    run_sample "channel_${from}_baseline" "$sample_sec" 30
+
+    log "migrating channel $from -> $to"
+    migrate_channel "$to" || {
+        log "ABORT: migration to $to failed; current channel=$(current_channel)"
+        return 1
+    }
+
+    log "sampling target channel $to"
+    run_sample "channel_${to}" "$sample_sec" 30
+
+    log "migrating channel $to -> $from"
+    migrate_channel "$from" || {
+        log "ABORT: migration back to $from failed; current channel=$(current_channel)"
+        return 2
+    }
+
+    control_sec=$((sample_sec / 2))
+    [ "$control_sec" -ge 60 ] || control_sec=60
+    log "control sample on channel $from (${control_sec}s)"
+    run_sample "channel_${from}_control" "$control_sec" 30
+    log "channel test complete"
+}
+
+cmd_orientation() {
+    case "${1:-}" in
+        -h|--help)
+            cat <<'EOF'
+Usage: thread-range-test orientation <subject> <orientations> [key=value ...]
+
+The orientation list is space- or comma-separated. For each value, position
+the subject and acknowledge from another shell with:
+
+  touch /tmp/thread-range-orientation.ack
+
+Options: stab_sec=120 sample_sec=480
+EOF
+            return 0
+            ;;
+    esac
+
+    subject=${1:-}
+    orientations=${2:-}
+    [ $# -ge 2 ] || die "orientation expects a subject and orientation list"
+    shift 2
+
+    stab_sec=120
+    sample_sec=480
+    for arg in "$@"; do
+        case "$arg" in
+            stab_sec=*)   stab_sec=${arg#stab_sec=} ;;
+            sample_sec=*) sample_sec=${arg#sample_sec=} ;;
+            *) die "unknown orientation option: $arg" ;;
+        esac
+    done
+
+    orientations=$(echo "$orientations" | sed 's/,/ /g')
+    ack=/tmp/thread-range-orientation.ack
+    log_open /tmp/thread-range-orientation.log
+    log "orientation test: subject=$subject orientations=$orientations"
+
+    for orientation in $orientations; do
+        label="${subject}_orientation_${orientation}"
+        rm -f "$ack"
+        log "place $subject in '$orientation', then: touch $ack"
+        while [ ! -f "$ack" ]; do sleep_wait 5; done
+        rm -f "$ack"
+        log "acknowledged; stabilizing ${stab_sec}s"
+        sleep_wait "$stab_sec"
+        run_sample "$label" "$sample_sec" 30
+        log "orientation $orientation complete"
+    done
+
+    log "orientation test complete"
+}
+
+command=${1:-}
+[ -n "$command" ] || { usage; exit 1; }
+shift
+
+case "$command" in
+    sample)      cmd_sample "$@" ;;
+    tx-power)    cmd_tx_power "$@" ;;
+    channel)     cmd_channel "$@" ;;
+    orientation) cmd_orientation "$@" ;;
+    -h|--help|help) usage ;;
+    *) die "unknown command '$command'; run '$0 --help'" ;;
+esac

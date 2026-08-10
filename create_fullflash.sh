@@ -1,12 +1,12 @@
 #!/bin/bash
 # create_fullflash.sh — Assemble and optionally flash a 16 MiB image
 #
-# Rebuilds userdata with the chosen network/radio configuration, then assembles
+# Rebuilds userdata with the chosen network configuration, then assembles
 # bootloader + kernel + rootfs + userdata into fullflash.bin. Optionally uploads
 # the image via TFTP and guides you through the FLW serial console command.
 #
 # Steps:
-#   1. Asks for network/radio configuration (or uses env vars)
+#   1. Asks for network configuration (or uses env vars)
 #   2. Rebuilds userdata.bin via build_userdata.sh
 #   3. Assembles all 4 partitions into fullflash.bin
 #   4. (with --flash) Uploads fullflash.bin to the gateway via TFTP
@@ -21,11 +21,17 @@
 # Usage: ./create_fullflash.sh [--flash] [--boot-ip IP] [--output FILE]
 #
 # Environment variables (for non-interactive use):
+#   BOARD       - "lidl" (default) or "sengled-e39-g8c" (selects the kernel image)
+#   KERNEL      - "6.18" (default) or "7.1" (selects the kernel line)
 #   NET_MODE    - "static", "dhcp", or "skip"
-#   IPADDR      - Static IP address (default: 192.168.1.88)
-#   NETMASK     - Netmask (default: 255.255.255.0)
-#   GATEWAY     - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE  - "zigbee", "thread", or "skip"
+#   IPADDR      - Static IP address for the gateway
+#   NETMASK     - Netmask
+#   GATEWAY     - Default gateway
+#
+# Unset network values are not fixed constants: they fall back to gateway.env,
+# then to the last install, then to an address derived from THIS host's own LAN
+# (see lib/gwconf.sh and gateway.env.example), and only then to the project's
+# historic 192.168.1.x.
 #
 # J. Nilo - March 2026
 
@@ -34,14 +40,32 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 
-BOOTLOADER_IMG="${RTL_DIR}/31-Bootloader/boot.bin"
-KERNEL_IMG="${RTL_DIR}/32-Kernel/kernel-6.18.img"
+# Shared (board, kernel) → pre-built kernel image resolver.
+. "${SCRIPT_DIR}/lib/kernel_image.sh"
+# Host-side gateway config: network proposals derived from this machine's LAN,
+# and the write-back that remembers what we install. See lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/gwconf.sh"
+
+# BOARD (default lidl) and KERNEL (default 6.18) select the pre-built kernel
+# image; a Lidl user who sets neither gets the historical kernel-6.18.img.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+
+# The bootloader is board-specific (DRAM bring-up) — resolved from the same
+# per-board pre-built layout as the kernel (discussion #140).
+BOOTLOADER_IMG="$(resolve_boot_image "$BOARD")" || exit 1
+KERNEL_IMG="$(resolve_kernel_image "$BOARD" "$KERNEL")" || exit 1
 ROOTFS_IMG="${RTL_DIR}/33-Rootfs/rootfs.bin"
 USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
 
 OUTPUT="${SCRIPT_DIR}/fullflash.bin"
-BOOT_IP="${BOOT_IP:-192.168.1.6}"
+# Bootloader-mode address: BOOT_IP env > gateway.env > the bootloader's compiled
+# default. NOT derived from this host's LAN — this script targets a gateway
+# already sitting at a bootloader prompt, which nothing can move (lib/gwconf.sh,
+# gwconf_cold_boot_ip). The TFTP transfer also does not cross a router.
+BOOT_IP="${BOOT_IP:-$(gwconf_cold_boot_ip)}"
 DO_FLASH=false
 
 FLASH_SIZE=$((16 * 1024 * 1024))  # 16 MiB
@@ -64,15 +88,15 @@ while [ $# -gt 0 ]; do
         --help|-h)
             echo "Usage: $0 [--flash] [--boot-ip IP] [--output FILE]"
             echo ""
-            echo "Rebuilds userdata with network/radio config, then assembles a"
+            echo "Rebuilds userdata with network config, then assembles a"
             echo "16 MiB flash image. With --flash, uploads it via TFTP."
             echo ""
             echo "Options:"
             echo "  --flash         Upload via TFTP after assembly"
-            echo "  --boot-ip IP    Gateway IP in bootloader (default: 192.168.1.6)"
+            echo "  --boot-ip IP    Gateway IP in bootloader (default: ${BOOT_IP})"
             echo "  --output FILE   Output path (default: fullflash.bin)"
             echo ""
-            echo "Environment: NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
+            echo "Environment: BOARD, KERNEL, NET_MODE, IPADDR, NETMASK, GATEWAY"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -116,11 +140,23 @@ trap 'rm -rf "$SKEL_WORK"' EXIT
 export SKELETON_DIR="$SKEL_WORK"
 
 ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
-RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
+ETH0_BAK="${SKEL_WORK}/etc/eth0.bak"
 
     # Network config — "skip" means config already injected by caller
     if [ "${NET_MODE:-}" = "skip" ]; then
         echo "→ Network config preserved from gateway"
+        # Record it so the host-side tools keep pointing at this box after the
+        # flash. No eth0.conf means the gateway was on DHCP and stays there.
+        if [ -f "$ETH0_CONF" ]; then
+            keep_ip="$(gwconf_read_key "$ETH0_CONF" IPADDR  || true)"
+            keep_mask="$(gwconf_read_key "$ETH0_CONF" NETMASK || true)"
+            keep_gw="$(gwconf_read_key "$ETH0_CONF" GATEWAY || true)"
+            gwconf_record_install static "$keep_ip" "$keep_mask" "$keep_gw"
+            gwconf_write_eth0_bak "$ETH0_BAK" "$keep_ip" "$keep_mask" "$keep_gw"
+        else
+            gwconf_record_install dhcp
+            gwconf_write_eth0_bak "$ETH0_BAK"
+        fi
     else
         if [ "${NET_MODE:-}" = "static" ] || [ "${NET_MODE:-}" = "dhcp" ]; then
             net_choice="${NET_MODE}"
@@ -135,50 +171,38 @@ RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
         fi
 
         if [ "$net_choice" = "static" ]; then
+            # Proposals come from what was configured or installed before, else
+            # from this host's own LAN, else from the historic 192.168.1.x
+            # constants — never a fixed subnet the user may not be on.
+            gwconf_suggest_static
             if [ -z "${NET_MODE:-}" ]; then
-                read -r -p "IP address [192.168.1.88]: " IPADDR_IN
-                read -r -p "Netmask    [255.255.255.0]: " NETMASK_IN
-                read -r -p "Gateway    [192.168.1.1]:   " GATEWAY_IN
-                IPADDR="${IPADDR_IN:-${IPADDR:-192.168.1.88}}"
-                NETMASK="${NETMASK_IN:-${NETMASK:-255.255.255.0}}"
-                GATEWAY="${GATEWAY_IN:-${GATEWAY:-192.168.1.1}}"
+                echo "Proposed defaults: ${GWCONF_SUGGEST_SOURCE}."
+                read -r -p "IP address [${GWCONF_SUGGEST_IPADDR}]: " IPADDR_IN
+                read -r -p "Netmask    [${GWCONF_SUGGEST_NETMASK}]: " NETMASK_IN
+                read -r -p "Gateway    [${GWCONF_SUGGEST_GATEWAY}]:   " GATEWAY_IN
+                IPADDR="${IPADDR_IN:-${IPADDR:-$GWCONF_SUGGEST_IPADDR}}"
+                NETMASK="${NETMASK_IN:-${NETMASK:-$GWCONF_SUGGEST_NETMASK}}"
+                GATEWAY="${GATEWAY_IN:-${GATEWAY:-$GWCONF_SUGGEST_GATEWAY}}"
             else
-                IPADDR="${IPADDR:-192.168.1.88}"
-                NETMASK="${NETMASK:-255.255.255.0}"
-                GATEWAY="${GATEWAY:-192.168.1.1}"
+                IPADDR="${IPADDR:-$GWCONF_SUGGEST_IPADDR}"
+                NETMASK="${NETMASK:-$GWCONF_SUGGEST_NETMASK}"
+                GATEWAY="${GATEWAY:-$GWCONF_SUGGEST_GATEWAY}"
             fi
             printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
             echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+            [ -z "${NET_MODE:-}" ] && gwconf_warn_if_taken "$IPADDR" "address"
+            gwconf_record_install static "$IPADDR" "$NETMASK" "$GATEWAY"
+            # The device's DHCP-failure fallback, in the same subnet.
+            gwconf_write_eth0_bak "$ETH0_BAK" "$IPADDR" "$NETMASK" "$GATEWAY"
         else
             rm -f "$ETH0_CONF"
             echo "→ DHCP"
+            gwconf_record_install dhcp
+            # No lease may ever arrive: leave a reachable fallback behind.
+            gwconf_write_eth0_bak "$ETH0_BAK"
         fi
     fi
 
-    # Radio config
-    if [ "${RADIO_MODE:-}" = "skip" ]; then
-        echo "→ Radio config preserved from gateway"
-    else
-        if [ "${RADIO_MODE:-}" = "zigbee" ] || [ "${RADIO_MODE:-}" = "thread" ]; then
-            radio_choice="${RADIO_MODE}"
-        else
-            echo "Radio mode:"
-            echo "  [1] Zigbee (NCP or RCP+zigbeed)"
-            echo "  [2] Thread (OTBR)"
-            read -r -p "Choice [1]: " radio_choice
-            radio_choice="${radio_choice:-1}"
-            [ "$radio_choice" = "1" ] && radio_choice="zigbee"
-            [ "$radio_choice" = "2" ] && radio_choice="thread"
-        fi
-
-        if [ "$radio_choice" = "thread" ]; then
-            echo "MODE=otbr" > "$RADIO_CONF"
-            echo "→ Thread (OTBR)"
-        else
-            rm -f "$RADIO_CONF"
-            echo "→ Zigbee"
-        fi
-    fi
     echo ""
 
     echo "Building userdata..."
@@ -199,7 +223,7 @@ userdata_max=$((FLASH_SIZE - OFF_USERDATA)) # 12288 KiB
 
 echo "Image sizes (data written to flash):"
 echo "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
-echo "  kernel-6.18.img: $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
+echo "  $(basename "$KERNEL_IMG"): $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
 echo "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
 echo "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
 echo ""
@@ -210,7 +234,7 @@ if [ $boot_data -gt $boot_max ]; then
     OVERFLOW=1
 fi
 if [ $kernel_data -gt $kernel_max ]; then
-    echo "Error: kernel-6.18.img ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
+    echo "Error: $(basename "$KERNEL_IMG") ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
     OVERFLOW=1
 fi
 if [ $rootfs_data -gt $rootfs_max ]; then
@@ -257,10 +281,13 @@ else
     echo "  Size: 16 MiB [OK]"
 fi
 
+# Dumped with od (coreutils, always present) rather than xxd, which on Debian is
+# a separate package that is not installed by default (issue #147).
 check_magic() {
     local label="$1" offset="$2" expected="$3"
     local nbytes=$(( ${#expected} / 2 ))
-    actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null | xxd -p)
+    actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null \
+             | od -An -tx1 -v | tr -d ' \n')
     if [ "$actual" = "$expected" ]; then
         echo "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
     else
@@ -350,5 +377,11 @@ echo "  INSTALLATION COMPLETE"
 echo "========================================="
 echo ""
 echo "The gateway will boot into Linux."
-echo "SSH: root@192.168.1.88:22 (default, no password)"
+if [ -n "${IPADDR:-}" ]; then
+    echo "SSH: root@${IPADDR}:22 (no password)"
+else
+    echo "SSH: port 22, no password — the gateway took a DHCP lease, so find its"
+    echo "     address in your router's lease table (it announces itself as"
+    echo "     $(gwconf_device_hostname))."
+fi
 echo ""

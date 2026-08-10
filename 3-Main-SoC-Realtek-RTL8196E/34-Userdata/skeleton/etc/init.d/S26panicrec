@@ -4,13 +4,14 @@
 #
 # When the gateway auto-recovers from a soft-lockup hang, the watchdog
 # driver (rtl819x_wdt) leaves a one-shot record in a reserved DRAM page and
-# prints it once, on the next boot, as:
+# prints one compact record-v9 line on the next boot:
 #
-#   rtl819x-wdt ...: previous boot ended in panic: uptime=..s running=.. reason=".."
+#   rtl819x-wdt ...: previous panic: uptime=..s epc=... ra=...
+#                         cause=... status=... softirq=... wdt=...
+#                         flags=... reason=".."
 #
-# That line lives only in the volatile ramfs kernel log, lost on the next
-# reboot. This script captures it into /userdata so the operator can see why
-# the box rebooted itself, days later.
+# This line lives only in the volatile ramfs kernel log and is lost on the
+# next reboot. This script persists it into /userdata for later inspection.
 #
 # Capture policy: FIRST OCCURRENCE ONLY. Once $LOG exists, every later panic
 # is ignored — we keep the first, cleanest capture and never let a reboot
@@ -20,32 +21,54 @@
 #   rm /userdata/panic/history
 #
 # Flash wear: this writes to the JFFS2 partition at most ONCE per re-arm
-# (a single line, only the first time after an rm). A panic is already a
-# rare event, and the first-occurrence guard means even a reboot loop costs
-# zero further writes — so there is no NOR-flash wear concern whatsoever.
+# (one short line, only the first time after an rm). A panic is already a rare
+# event, and the first-occurrence guard means even a reboot loop costs zero
+# further writes — so there is no NOR-flash wear concern whatsoever.
 #
-# Runs after S20time (wall clock) and S25watchdog. Resolution of the culprit
-# function is best-effort: see rtl819x_wdt.c (running_timer may be NULL if the
-# panic landed between timer callbacks).
+# Runs after S20time and S25watchdog — but do NOT read that as "the wall
+# clock is set by now". This board has no RTC, so the clock starts at the
+# epoch on every boot, and since #125 S20time merely *starts* ntpd as a
+# daemon instead of blocking on a one-shot sync: the step lands seconds to
+# minutes later, always after this script. The capture line therefore says
+# so explicitly rather than stamping a confident 1970 date on the one
+# artifact an operator reads weeks later. The record's own uptime= field is
+# the trustworthy indication of when the panic happened.
 
 LOG=/userdata/panic/history
 
 case "$1" in
 	start|"")
-		# Already captured one — block until manually cleared.
-		[ -f "$LOG" ] && exit 0
+		# Already captured one — block until manually cleared. Say so: a
+		# saved record is worth knowing about at boot, and silence here
+		# reads the same as "nothing happened".
+		if [ -f "$LOG" ]; then
+			echo "  panicrec: skipped (record already saved, delete to re-arm)"
+			exit 0
+		fi
 
-		line=$(dmesg | grep -F 'previous boot ended in panic' | tail -n 1)
-		[ -n "$line" ] || exit 0
+		record=$(dmesg | grep -E 'rtl819x-wdt.*previous panic:')
+		if [ -z "$record" ]; then
+			echo "  panicrec: skipped (no panic record)"
+			exit 0
+		fi
+
+		# Flag an unsynced clock instead of dating the capture 1970.
+		stamp=$(date '+%Y-%m-%d %H:%M:%S')
+		if [ "$(date '+%Y')" -lt 2020 ]; then
+			stamp="$stamp (clock not yet synced, see uptime= below)"
+		fi
 
 		mkdir -p /userdata/panic
-		echo "$(date '+%Y-%m-%d %H:%M:%S') ${line}" > "$LOG"
-		echo "first panic record captured to $LOG (delete it to re-arm)"
+		{
+			echo "$stamp --- panic record capture ---"
+			echo "$record"
+		} > "$LOG"
+		echo "  panicrec: captured to $LOG (delete to re-arm)"
 		;;
 	stop)
 		;;
 	*)
-		echo "S26panicrec start"
+		echo "Usage: $0 {start|stop}"
 		;;
 esac
 exit 0

@@ -85,8 +85,7 @@ apt-get install -y \
     libgl1 \
     cmake \
     sshpass \
-    iproute2 \
-    xxd
+    iproute2
 
 echo ""
 echo "========================================="
@@ -129,7 +128,7 @@ echo "  - Kernel build: libssl-dev, libelf-dev, device-tree-compiler"
 echo "  - Compression: bzip2, lbzip2, xz-utils, zlib1g-dev"
 echo "  - Filesystem: squashfs-tools, mtd-utils, fakeroot, cpio"
 echo "  - 32-bit support: libc6-i386, zlib1g:i386"
-echo "  - Flashing: tftp-hpa, sshpass, iproute2, xxd"
+echo "  - Flashing: tftp-hpa, sshpass, iproute2"
 echo "  - Silabs tools: openjdk-21-jre-headless, libgl1"
 echo "  - cpcd build: cmake"
 echo "  - Other: git, git-lfs, wget, curl, unzip, python3, rsync"

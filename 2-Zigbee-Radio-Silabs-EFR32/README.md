@@ -1,108 +1,187 @@
-# Zigbee Radio — Silabs EFR32MG1B
+# Silabs EFR32 Radio Firmware
 
-This section covers the **Zigbee coprocessor** embedded in the gateway: a Silabs EFR32MG1B chip running dedicated wireless firmware.
+This section covers the gateway's IEEE 802.15.4 coprocessor: an EFR32MG1B on
+the Lidl board and an EFR32MG13P on the Sengled Smart Hub G4.
 
-## Overview
+The EFR32 is independent of the RTL8196E Linux processor. It has its own
+bootloader, application, UART baud, and flow-control requirements. Normal users
+flash it over Ethernet after Linux is installed; SWD is a recovery/development
+interface, not part of the standard installation.
 
-The EFR32MG1B handles all Zigbee radio communication. The stock firmware uses the Tuya protocol, but it can be replaced with open-source alternatives to work with **Zigbee2MQTT**, **ZHA**, or **Matter/Thread**.
+## Choose before flashing
 
-## Build All Firmware
+| Firmware | Use it for | Recommended audience |
+| --- | --- | --- |
+| **NCP-UART-HW** | Zigbee2MQTT or ZHA coordinator | Most users |
+| **RCP-UART-HW** | `cpcd` + host-side `zigbeed` / EmberZNet 8.2 | Advanced users |
+| **OT-RCP** | Thread Border Router, external OTBR, or Zigbee-on-Host | Thread/advanced users |
+| **Z3 Router** | Standalone Zigbee mesh extender | Users who do not need a coordinator |
+| **Gecko Bootloader** | Radio application updates and specialist recovery | Normally managed automatically |
+
+If those terms are unfamiliar, use the plain-language
+[radio selection guide](../docs/radio-options.md). **NCP is the default choice
+for a new Zigbee2MQTT or ZHA installation.**
+
+## Flash a pre-built radio image
+
+Run the repository-root script against a gateway already running this project's
+Linux firmware:
 
 ```bash
-# Using Docker (from 1-Build-Environment/)
-docker run -it --rm -v $(pwd)/..:/workspace lidl-gateway-builder \
-    /workspace/2-Zigbee-Radio-Silabs-EFR32/build_efr32.sh
+# Interactive selection
+./flash_efr32.sh -g <gateway-ip>
 
-# Or native
-./build_efr32.sh              # Build all 5 firmware variants
-./build_efr32.sh ncp rcp      # Build specific targets
-./build_efr32.sh --help       # Show available targets
+# Recommended Zigbee coordinator
+./flash_efr32.sh -y -g <gateway-ip> ncp
+
+# Thread Border Router radio
+./flash_efr32.sh -y -g <gateway-ip> otrcp
 ```
 
-## Contents
+For Sengled, always select the board:
 
-| Directory | Description |
-|-----------|-------------|
-| [20-EZSP-Reference](./20-EZSP-Reference/README.md) | Introduction to EZSP protocol and EmberZNet stack |
-| [21-Simplicity-Studio](./21-Simplicity-Studio/README.md) | Build your own firmware with Silabs IDE |
-| [22-Backup-Flash-Restore](./22-Backup-Flash-Restore/README.md) | Backup, flash, and restore the Zigbee chip firmware |
-| [23-Bootloader-UART-Xmodem](./23-Bootloader-UART-Xmodem/README.md) | Flash firmware via UART using Gecko bootloader |
-| [24-NCP-UART-HW](./24-NCP-UART-HW/README.md) | NCP firmware for Zigbee2MQTT and ZHA |
-| [25-RCP-UART-HW](./25-RCP-UART-HW/README.md) | RCP firmware: EmberZNet 8.2.2 / EZSP v18 via host-side `zigbeed` |
-| [26-OT-RCP](./26-OT-RCP/README.md) | OpenThread RCP firmware for zigbee-on-host or Thread/Matter |
-| [27-Router](./27-Router/README.md) | Zigbee 3.0 Router SoC firmware to extend mesh network |
+```bash
+BOARD=sengled-e39-g8c ./flash_efr32.sh -y -g <gateway-ip> ncp
+```
 
-## Firmware: NCP (Network Co-Processor)
+The script checks the live devicetree model, resolves the board-specific image
+and safe default baud, obtains exclusive control of the UART bridge, enters the
+Gecko bootloader, flashes the application, updates
+`/userdata/etc/radio.conf`, and reboots.
 
-- The Zigbee stack runs on the EFR32
-- Simple setup: just flash and connect to Zigbee2MQTT or ZHA
-- Recommended for most users who want a Zigbee coordinator
+Stop Zigbee2MQTT, ZHA, `cpcd`, or any other TCP:8888 client before flashing.
+Use `./flash_efr32.sh --help` for the complete firmware and baud matrix.
 
-## Firmware: RCP (Radio Co-Processor)
+## Firmware architecture
 
-Two RCP options are available:
+```text
+Application client or host stack
+             |
+       TCP on Ethernet
+             |
+RTL8196E Linux / UART bridge or otbr-agent
+             |
+      board-specific UART
+             |
+EFR32 application + two-stage Gecko bootloader
+             |
+      IEEE 802.15.4 radio
+```
 
-### RCP with cpcd + zigbeed (25-RCP-UART-HW)
+### NCP
 
-- Uses Silicon Labs' CPC protocol (Co-Processor Communication)
-- Runs with cpcd + zigbeed on the host
-- Modern stack on Series 1 hardware: **EmberZNet 8.2.2 / EZSP v18** (zigbeed runs host-side, so the EFR32MG1B is no longer the bottleneck)
-- Single-stack only — Zigbee+Thread concurrently is not supported on this gateway (Series 1 has no Concurrent Multiprotocol; reflash with OT-RCP for Thread/Matter)
+The complete EmberZNet 7.5.1 Zigbee stack runs on the EFR32 and exposes EZSP
+v13. Zigbee2MQTT or ZHA connects directly through the gateway's TCP bridge.
 
-### OpenThread RCP (26-OT-RCP)
+Reference: [NCP-UART-HW](./24-NCP-UART-HW/README.md).
 
-- Standard OpenThread RCP firmware (Spinel/HDLC, fully open-source)
-- **One firmware, three use cases:**
-  - **ZoH** — Zigbee on host via [zigbee-on-host](https://github.com/Nerivec/zigbee-on-host), integrated in Zigbee2MQTT 2.x as the `zoh` adapter
-  - **OTBR on host** — Thread / Matter-over-Thread, OTBR running on an external PC/Pi
-  - **OTBR on gateway** — Thread / Matter-over-Thread, OTBR running natively on the RTL8196E
-- Same `.gbl`, you switch use case by changing what runs host-side — no EFR32 reflash
+### RCP
 
-## Firmware: Router (SoC)
+The EFR32 runs only the 802.15.4 radio layer and speaks CPC. `cpcd` and
+`zigbeed` run on a host, allowing EmberZNet 8.2.2 / EZSP v18 on Series-1 radio
+hardware. This path is intentionally more complex than NCP.
 
-- Standalone Zigbee 3.0 router, no host required
-- Extends your Zigbee mesh network coverage
-- Auto-joins open networks via network steering
-- Transforms the gateway into a dedicated range extender
+References: [RCP-UART-HW](./25-RCP-UART-HW/README.md) and
+[EmberZNet 8.x guide](./25-RCP-UART-HW/EMBERZNET-8.x-GUIDE.md).
+
+### OT-RCP
+
+The EFR32 speaks OpenThread Spinel/HDLC. It can serve native `otbr-agent` on the
+gateway, an OTBR on another host, or Zigbee2MQTT's Zigbee-on-Host adapter. The
+application image is the same; the RTL8196E-side service selection changes.
+
+References: [OT-RCP](./26-OT-RCP/README.md) and
+[Thread/Matter primer](./26-OT-RCP/THREAD-MATTER-PRIMER.md).
+
+### Standalone router
+
+The EFR32 runs a complete Zigbee 3.0 router application and joins another
+coordinator's mesh. The gateway no longer presents a coordinator endpoint.
+
+Reference: [Z3 Router](./27-Router/README.md).
 
 ## Gateway-side runtime configuration
 
-Flashing the EFR32 is only **half** of the configuration — the
-**RTL8196E side** also needs to know which firmware is on the chip
-and at what baud, so the right init script wakes up at boot:
+`flash_efr32.sh` records the chip-side identity and the service-routing state in
+`/userdata/etc/radio.conf`:
 
+| Application | Important host-side state | Service that owns UART1 |
+| --- | --- | --- |
+| NCP | `FIRMWARE=ncp`, baud, flow mode, no `MODE=otbr` | `S50uart_bridge`, TCP:8888 |
+| RCP | `FIRMWARE=rcp`, baud, flow mode, no `MODE=otbr` | `S50uart_bridge`, TCP:8888 |
+| OT-RCP, native OTBR | `FIRMWARE=otrcp`, `MODE=otbr`, baud, flow mode | `S70otbr`, direct tty |
+| OT-RCP, external host | `FIRMWARE=otrcp`, no `MODE=otbr` | `S50uart_bridge`, TCP:8888 |
+| Router | `FIRMWARE=router` | Bridge remains available for maintenance, not coordinator traffic |
+
+Do not manually change `FIRMWARE_BAUD` to a value the chip was not built for;
+the two UART ends would stop communicating. The full key reference is in
+[Userdata](../3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md#radioconf-keys-full-reference).
+
+## Board differences
+
+Every build and flash command accepts `BOARD` (`lidl` by default or
+`sengled-e39-g8c`). Board data defines:
+
+- exact EFR32 part;
+- USART and pin routing;
+- hardware, software, or no flow control;
+- safe default baud;
+- bootloader activation and version data;
+- non-Lidl artifact suffixes.
+
+The Lidl board wires RTS/CTS. The Sengled G4 does not, so it uses board-specific
+software/no-flow builds and lower RCP/OT-RCP defaults. Never choose a firmware
+only by filename similarity.
+
+The [board status and porting table](./boards/README.md) distinguishes images
+validated on real hardware from images that are built and shipped but not yet
+field-tested.
+
+## Gecko bootloader and recovery
+
+The radio boot chain has two stages:
+
+- Stage 1 is installed through SWD and cannot be updated over UART;
+- Stage 2 receives application `.gbl` images over UART/Xmodem and can itself be
+  updated through Stage 1.
+
+Normal application flashes transit Stage 2 automatically. Do not reflash a
+bootloader merely to update an NCP/RCP/OT-RCP application. Bootloader version
+ordering is strict, and a same-version Stage-2 update can erase the application
+without installing a new bootloader; `flash_efr32.sh` contains a safety guard.
+
+References: [two-stage bootloader](./23-Bootloader-UART-Xmodem/README.md),
+[backup/flash/restore](./22-Backup-Flash-Restore/README.md), and
+[recovery post-mortem](./POST-MORTEM-bootloader-recovery.md).
+
+## Build from source
+
+Pre-built `.gbl` and `.s37` artifacts are committed for supported boards. To
+modify them, first install the complete
+[build environment](../1-Build-Environment/README.md), then use:
+
+```bash
+cd 2-Zigbee-Radio-Silabs-EFR32
+./build_efr32.sh
+./build_efr32.sh ncp rcp
+BOARD=sengled-e39-g8c ./build_efr32.sh ncp
+./build_efr32.sh --help
 ```
-EFR32 firmware (.gbl)        radio.conf daemon-routing keys   init script        What runs
-                              on RTL8196E                      starts at boot     on /dev/ttyS1
-─────────────────────────    ──────────────────────────────   ───────────────   ────────────────
-NCP                          FIRMWARE_BAUD=<B>                S50uart_bridge    bridge TCP:8888
-RCP                          FIRMWARE_BAUD=<B>                S50uart_bridge    bridge TCP:8888
-OT-RCP (case 3, default)     FIRMWARE_BAUD=<B> + MODE=otbr    S70otbr           otbr-agent (native)
-OT-RCP (cases 1 & 2)         FIRMWARE_BAUD=<B> (no MODE)      S50uart_bridge    bridge TCP:8888
-Router                       FIRMWARE_BAUD=115200             S50uart_bridge    bridge TCP:8888
-```
 
-The repo-root `flash_efr32.sh` writes the right `radio.conf` keys
-**automatically** after a successful flash — for OT-RCP it picks **case 3**
-(otbr-agent on gateway) by default, and you switch to cases 1/2 by
-editing `radio.conf` after the flash (see
-[`26-OT-RCP/docker/README.md`](./26-OT-RCP/docker/README.md#switching-radio-mode-no-efr32-reflash-needed)).
+Every firmware subdirectory holds the SLC project, source/patch overlay, build
+script, and committed outputs. Rebuilding against a different Gecko SDK or
+without the project patches can silently remove UART routing or flow control;
+follow the component guide rather than invoking `slc generate` by hand.
 
-The script also writes informational keys describing the chip-side
-identity (`FIRMWARE`, `FIRMWARE_VERSION`) so a `cat /userdata/etc/radio.conf`
-tells you exactly what's on the chip without an
-`universal-silabs-flasher probe`. See
-[`3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md`](../3-Main-SoC-Realtek-RTL8196E/34-Userdata/README.md#radioconf-keys-full-reference)
-for the full key reference.
+## Reference map
 
-For all other firmwares, no manual `radio.conf` edit is needed — the
-flash script's choice is the only choice.
-
-`radio.conf` is documented in
-[`3-Main-SoC.../34-Userdata/`](../3-Main-SoC-Realtek-RTL8196E/34-Userdata/);
-the keys are:
-
-| Key | Read by | Purpose |
-|---|---|---|
-| `MODE=otbr` | `S50uart_bridge`, `S70otbr` | Switches ttyS1 ownership: present → `S70otbr` runs `otbr-agent`; absent → `S50uart_bridge` arms the TCP bridge |
-| `FIRMWARE_BAUD=<baud>` | `S50uart_bridge`, `S70otbr` | UART baud both daemons open `/dev/ttyS1` at — single source of truth, set by `flash_efr32.sh` (default 460800 if absent) |
+| Topic | Page |
+| --- | --- |
+| EZSP concepts and compatibility | [EZSP reference](./20-EZSP-Reference/README.md) |
+| Simplicity Studio and custom builds | [Simplicity Studio](./21-Simplicity-Studio/README.md) |
+| Radio backup, flashing, and restore | [Backup / Flash / Restore](./22-Backup-Flash-Restore/README.md) |
+| Gecko UART/Xmodem bootloader | [Bootloader](./23-Bootloader-UART-Xmodem/README.md) |
+| NCP | [NCP-UART-HW](./24-NCP-UART-HW/README.md) |
+| RCP and host-side Zigbee | [RCP-UART-HW](./25-RCP-UART-HW/README.md) |
+| OpenThread RCP | [OT-RCP](./26-OT-RCP/README.md) |
+| Standalone Zigbee router | [Router](./27-Router/README.md) |

@@ -3,7 +3,6 @@ set -e
 
 echo "=== cpcd-zigbeed container starting ==="
 echo "RCP endpoint: ${RCP_HOST}:${RCP_PORT}"
-echo "UART baudrate: ${UART_BAUDRATE}"
 echo "cpcd instance: ${CPCD_INSTANCE}"
 echo "Zigbeed port: ${ZIGBEED_PORT}"
 

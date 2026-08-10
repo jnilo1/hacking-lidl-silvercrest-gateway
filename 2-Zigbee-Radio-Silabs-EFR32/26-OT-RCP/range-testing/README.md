@@ -1,225 +1,215 @@
-# Thread Mesh Range Testing
+# Thread range testing
 
-Tools to characterise the radio link quality of a Thread mesh hosted by
-the Lidl Silvercrest Gateway (custom firmware: `otbr-agent` +
-EFR32MG1B OT-RCP). They let you measure, in your own deployment, how
-**TX power**, **Thread channel**, **antenna orientation** and **sensor
-orientation** affect the uplink RSSI, the LQI, and the attached child
-count.
+This toolkit measures how a Thread mesh behaves in your home: link quality,
+transmit power margin, channel choice, and the effect of device orientation.
+The gateway-side essentials are deliberately kept in **one command**.
 
-A field-test report covering all four phases, with practical
-recommendations and recipes, is in [`REPORT.md`](REPORT.md).
+For the results from a real 16-sensor deployment and guidance on interpreting
+them, read the [field report](REPORT.md).
 
-## Layout
+## What is included
 
-```
+```text
 range-testing/
-├── README.md             this file
-├── REPORT.md             field-test results and recommendations
-├── gateway/              scripts that run on the gateway (BusyBox sh)
-│   ├── range_test.sh         core CSV sampler
-│   ├── phase1_tx_sweep.sh    TX power sweep with abort-on-detach
-│   ├── phase2_channel_migration.sh   channel migration via Pending Op Dataset
-│   ├── orientation_runner.sh paced orientation runner (operator-confirmed)
-│   ├── healthmon.sh          minute-resolution gateway health sampler (opt-in)
-│   ├── ha_link_publisher.sh  Thread RSSI/LQI publisher to Home Assistant (opt-in)
-│   ├── ha_link_publisher.conf.example   annotated config template
-│   └── examples/             optional helpers (init scripts, …)
-│       └── S75ha_link_publisher    auto-start init script for the publisher
-└── analysis/             developer-machine tooling (Python 3.10+)
-    ├── ha_matter_map.py  HA WS API → label/node_id/ext_mac mapping
-    └── analyze.py        per-palier and per-sensor stats from CSVs
+├── README.md
+├── REPORT.md
+├── gateway/
+│   ├── thread-range-test
+│   └── optional/
+│       ├── thread-health-monitor
+│       └── home-assistant/
+│           ├── thread-link-publisher
+│           ├── thread-link-publisher.conf.example
+│           └── S75thread-link-publisher
+└── analysis/
+    ├── analyze-results.py
+    └── map-ha-devices.py
 ```
+
+Start with `thread-range-test`. The health monitor and Home Assistant publisher
+are optional integrations; they are not required for ordinary measurements.
 
 ## Quick start
 
-### 1. Install the gateway scripts
+Run these commands from this `range-testing` directory on your computer.
+Replace `192.168.1.88` with the gateway address.
 
-From your developer machine, copy the gateway-side scripts to the
-gateway and make them available on `$PATH`:
-
-```sh
-scp gateway/range_test.sh root@192.168.1.88:/usr/bin/
-scp gateway/phase1_tx_sweep.sh root@192.168.1.88:/usr/bin/
-scp gateway/phase2_channel_migration.sh root@192.168.1.88:/usr/bin/
-scp gateway/orientation_runner.sh root@192.168.1.88:/usr/bin/
-scp gateway/healthmon.sh root@192.168.1.88:/usr/bin/   # optional
-
-ssh root@192.168.1.88 'chmod +x /usr/bin/range_test.sh /usr/bin/phase1_tx_sweep.sh /usr/bin/phase2_channel_migration.sh /usr/bin/orientation_runner.sh /usr/bin/healthmon.sh'
+```bash
+scp -O gateway/thread-range-test root@192.168.1.88:/usr/bin/
+ssh root@192.168.1.88 'chmod +x /usr/bin/thread-range-test'
 ```
 
-`ot-ctl` must be on `$PATH` on the gateway. On the stock custom
-firmware build it is at `/userdata/usr/bin/ot-ctl`; if it is not in
-`$PATH`, set the `OT_CTL` environment variable when invoking the
-scripts:
+Take a two-minute sample, retrieve it, then print summary statistics:
 
-```sh
-ssh root@192.168.1.88 'OT_CTL=/userdata/usr/bin/ot-ctl /usr/bin/range_test.sh smoke 60 10'
+```bash
+ssh root@192.168.1.88 \
+  'OT_CTL=/userdata/usr/bin/ot-ctl thread-range-test sample smoke 120 30'
+scp -O root@192.168.1.88:/userdata/log/range_smoke.csv .
+python3 analysis/analyze-results.py range_smoke.csv
 ```
 
-### 2. Run a single sample (sanity check)
+The `OT_CTL` override is only needed when `ot-ctl` is not already on the
+gateway's `PATH`.
 
-```sh
-ssh root@192.168.1.88 'OT_CTL=/userdata/usr/bin/ot-ctl /usr/bin/range_test.sh smoke 120 30'
+## The four experiments
+
+| Question | Command | What changes |
+|---|---|---|
+| Is data collection working? | `sample` | Nothing; records the current mesh |
+| How much transmit-power margin is available? | `tx-power` | Gateway TX power |
+| Would another 802.15.4 channel work better? | `channel` | Thread network channel |
+| Does physical placement matter? | `orientation` | Gateway or sensor orientation |
+
+Every command has built-in help:
+
+```bash
+thread-range-test --help
+thread-range-test tx-power --help
 ```
 
-This polls the neighbour table every 30 s for 2 minutes and writes
-`/userdata/log/range_smoke.csv`. Pull it back with `scp` for analysis.
+### Record one condition
 
-### 3. Set up the Python analysis venv (developer machine)
+```bash
+thread-range-test sample <label> <duration_seconds> [interval_seconds]
+thread-range-test sample baseline 600 30
+```
 
-```sh
+The result is `/userdata/log/range_<label>.csv`. Each row contains a timestamp,
+RLOC, role, age, average and last RSSI, inbound link quality, and extended MAC.
+
+### Sweep transmit power
+
+```bash
+thread-range-test tx-power expected_children=16 sample_sec=300
+```
+
+The default sweep requests 10, 7, 5, 3, 1, and 0 dBm. The radio may clamp a
+requested value; the actual value is recorded in each CSV. The command stops
+if the attached-child count drops and restores 7 dBm on completion or signal.
+Omit `expected_children` to use the count observed at startup.
+
+### Compare channels
+
+```bash
+thread-range-test channel to=20 sample_sec=300
+```
+
+The command records the current channel, migrates the whole Thread network
+through a Pending Operational Dataset, records the target, then migrates back
+and takes a control sample. Battery devices may take several minutes to follow
+a migration. Do not power-cycle the gateway or interrupt the command while a
+migration is pending.
+
+### Compare orientations
+
+Start the runner:
+
+```bash
+thread-range-test orientation gateway 'front left right' sample_sec=300
+```
+
+For each requested position, physically move the subject and acknowledge it
+from a second SSH session:
+
+```bash
+touch /tmp/thread-range-orientation.ack
+```
+
+Use a stable label without spaces for `subject`, such as `gateway` or
+`bedroom_sensor`.
+
+## Analyse several results
+
+`analyze-results.py` uses only the Python standard library:
+
+```bash
+python3 analysis/analyze-results.py range_*.csv
+```
+
+To show Home Assistant labels instead of extended MAC addresses, first create
+a mapping. This optional helper needs the `websockets` package and a Home
+Assistant long-lived access token:
+
+```bash
 python3 -m venv .venv
-.venv/bin/pip install websockets    # only ha_matter_map.py needs it
+.venv/bin/pip install websockets
+HA_URL=homeassistant.local:8123 \
+HA_TOKEN='<long-lived-token>' \
+  .venv/bin/python analysis/map-ha-devices.py > labels.csv
+python3 analysis/analyze-results.py --map labels.csv range_*.csv
 ```
 
-`analyze.py` is pure-stdlib and does not need the venv.
+Treat the token as a password. Do not add it to this repository or copy it to
+the gateway unless you intentionally enable the publisher below.
 
-### 4. Build the HA label map (optional but recommended)
+## Optional: monitor gateway health
 
-If you use Matter sensors, their Thread `ext_mac` is randomised at every
-commissioning, so the CSVs cannot be read by themselves. Build a map
-from your Home Assistant once:
+The health monitor adds one host-side sample per minute: memory, load, UART1
+errors, Thread state and child count, and Ethernet errors.
 
-```sh
-HA_URL=homeassistant.local:8123 HA_TOKEN=<bearer> \
-  .venv/bin/python analysis/ha_matter_map.py > labels.csv
+```bash
+scp -O gateway/optional/thread-health-monitor root@192.168.1.88:/usr/bin/
+ssh root@192.168.1.88 'chmod +x /usr/bin/thread-health-monitor'
+ssh root@192.168.1.88 \
+  'OT_CTL=/userdata/usr/bin/ot-ctl thread-health-monitor start'
+ssh root@192.168.1.88 'thread-health-monitor status'
+ssh root@192.168.1.88 'thread-health-monitor stop'
 ```
 
-`<bearer>` is a long-lived access token created from
-HA → Profile → Security → Long-Lived Access Tokens.
+It writes `/userdata/log/health.csv` and a final
+`/userdata/log/dmesg.snapshot`. Stop it after the experiment.
 
-### 5. Compare paliers
+## Optional: publish link quality to Home Assistant
 
-```sh
-analysis/analyze.py --map labels.csv \
-                    --ext_mac <hex> \
-                    range_phase4_*.csv
+The publisher sends each attached child's average RSSI and link attributes to
+the Home Assistant REST API. It is opt-in because it stores a Home Assistant
+token on the gateway and creates one REST request per child per interval.
+
+1. Copy and edit the configuration locally:
+
+   ```bash
+   cp gateway/optional/home-assistant/thread-link-publisher.conf.example \
+     thread-link-publisher.conf
+   # Set HA_URL, HA_TOKEN, and LABEL_<ext_mac> entries.
+   ```
+
+2. Install the configuration and command:
+
+   ```bash
+   scp -O thread-link-publisher.conf \
+     root@192.168.1.88:/userdata/etc/thread-link-publisher.conf
+   scp -O gateway/optional/home-assistant/thread-link-publisher \
+     root@192.168.1.88:/usr/bin/
+   ssh root@192.168.1.88 'chmod +x /usr/bin/thread-link-publisher && \
+     OT_CTL=/userdata/usr/bin/ot-ctl thread-link-publisher once'
+   ```
+
+3. If the one-shot test succeeds, start and inspect the daemon:
+
+   ```bash
+   ssh root@192.168.1.88 'thread-link-publisher start'
+   ssh root@192.168.1.88 'thread-link-publisher status'
+   ```
+
+To start it automatically, install the provided init script:
+
+```bash
+scp -O gateway/optional/home-assistant/S75thread-link-publisher \
+  root@192.168.1.88:/userdata/etc/init.d/
+ssh root@192.168.1.88 \
+  'chmod +x /userdata/etc/init.d/S75thread-link-publisher'
 ```
 
-`--ext_mac` is optional; without it, `analyze.py` reports stats for
-every sensor seen in the input CSVs.
+The publisher is a measurement aid, not part of the default firmware. Its
+configuration contains a bearer token and should remain readable only by root.
 
-## Test phases at a glance
+## Measurement cautions
 
-| Phase | Script | What it varies | Operator action needed |
-|:--|:--|:--|:--|
-| 1 — TX power | `phase1_tx_sweep.sh` | TX power, in calibrated steps | none (fully scripted) |
-| 2 — Channel  | `phase2_channel_migration.sh` | 802.15.4 channel | none |
-| 3 — Gateway orientation | `orientation_runner.sh subject=gateway` | physical pose of gateway | rotate gateway between paliers |
-| 4 — Sensor orientation  | `orientation_runner.sh subject=<sensor>` | physical pose of one sensor | rotate that sensor between paliers |
-
-The orientation runner waits for an operator ack between paliers
-(`touch /tmp/orientation_ack`). Phase 1 / 2 are fully autonomous, but
-the user should monitor the run since `phase1` aborts on detach and
-`phase2` aborts if a migration fails.
-
-### Optional: surface link quality in Home Assistant
-
-`ha_link_publisher.sh` exposes the gateway-side **uplink RSSI**, **LQI**
-and **last-seen age** of every Thread child as Home Assistant entities,
-so mesh degradations are visible in the same dashboards as the sensors'
-actual measurements. One HA entity per device, multi-attribute payload:
-
-```yaml
-sensor.thread_<slug>_rssi:
-  state: -73                  # avg RSSI in dBm
-  attributes:
-    unit_of_measurement: dBm
-    device_class: signal_strength
-    friendly_name: "MYGGBETT 5202 RSSI"
-    lqi: 3
-    last_rssi: -73
-    age_s: 7
-    rloc: "0xb417"
-    ext_mac: "563784e9bea2ed1b"
-    attached: true
-```
-
-Resource footprint at the default 60 s cadence with 16 sensors: ~1 % of
-one CPU core, ~500 KB transient RSS, ~24 MB/day of HA traffic, **zero
-JFFS2 wear**. Lighter than `healthmon.sh`. See `REPORT.md` resource
-budget for the breakdown.
-
-**Setup**:
-
-1. **Create a long-lived access token** in HA → Profile → Security →
-   Long-Lived Access Tokens → Create Token. Read+write on `/api/states/`
-   is sufficient.
-2. **Generate a label map** from your existing Matter pairings:
-   ```sh
-   HA_URL=homeassistant.local:8123 HA_TOKEN=<bearer> \
-     .venv/bin/python analysis/ha_matter_map.py | \
-     awk -F, 'NR>1 {printf "LABEL_%s=\"%s\"\n", $3, $1}'
-   ```
-3. **Build the conf** by copying `ha_link_publisher.conf.example`,
-   filling in `HA_URL` + `HA_TOKEN`, and pasting the labels from step 2:
-   ```sh
-   cp gateway/ha_link_publisher.conf.example ha_link_publisher.conf
-   # …edit ha_link_publisher.conf…
-   scp -O ha_link_publisher.conf root@192.168.1.88:/userdata/etc/
-   ```
-4. **Deploy the script** and smoke-test:
-   ```sh
-   scp -O gateway/ha_link_publisher.sh root@192.168.1.88:/usr/bin/
-   ssh root@192.168.1.88 'chmod +x /usr/bin/ha_link_publisher.sh && \
-                          OT_CTL=/userdata/usr/bin/ot-ctl \
-                          /usr/bin/ha_link_publisher.sh once'
-   ```
-   You should see one `posted sensor.thread_…_rssi …` line per attached
-   child. Open HA → Developer Tools → States and search `sensor.thread_`
-   to verify the entities appeared.
-5. **Run as a daemon**:
-   ```sh
-   ssh root@192.168.1.88 '/usr/bin/ha_link_publisher.sh start'
-   ssh root@192.168.1.88 '/usr/bin/ha_link_publisher.sh status'
-   # to stop:
-   ssh root@192.168.1.88 '/usr/bin/ha_link_publisher.sh stop'
-   ```
-
-6. **(Optional) auto-start at boot** — install the example init script:
-   ```sh
-   scp -O gateway/examples/S75ha_link_publisher root@192.168.1.88:/userdata/etc/init.d/
-   ssh root@192.168.1.88 'chmod +x /userdata/etc/init.d/S75ha_link_publisher'
-   ```
-   The script is gated on the conf file being present, so it stays
-   inert if the publisher is later disabled by removing
-   `/userdata/etc/ha_link_publisher.conf`. It is **not** part of the
-   default rootfs skeleton — installation is per-gateway.
-
-**Detached devices**: when a sensor leaves the neighbor table, the
-publisher keeps its HA entity alive with `attached: false` and a growing
-`age_s`. Build a "stale" badge from `age_s > 240` if you want a one-look
-mesh-health card.
-
-### Optional: capture host-side context with `healthmon.sh`
-
-For long runs (multi-hour soak, channel migration, orientation tests),
-launch `healthmon.sh start` on the gateway in parallel. It samples
-memory, CPU load, UART1 error counters (the OT-RCP link), Thread role
-and child count, and Ethernet errors at 1 Hz/min. Useful for spotting
-host-side anomalies — UART bit-errors, leaks, detach storms — that
-would otherwise be invisible from the RSSI/LQI CSV alone.
-
-```sh
-ssh root@192.168.1.88 'OT_CTL=/userdata/usr/bin/ot-ctl /usr/bin/healthmon.sh start'
-# ... run your range test ...
-ssh root@192.168.1.88 '/usr/bin/healthmon.sh stop'
-scp -O root@192.168.1.88:/userdata/log/health.csv .
-```
-
-`healthmon.sh status` prints the running PID and current log sizes.
-On stop, it dumps the kernel ring buffer to `dmesg.snapshot` (without
-clearing the buffer) so any anomaly visible in `health.csv` can be
-correlated with kernel-level events.
-
-## Caveats
-
-- **Uplink-only**: all RSSI/LQI values are measured at the gateway from
-  incoming child frames. The downlink (gateway → sensor) is not
-  directly observable; you only see its quality through detach events.
-- **N=1 deployment**: the recommendations in `REPORT.md` come from a
-  single 16-sensor home. Repeat the tests in your own environment for
-  defensible numbers — this is exactly what these scripts are for.
-- **Matter ext_mac rotation**: rebuild `labels.csv` whenever you re-pair
-  a Matter device, because its ext_mac will change.
+- RSSI and LQI from `ot-ctl neighbor table` are measured at the gateway. They
+  describe the child's uplink, not necessarily its downlink.
+- Change one variable at a time and keep the gateway, sensors, furniture, and
+  traffic conditions stable during a comparison.
+- Allow battery devices time to wake and follow topology or channel changes.
+- Prefer repeated samples over a conclusion based on one RSSI value.
+- Record the attached-child count; good averages are meaningless if a weak
+  device disappeared from the table.

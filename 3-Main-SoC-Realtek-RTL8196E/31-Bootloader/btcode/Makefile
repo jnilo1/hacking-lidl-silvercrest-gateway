@@ -51,11 +51,18 @@ LZMA        ?= $(HOME)/rtl8196e-gateway/1-Build-Environment/11-realtek-tools/bin
 
 OUTDIR = build
 
+# --- Board selection ---------------------------------------------------------
+# Per-board constants (DRAM size/top, DDR bring-up) live in
+# ../boards/$(BOARD)/board.h — see ../boards/README.md.
+
+BOARD ?= lidl
+
 # --- Compiler flags ---------------------------------------------------------
 
 CFLAGS = -Os -g -G 0 \
          -fomit-frame-pointer -fno-pic -mno-abicalls \
-         -ffreestanding -fno-common -D__KERNEL__
+         -ffreestanding -fno-common -D__KERNEL__ \
+         -I../boards/$(BOARD)
 
 ifeq ($(RAMTEST_TRACE),1)
 CFLAGS += -DRAMTEST_TRACE

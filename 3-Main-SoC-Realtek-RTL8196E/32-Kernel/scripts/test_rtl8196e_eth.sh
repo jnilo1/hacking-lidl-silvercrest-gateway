@@ -24,7 +24,11 @@ set -euo pipefail
 export LC_ALL=C
 
 # Configuration
-RTL8196E_IP="${RTL8196E_IP:-192.168.1.88}"
+# Gateway address: RTL8196E_IP env > gateway.env > the last gateway installed
+# or reached > its hostname > the historic 192.168.1.88 (see lib/gwconf.sh).
+# shellcheck disable=SC1091
+. "$(dirname "${BASH_SOURCE[0]}")/../../../lib/gwconf.sh"
+RTL8196E_IP="${RTL8196E_IP:-$(gwconf_gateway_addr)}"
 RTL8196E_USER="${RTL8196E_USER:-root}"
 IPERF_PORT=5001
 DURATION=30

@@ -1,12 +1,26 @@
 # RCP 802.15.4 Firmware
 
-Radio Co-Processor (RCP) firmware for the EFR32MG1B232F256GM48 chip found in the Lidl Silvercrest Smart Home Gateway.
+Radio Co-Processor (RCP) firmware for the EFR32 radio: EFR32MG1B232F256GM48 on the Lidl Silvercrest Smart Home Gateway (`BOARD=lidl`, the default), EFR32MG13P732F512IM32 on the Sengled Smart Hub G4 (`BOARD=sengled-e39-g8c`). Both ship prebuilt, but the G4 image has never been run on hardware — see [Per-board builds](../boards/README.md).
 
 This firmware transforms the gateway's Zigbee chip into a **Radio Co-Processor**
 that handles only the 802.15.4 PHY/MAC layer. The Zigbee stack runs host-side
 in `zigbeed`, which lets us pair a Series 1 EFR32MG1B radio with a modern
 **EmberZNet 8.2.2** stack — the gateway then exposes **EZSP v18** to Z2M / ZHA,
 even though Silabs froze on-chip Series 1 support at EmberZNet 7.5.1.
+
+> **Multi-board:** this firmware also builds for other RTL8196E hubs via `BOARD=`
+> (default `lidl`, #143); e.g. `BOARD=sengled-e39-g8c ./build_rcp.sh 230400` for
+> the Sengled Smart Hub G4 (MG13 target). A G4 prebuilt is committed at
+> **230400**, the operating point measured on that board (#134, #142), and is
+> what `flash_efr32.sh` picks there by default — but it has **not** been run on
+> G4 hardware, so validate it on yours before trusting it. CPC supports only
+> RTS/CTS or no flow control, so a
+> `BOARD_UART_FLOW=sw` board is built with flow control **none**; the chip's
+> flow partner is the gateway's in-kernel UART bridge (cpcd connects to it
+> over TCP), and `flash_efr32.sh` records `FIRMWARE_FLOW_CTRL=none` for this
+> build so the bridge arms to match. Non-lidl artefacts carry a `-<board>`
+> filename suffix, resolved by `flash_efr32.sh` from the same `BOARD=`
+> selector — see [`../boards/README.md`](../boards/README.md).
 
 | Host stack | Exposes | When to use |
 |------------|---------|-------------|
@@ -69,7 +83,7 @@ Pre-built firmware is available in the `firmware/` directory. From the
 repository root:
 
 ```bash
-./flash_efr32.sh -y rcp                 # default baud 460800, default IP 192.168.1.88
+./flash_efr32.sh -y rcp                 # default baud 460800, gateway from gateway.env
 ./flash_efr32.sh -y rcp 230400          # 230400 baud (cpcd POSIX-supported only)
 ./flash_efr32.sh -y -g 10.0.0.5 rcp     # custom gateway IP
 ./flash_efr32.sh --help                 # full CLI reference
@@ -149,9 +163,10 @@ The output filename embeds the chosen baud:
 
 ```
 firmware/
-├── rcp-uart-802154-115200.gbl
-├── rcp-uart-802154-230400.gbl
-└── rcp-uart-802154-460800.gbl   # default
+├── rcp-uart-802154-115200-hw.gbl
+├── rcp-uart-802154-230400-hw.gbl
+└── rcp-uart-802154-460800-hw.gbl   # default (-hw = RTS/CTS flow; CPC has no
+                                    # sw mode, so a sw board builds as -none, #145)
 ```
 
 `flash_efr32.sh` resolves the right file via a glob.
@@ -171,11 +186,24 @@ positional `BAUD` argument — no manual file editing for baud changes.
 
 **Via J-Link/SWD** (if you have physical access to the SWD pads):
 ```bash
-commander flash firmware/rcp-uart-802154-460800.gbl \
+commander flash firmware/rcp-uart-802154-460800-hw.gbl \
     --device EFR32MG1B232F256GM48
 ```
 
 > For a detailed explanation of how `universal-silabs-flasher` works (firmware detection, bootloader entry, the `-f` flag, troubleshooting), see [22-Backup-Flash-Restore](../22-Backup-Flash-Restore/README.md).
+
+---
+
+## Experimental research
+
+An isolated prototype explores a combined 802.15.4 RCP and Bluetooth HCI
+endpoint for the Sengled G4. It has never run on gateway hardware, ships no
+pre-built image, does not fit on Lidl, and requires an unvalidated CPC/BlueZ
+host chain. It is intentionally kept outside the supported RCP workflow.
+
+See [Experimental RCP with Bluetooth HCI](experimental/rcp-ble-hci/README.md)
+for its constraints, build instructions, recovery expectations, and the
+explicit flash command.
 
 ---
 
@@ -209,7 +237,6 @@ See subdirectories for detailed build instructions:
 - `zigbeed-8.2.2/` - zigbeed EmberZNet 8.2.2 (recommended)
 - `zigbeed-7.5.1/` - zigbeed EmberZNet 7.5.1 (legacy)
 - `rcp-stack/` - Systemd service manager for the complete chain
-- `cpcd-rtl8196e/` - Cross-compile cpcd for gateway (experimental)
 
 ### Quick Start with Docker (Recommended)
 
@@ -334,8 +361,8 @@ cd 2-Zigbee-Radio-Silabs-EFR32/25-RCP-UART-HW && ./build_rcp.sh 230400
 # 2. Flash — radio.conf FIRMWARE_BAUD is updated automatically
 ./flash_efr32.sh -y rcp 230400
 
-# 3. Update UART_BAUDRATE in docker-compose-zigbee.yml (or cpcd.conf)
-#    so cpcd opens the TCP socket at the matching speed.
+# 3. Nothing to change host-side: cpcd talks TCP to the gateway's bridge,
+#    and the bridge arms the new baud from radio.conf on next boot.
 ```
 
 The baud must be a standard POSIX value (115200, 230400, 460800) — `cpcd`
@@ -421,6 +448,8 @@ The CPC protocol is sensitive to network conditions. For reliable operation:
 ├── zigbeed-7.5.1/               # zigbeed EmberZNet 7.5.1 (legacy)
 ├── zigbeed-8.2.2/               # zigbeed EmberZNet 8.2.2 (recommended)
 ├── docker/                      # Docker stack (cpcd + zigbeed + Z2M)
+├── experimental/
+│   └── rcp-ble-hci/             # Unvalidated Sengled-only research prototype
 └── rcp-stack/                   # Systemd service manager
     ├── bin/rcp-stack            # Main script
     ├── scripts/                 # Helper scripts

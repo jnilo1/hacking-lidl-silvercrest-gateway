@@ -8,7 +8,7 @@
 #   26-OT-RCP/docker/ — Thread/Matter use cases (OT-RCP firmware)
 #
 # Usage:
-#   1. Flash ncp-uart-hw-7.5.1.gbl to the EFR32
+#   1. Flash the NCP firmware: ./flash_efr32.sh ncp   (from the repo root)
 #   2. Ensure the gateway runs kernel 6.18 with rtl8196e-uart-bridge armed
 #      (S50uart_bridge at boot → TCP:8888)
 #   3. Edit z2m/configuration.yaml — set your gateway IP

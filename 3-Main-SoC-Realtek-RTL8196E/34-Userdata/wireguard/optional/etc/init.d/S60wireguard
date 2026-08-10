@@ -1,0 +1,16 @@
+#!/bin/sh
+# S60wireguard — optional WireGuard tunnel lifecycle.
+#
+# The shipped /userdata/etc/wireguard.conf has ENABLED=0, so this script is a
+# no-op until an owner supplies a private configuration and explicitly enables
+# it.  It runs after network setup and before OTBR/netwatch.
+
+case "$1" in
+    start|stop|restart|status)
+        /userdata/usr/sbin/wireguardctl "$1"
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}" >&2
+        exit 1
+        ;;
+esac

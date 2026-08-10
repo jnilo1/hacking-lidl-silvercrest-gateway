@@ -4,7 +4,7 @@
 # Assembles bootloader + kernel + rootfs + userdata into a single fullflash.bin
 # that can be written to the SPI NOR flash via TFTP + FLW.
 #
-# Rebuilds userdata with the chosen network/radio configuration, then assembles
+# Rebuilds userdata with the chosen network configuration, then assembles
 # all 4 partitions, verifies magic bytes, and outputs fullflash.bin.
 #
 # Usage: ./build_fullflash.sh [-q] [--help]
@@ -15,11 +15,18 @@
 #                 errors, and a single summary line. Used by flash_install.
 #
 # Environment variables (for non-interactive use):
+#   BOARD       - "lidl" (default) or "sengled-e39-g8c" (selects the kernel image)
+#   KERNEL      - "6.18" (default) or "7.1" (selects the kernel line)
 #   NET_MODE    - "static", "dhcp", or "skip" (config already injected by caller)
-#   IPADDR      - Static IP address (default: 192.168.1.88)
-#   NETMASK     - Netmask (default: 255.255.255.0)
-#   GATEWAY     - Default gateway (default: 192.168.1.1)
-#   RADIO_MODE  - "zigbee", "thread", or "skip" (config already injected)
+#   IPADDR      - Static IP address for the gateway
+#   NETMASK     - Netmask
+#   GATEWAY     - Default gateway
+#
+# Unset network values are not fixed constants: they fall back to gateway.env,
+# then to the last install, then to an address derived from THIS host's own LAN
+# (see lib/gwconf.sh and gateway.env.example), and only then to the project's
+# historic 192.168.1.x. The chosen configuration is recorded so the other
+# host-side scripts can find the gateway afterwards.
 #
 # J. Nilo - March 2026
 
@@ -28,8 +35,22 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 RTL_DIR="${SCRIPT_DIR}/3-Main-SoC-Realtek-RTL8196E"
 
-BOOTLOADER_IMG="${RTL_DIR}/31-Bootloader/boot.bin"
-KERNEL_IMG="${RTL_DIR}/32-Kernel/kernel-6.18.img"
+# Shared (board, kernel) → pre-built kernel image resolver.
+. "${SCRIPT_DIR}/lib/kernel_image.sh"
+# Host-side gateway config: network proposals derived from this machine's LAN,
+# and the write-back that remembers what we install. See lib/gwconf.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/gwconf.sh"
+
+# BOARD (default lidl) and KERNEL (default 6.18) select the pre-built kernel
+# image; a Lidl user who sets neither gets the historical kernel-6.18.img.
+BOARD="${BOARD:-lidl}"
+KERNEL="${KERNEL:-6.18}"
+
+# The bootloader is board-specific (DRAM bring-up) — resolved from the same
+# per-board pre-built layout as the kernel (discussion #140).
+BOOTLOADER_IMG="$(resolve_boot_image "$BOARD")" || exit 1
+KERNEL_IMG="$(resolve_kernel_image "$BOARD" "$KERNEL")" || exit 1
 ROOTFS_IMG="${RTL_DIR}/33-Rootfs/rootfs.bin"
 USERDATA_DIR="${RTL_DIR}/34-Userdata"
 USERDATA_IMG="${USERDATA_DIR}/userdata.bin"
@@ -54,13 +75,13 @@ while [ $# -gt 0 ]; do
             echo "Usage: $0 [-q|--quiet] [--help]"
             echo ""
             echo "Builds a complete 16 MiB flash image (fullflash.bin)."
-            echo "Asks for network and radio configuration, rebuilds userdata,"
+            echo "Asks for network configuration, rebuilds userdata,"
             echo "then assembles all 4 partitions into a single image."
             echo ""
             echo "Options:"
             echo "  -q, --quiet   Suppress non-essential output"
             echo ""
-            echo "Environment: NET_MODE, RADIO_MODE, IPADDR, NETMASK, GATEWAY"
+            echo "Environment: BOARD, KERNEL, NET_MODE, IPADDR, NETMASK, GATEWAY"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
@@ -113,11 +134,23 @@ fi
 export SKELETON_DIR="$SKEL_WORK"
 
 ETH0_CONF="${SKEL_WORK}/etc/eth0.conf"
-RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
+ETH0_BAK="${SKEL_WORK}/etc/eth0.bak"
 
     # Network config — "skip" means config already injected by caller
     if [ "${NET_MODE:-}" = "skip" ]; then
-        : # config already in skeleton (preserved by caller)
+        # Config already in the skeleton (preserved by the caller). Record what
+        # it says, so the host-side tools keep pointing at this box after the
+        # flash. No eth0.conf means the gateway was on DHCP and stays there.
+        if [ -f "$ETH0_CONF" ]; then
+            keep_ip="$(gwconf_read_key "$ETH0_CONF" IPADDR  || true)"
+            keep_mask="$(gwconf_read_key "$ETH0_CONF" NETMASK || true)"
+            keep_gw="$(gwconf_read_key "$ETH0_CONF" GATEWAY || true)"
+            gwconf_record_install static "$keep_ip" "$keep_mask" "$keep_gw"
+            gwconf_write_eth0_bak "$ETH0_BAK" "$keep_ip" "$keep_mask" "$keep_gw"
+        else
+            gwconf_record_install dhcp
+            gwconf_write_eth0_bak "$ETH0_BAK"
+        fi
     else
         if [ "${NET_MODE:-}" = "static" ] || [ "${NET_MODE:-}" = "dhcp" ]; then
             net_choice="${NET_MODE}"
@@ -132,63 +165,35 @@ RADIO_CONF="${SKEL_WORK}/etc/radio.conf"
         fi
 
         if [ "$net_choice" = "static" ]; then
+            # Proposals come from what was configured or installed before, else
+            # from this host's own LAN, else from the historic 192.168.1.x
+            # constants — never a fixed subnet the user may not be on.
+            gwconf_suggest_static
             if [ -z "${NET_MODE:-}" ]; then
-                read -r -p "IP address [192.168.1.88]: " IPADDR_IN
-                read -r -p "Netmask    [255.255.255.0]: " NETMASK_IN
-                read -r -p "Gateway    [192.168.1.1]:   " GATEWAY_IN
-                IPADDR="${IPADDR_IN:-${IPADDR:-192.168.1.88}}"
-                NETMASK="${NETMASK_IN:-${NETMASK:-255.255.255.0}}"
-                GATEWAY="${GATEWAY_IN:-${GATEWAY:-192.168.1.1}}"
+                echo "Proposed defaults: ${GWCONF_SUGGEST_SOURCE}."
+                read -r -p "IP address [${GWCONF_SUGGEST_IPADDR}]: " IPADDR_IN
+                read -r -p "Netmask    [${GWCONF_SUGGEST_NETMASK}]: " NETMASK_IN
+                read -r -p "Gateway    [${GWCONF_SUGGEST_GATEWAY}]:   " GATEWAY_IN
+                IPADDR="${IPADDR_IN:-${IPADDR:-$GWCONF_SUGGEST_IPADDR}}"
+                NETMASK="${NETMASK_IN:-${NETMASK:-$GWCONF_SUGGEST_NETMASK}}"
+                GATEWAY="${GATEWAY_IN:-${GATEWAY:-$GWCONF_SUGGEST_GATEWAY}}"
             else
-                IPADDR="${IPADDR:-192.168.1.88}"
-                NETMASK="${NETMASK:-255.255.255.0}"
-                GATEWAY="${GATEWAY:-192.168.1.1}"
+                IPADDR="${IPADDR:-$GWCONF_SUGGEST_IPADDR}"
+                NETMASK="${NETMASK:-$GWCONF_SUGGEST_NETMASK}"
+                GATEWAY="${GATEWAY:-$GWCONF_SUGGEST_GATEWAY}"
             fi
             printf 'IPADDR=%s\nNETMASK=%s\nGATEWAY=%s\n' "$IPADDR" "$NETMASK" "$GATEWAY" > "$ETH0_CONF"
             echo "→ Static IP: $IPADDR / $NETMASK via $GATEWAY"
+            [ -z "${NET_MODE:-}" ] && gwconf_warn_if_taken "$IPADDR" "address"
+            gwconf_record_install static "$IPADDR" "$NETMASK" "$GATEWAY"
+            # The device's DHCP-failure fallback, in the same subnet.
+            gwconf_write_eth0_bak "$ETH0_BAK" "$IPADDR" "$NETMASK" "$GATEWAY"
         else
             rm -f "$ETH0_CONF"
             echo "→ DHCP"
-        fi
-    fi
-
-    # Radio config
-    if [ "${RADIO_MODE:-}" = "skip" ]; then
-        : # config already in skeleton (preserved by caller)
-    else
-        if [ "${RADIO_MODE:-}" = "zigbee" ] || [ "${RADIO_MODE:-}" = "thread" ]; then
-            radio_choice="${RADIO_MODE}"
-        else
-            echo "Radio mode:"
-            echo "  [1] Zigbee (NCP or RCP+zigbeed)"
-            echo "  [2] Thread (OTBR)"
-            read -r -p "Choice [1]: " radio_choice
-            radio_choice="${radio_choice:-1}"
-            [ "$radio_choice" = "1" ] && radio_choice="zigbee"
-            [ "$radio_choice" = "2" ] && radio_choice="thread"
-        fi
-
-        # radio.conf is now always written, with at minimum FIRMWARE +
-        # FIRMWARE_BAUD, so init scripts (S50uart_bridge / S70otbr) and
-        # flash_efr32.sh always have a single source of truth for what's
-        # on the EFR32. Defaults assume the gateway came from Tuya stock
-        # (NCP @ 115200) for Zigbee, or that the user just flashed the
-        # pre-built ot-rcp-460800.gbl for Thread. Any later flash_efr32.sh
-        # rewrites these keys to match the actual chip state.
-        if [ "$radio_choice" = "thread" ]; then
-            cat > "$RADIO_CONF" <<EOF
-FIRMWARE=otrcp
-FIRMWARE_BAUD=460800
-MODE=otbr
-EOF
-            echo "→ Thread (OTBR) — radio.conf: FIRMWARE=otrcp @ 460800, MODE=otbr"
-        else
-            cat > "$RADIO_CONF" <<EOF
-FIRMWARE=ncp
-FIRMWARE_BAUD=115200
-EOF
-            echo "→ Zigbee — radio.conf: FIRMWARE=ncp @ 115200 (Tuya stock default;"
-            echo "    re-run flash_efr32.sh if your chip already runs a different firmware/baud)"
+            gwconf_record_install dhcp
+            # No lease may ever arrive: leave a reachable fallback behind.
+            gwconf_write_eth0_bak "$ETH0_BAK"
         fi
     fi
 
@@ -219,7 +224,7 @@ userdata_max=$((FLASH_SIZE - OFF_USERDATA)) # 12288 KiB
 
 log "Image sizes (data written to flash):"
 log "  boot.bin:     $(numfmt --to=iec-i --suffix=B $boot_data) / $(numfmt --to=iec-i --suffix=B $boot_max)"
-log "  kernel-6.18.img: $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
+log "  $(basename "$KERNEL_IMG"): $(numfmt --to=iec-i --suffix=B $kernel_data) / $(numfmt --to=iec-i --suffix=B $kernel_max) (with cs6c header)"
 log "  rootfs.bin:   $(numfmt --to=iec-i --suffix=B $rootfs_data) / $(numfmt --to=iec-i --suffix=B $rootfs_max)"
 log "  userdata.bin: $(numfmt --to=iec-i --suffix=B $userdata_data) / $(numfmt --to=iec-i --suffix=B $userdata_max)"
 log ""
@@ -230,7 +235,7 @@ if [ $boot_data -gt $boot_max ]; then
     OVERFLOW=1
 fi
 if [ $kernel_data -gt $kernel_max ]; then
-    echo "Error: kernel-6.18.img ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
+    echo "Error: $(basename "$KERNEL_IMG") ($kernel_data) exceeds kernel partition ($kernel_max)" >&2
     OVERFLOW=1
 fi
 if [ $rootfs_data -gt $rootfs_max ]; then
@@ -282,11 +287,15 @@ else
     log "  Size: 16 MiB [OK]"
 fi
 
-# Check magic bytes at each partition offset
+# Check magic bytes at each partition offset.
+# Dumped with od (coreutils, always present) rather than xxd, which on Debian is
+# a separate package that is not installed by default: a missing xxd aborted the
+# whole run here, after the image had already been built (issue #147).
 check_magic() {
     local label="$1" offset="$2" expected="$3"
     local nbytes=$(( ${#expected} / 2 ))
-    actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null | xxd -p)
+    actual=$(dd if="$OUTPUT" bs=1 skip="$offset" count="$nbytes" 2>/dev/null \
+             | od -An -tx1 -v | tr -d ' \n')
     if [ "$actual" = "$expected" ]; then
         log "  ${label} @ $(printf '0x%06X' $offset): $expected [OK]"
     else
