@@ -156,5 +156,50 @@ Do not install the complete toolchain unless you intend to rebuild firmware.
 ## Credits and license
 
 This project builds on the initial research by
-[Paul Banks](https://paulbanks.org/projects/lidl-zigbee/). It is released under
-the [MIT License](https://github.com/jnilo1/rtl8196e-gateway/blob/main/LICENSE).
+[Paul Banks](https://paulbanks.org/projects/lidl-zigbee/).
+
+What followed came from people who reported, tested and wrote code — several of
+them running unreleased builds on gateways they depend on, which is the only
+reason some of these bugs were ever found. Roughly in order of how much each of
+them shaped the firmware:
+
+- **[@olivluca](https://github.com/olivluca)** — opened #99, the ten-week
+  investigation into gateways that stopped talking to their radio, and stayed
+  with it to the close: instrumented kernels on a gateway in daily use, and
+  serial-console captures that a reset would otherwise have destroyed. Also
+  contributed DHCP-driven `resolv.conf`, an `S15hostname` fix, and the
+  toolchain patches needed for the build to complete.
+- **[@hlyi](https://github.com/hlyi)** — ported the firmware to the Sengled
+  Smart Hub G4: device tree, bootloader `board.h`, blmode pin timing and the
+  board documentation. This project supports a second board because of that
+  work. Also reported the G4 bootloader flashing gap (#148), the flickering
+  status LED (#120) and the missing `xxd` dependency (#147).
+- **[@MaxRower](https://github.com/MaxRower)** — opened #109, the crash that
+  turned out to be a TLB flush bug of ours, and followed the whole
+  release-candidate series from the field, including the flashing failures
+  reported in #115.
+- **[@sipe](https://github.com/sipe)** — drove the EmberZNet 8.2 / RCP line
+  from the first request for an SDK 8 build (#22) through to #112, the zigbeed
+  crash on Zigbee2MQTT reconnect that was root-caused and fixed.
+- **[@frtz13](https://github.com/frtz13)** — ran the release candidates on
+  their own gateway and posted panic record after panic record: 23 reports on
+  #99 alone, the raw material the fix was built from.
+- **[@skinkie](https://github.com/skinkie)** — reported six failures along the
+  install and flashing path, from the L2-segment check (#88) and the EFR32
+  flashing script (#90, #92) to `radio.conf` not being written (#93), plus the
+  early Zigbee2MQTT timeouts in #28.
+- **[@stream2me](https://github.com/stream2me)** — the cpcd / zigbeed build
+  chain: package set, static linking, and two robustness fixes (the symlink
+  destroyed when the Zigbee2MQTT service stops, and the unbound variable on a
+  first `rcp-stack` run).
+- **[@Thelvaen](https://github.com/Thelvaen)** — reported the Docker-case path
+  bug in `flash_install_rtl8196e.sh` (#103) and raised mDNS IPv6 announcement
+  (#77).
+- **[@ish00t](https://github.com/ish00t)** — the uptime statistics that told us
+  when a build was actually holding: the negative evidence that is easy to
+  forget to ask for and impossible to do without.
+- **[@malcreatuire](https://github.com/malcreatuire)** — reported the flashing
+  failure behind #149.
+
+Released under the
+[MIT License](https://github.com/jnilo1/rtl8196e-gateway/blob/main/LICENSE).
