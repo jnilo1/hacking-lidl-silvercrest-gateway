@@ -7,8 +7,8 @@ This directory contains everything needed to build a modern Linux kernel for the
 
 | `KERNEL` | Version | Sources |
 |----------|---------|---------|
-| `6.18` *(default)* | [Linux 6.18.38](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — stable 6.18.x LTS family | `patches-6.18/`, `files-6.18/`, `config-6.18-realtek.txt` |
-| `7.1` | [Linux 7.1.3](https://cdn.kernel.org/pub/linux/kernel/v7.x/) | `patches-7.1/`, `files-7.1/`, `config-7.1-realtek.txt` |
+| `6.18` *(default)* | [Linux 6.18.41](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — stable 6.18.x LTS family | `patches-6.18/`, `files-6.18/`, `config-6.18-realtek.txt` |
+| `7.1` | [Linux 7.1.7](https://cdn.kernel.org/pub/linux/kernel/v7.x/) | `patches-7.1/`, `files-7.1/`, `config-7.1-realtek.txt` |
 
 The two lines coexist — each has its own patch/overlay/config triplet and its own pre-built
 images. A Lidl user who sets nothing builds and flashes the `6.18` line exactly as before.
