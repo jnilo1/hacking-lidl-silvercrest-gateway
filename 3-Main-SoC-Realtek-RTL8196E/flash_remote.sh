@@ -222,34 +222,25 @@ bootloader_reachable() {
     echo "$nei" | grep -Eqi 'lladdr [0-9a-f]{2}(:[0-9a-f]{2}){5}'
 }
 
-# check_board_match <board> — refuse to flash a kernel built for a different
-# board than the one currently running. /proc/device-tree/model on the gateway
-# identifies the hardware (set by the running DTB). cat runs on the gateway
-# (BusyBox has no tr); the trailing NUL is stripped host-side. An unreadable or
-# unrecognised model is non-fatal — warn and proceed rather than block the
-# common path on an unexpected string. Returns non-zero only on a clear
-# mismatch (caller exits unless --force).
+# check_board_match <board> — refuse to flash a kernel or a bootloader built
+# for a different board than the one running. What identifies a board — the
+# device-tree model first, the DRAM bring-up the bootloader performed when the
+# model is too old to name one — lives in board_guard_check
+# (lib/kernel_image.sh). This entry point can write the bootloader partition,
+# where a mismatch bricks rather than merely fails to boot, so a board that
+# cannot be confirmed at all is refused; --force is the way past it. Returns
+# non-zero on refusal (caller exits).
 check_board_match() {
-    local want="$1" model sig
-    model="$(ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" "cat /proc/device-tree/model" 2>/dev/null | tr -d '\0' || true)"
-    if [ -z "$model" ]; then
-        echo "Note: could not read the gateway's board model — skipping board check." >&2
-        return 0
-    fi
-    case "$want" in
-        lidl)            sig="Lidl" ;;
-        sengled-e39-g8c) sig="Sengled" ;;
-        *)               return 0 ;;
+    board_guard_check "$1" "$SSH_TARGET" "${SSH_OPTS[@]}"
+    case $? in
+        0) return 0 ;;
+        1) return 1 ;;
+        *)
+            echo "  Nothing was touched. If you know which board this is, re-run with" >&2
+            echo "  the matching --board and --force." >&2
+            return 1
+            ;;
     esac
-    if printf '%s' "$model" | grep -q "$sig"; then
-        return 0
-    fi
-    echo "Error: board mismatch — selected BOARD='$want', but the gateway reports:" >&2
-    echo "         model = \"$model\"" >&2
-    echo "  A kernel built for a different board will not boot correctly; a" >&2
-    echo "  mismatched bootloader bricks the gateway (per-board DRAM bring-up)." >&2
-    echo "  Re-run with the matching BOARD=, or pass --force to override." >&2
-    return 1
 }
 
 # --- step 1: detect gateway state -------------------------------------------
@@ -373,14 +364,49 @@ fi
 
 # --- step 4: send boothold + reboot ------------------------------------------
 
-echo "Sending boothold + reboot..."
 # boothold writes HOLD to DRAM via pwrite+O_SYNC (bypasses write-back cache).
 # Passing BOOT_IP makes the bootloader (V2.7+) come up on that same address in
 # download mode — the IP we are about to connect to — so a non-default BOOT_IP
 # needs no serial IPCONFIG. Older boothold/bootloaders ignore the argument and
 # fall back to the compiled default (192.168.1.6).
-# BusyBox reboot signals init and returns — SSH session closes cleanly
-ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" "boothold \"$BOOT_IP\" && reboot" 2>/dev/null || true
+#
+# Arm first, reboot second — two commands, so the arming has an exit status of
+# its own and its output reaches the operator. boothold refuses to write when
+# the running kernel declares no boothold page, and it verifies its own write
+# by reading it back; a refusal means the gateway is still up on its current
+# firmware and the run must stop here rather than reboot anyway and blame the
+# bootloader half a minute later. The address boothold prints is the one the
+# bootloader has to be built to read — it is a per-board constant.
+echo "Arming boot hold..."
+BOOTHOLD_RC=0
+BOOTHOLD_OUT="$(ssh_retry "${SSH_OPTS[@]}" "$SSH_TARGET" \
+                "boothold \"$BOOT_IP\"" 2>&1)" || BOOTHOLD_RC=$?
+[ -n "$BOOTHOLD_OUT" ] && printf '%s\n' "$BOOTHOLD_OUT" | sed 's/^/  /'
+case "$BOOTHOLD_RC" in
+    0)
+        echo "Rebooting into the bootloader..."
+        # BusyBox reboot signals init and returns — the SSH session closes
+        # cleanly. Plain ssh, not ssh_retry: the connection dropping is an
+        # expected outcome here, and a retry would only run reboot again on a
+        # gateway already going down.
+        ssh "${SSH_OPTS[@]}" "$SSH_TARGET" "reboot" >/dev/null 2>&1 || true
+        ;;
+    255|43)
+        # The connection died instead of returning a status. That is also what
+        # a successful arm looks like on firmware older than v3.2.0, where
+        # boothold was a shell script that rebooted the gateway itself —
+        # indistinguishable from a dropped link from here. Say so and let the
+        # wait phases below decide.
+        echo "SSH dropped while arming — pre-v3.2.0 boothold reboots on its own."
+        ;;
+    *)
+        echo "" >&2
+        echo "Error: boothold refused to arm the bootloader (exit ${BOOTHOLD_RC})." >&2
+        echo "The gateway is still running its current firmware and nothing was" >&2
+        echo "written — no reboot was sent." >&2
+        exit 1
+        ;;
+esac
 # Close ControlMaster socket — gateway is rebooting, stale connection
 # would interfere with shutdown detection.
 ssh_cleanup_multiplex
@@ -426,7 +452,22 @@ done
 
 if [ $tries -ge 30 ]; then
     echo "Error: bootloader not reachable after 30s." >&2
-    echo "Check that boothold worked and the gateway rebooted." >&2
+    # If SSH answers again, the gateway rebooted straight back into Linux: the
+    # flag was written and verified, so the bootloader on the flash did not look
+    # where the running kernel wrote. That page is a per-board contract between
+    # the kernel DTS and the bootloader's board.h, and a mismatched pair fails
+    # exactly this way, silently on both sides.
+    if timeout 2 bash -c "echo >/dev/tcp/$LINUX_IP/$SSH_PORT" 2>/dev/null; then
+        echo "The gateway is answering at ${LINUX_IP}:${SSH_PORT} again — it rebooted" >&2
+        echo "straight back into Linux, so the bootloader never saw the flag that" >&2
+        echo "boothold wrote and verified at the address printed above." >&2
+        echo "That address comes from the running kernel's device tree; the bootloader" >&2
+        echo "reads a constant compiled into it, one per board (DRAM top - 0x2000)." >&2
+        echo "They must match — check the bootloader banner on the serial console and" >&2
+        echo "the board its image was built for." >&2
+    else
+        echo "Check that boothold worked and the gateway rebooted." >&2
+    fi
     exit 1
 fi
 echo "Bootloader is up."

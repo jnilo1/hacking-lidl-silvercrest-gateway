@@ -15,12 +15,14 @@ two processors and two distinct failure domains:
 | --- | --- |
 | No serial text, or unreadable characters | [No readable serial output](#no-readable-serial-output) |
 | Linux boots before you see `<RealTek>` | [Cannot enter the bootloader](#cannot-enter-the-bootloader) |
+| An upgrade reboots back into Linux | [The upgrade reboots straight back into Linux](#the-upgrade-reboots-straight-back-into-linux) |
 | Installer cannot find `192.168.1.6` | [Bootloader not detected](#bootloader-not-detected) |
 | TFTP times out or upload fails | [TFTP transfer fails](#tftp-transfer-fails) |
 | First boot loops after a full flash | [Boot loop after the first full flash](#boot-loop-after-the-first-full-flash) |
 | Gateway boots but SSH is unavailable | [SSH unavailable after boot](#ssh-unavailable-after-boot) |
 | Zigbee2MQTT/ZHA cannot open port 8888 | [Radio client cannot connect](#radio-client-cannot-connect) |
 | Zigbee/Thread stops, but SSH still works | [EFR32 radio unresponsive](#the-efr32-radio-is-unresponsive) |
+| Radio flash fails on a never-flashed Sengled G4 | [EFR32 flash fails](#efr32-flash-fails) |
 | The entire gateway vanishes from the LAN | [Gateway disappears from the network](#the-gateway-disappears-from-the-network) |
 | RX `drop` counter is unexpectedly large | [Large RX drop count](#eth0-reports-a-large-rx-drop-count) |
 
@@ -66,6 +68,44 @@ If Linux starts:
 On a gateway already running this project's firmware, serial entry is usually
 unnecessary: use the [upgrade guide](./upgrading.md), which invokes `boothold`
 over SSH.
+
+### The upgrade reboots straight back into Linux
+
+`flash_install_rtl8196e.sh <IP>` and `flash_remote.sh` do not use a reset pin: they
+run `boothold` over SSH, which writes a magic word to a page of DRAM the running
+kernel reserves for it, then reboot. The bootloader finds the word on the next
+reset, prints `---Boot hold requested` and stops in download mode.
+
+If the gateway instead comes back on Linux, and the script reports that no
+bootloader was detected, read the address `boothold` printed:
+
+```
+Arming boot hold...
+  Boot hold set at 0x01FFEFFC (TFTP server IP 192.168.1.6).
+```
+
+That address comes from the running kernel's device tree. The bootloader reads a
+constant compiled into it, one per board — the top of DRAM minus 0x2000, so
+`0x01FFEFFC` on the 32 MiB Lidl board and `0x03FFEFFC` on the 64 MiB Sengled
+E39-G8C. The two must be the same page; a bootloader built for another board
+looks elsewhere, finds nothing and boots normally, with no message on either
+side.
+
+The bootloader banner on the serial console names the board its image was built
+for:
+
+```
+Realtek RTL8196E  CPU: 400MHz  RAM: 32MB  Flash: GD25Q127C
+```
+
+If that RAM figure is not the memory your board really has, reflash the
+bootloader for your board (`BOARD=<board>`) — entering the bootloader with `Esc`
+on the serial console, since the SSH route is the one that is broken. If the
+figure is right, capture the console log of the reboot and open an issue.
+
+A kernel too old to declare the page is the other case: `boothold` then refuses
+to write and the script stops immediately, saying so, with the gateway still
+running its current firmware.
 
 ### Bootloader not detected
 
@@ -265,6 +305,13 @@ Before retrying:
 115200/no-flow-control mode and restores runtime configuration afterwards. Do
 not manually pre-set bridge parameters unless following a specific recovery
 procedure.
+
+On a Sengled G4 whose radio has never been flashed by this project, the failure
+is expected and no amount of retrying helps: the factory Gecko bootloader has no
+menu, so `universal-silabs-flasher` cannot drive it. Replace that bootloader once
+with a plain XMODEM client, as described in
+[step 12 of the first installation guide](./getting-started.md#sengled-g4-only-install-the-radios-gecko-bootloader-first),
+then flash the application normally.
 
 ## Whole-gateway and network problems
 

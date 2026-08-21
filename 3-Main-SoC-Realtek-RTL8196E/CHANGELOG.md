@@ -6,6 +6,119 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.1.0] - 2026-08-21
+
+_A repair release, and its subject is the distance between what a source says and what a
+binary does. Issue #155 — @hlyi's Sengled G4 rebooting straight back into Linux instead of
+stopping in its bootloader — was a **`boothold` binary two months older than its own
+source**: it still had the Lidl page address compiled in, so on a 64 MiB board it wrote the
+boot-hold flag 32 MiB below where the bootloader reads it, verified its own write, and
+returned success. The binary is rebuilt and validated on both boards. The two flash scripts
+that hid the failure for two months, by discarding everything `boothold` printed, now
+**report what the arming actually did** and stop the run when it refuses. A third defect
+surfaced while testing that fix on genuinely old firmware: the board guard matched a model
+string that only became board-specific in v3.10.0, so it refused every upgrade from v3.9.0
+and earlier — the documented command, told to re-run with the `BOARD=` it had just been
+given. It now **confirms the board from its DRAM bring-up registers**, which every firmware
+generation exposes. No kernel change ships here: the kernel images are v4.0.0's, unchanged._
+
+### `boothold` — the shipped binary predated its own source by two months (issue #155, @hlyi)
+
+`boothold` learned to take its target address from the live device tree in June
+(`reserved-memory/boothold@*`), so that a board relocating the page — the 64 MiB Sengled
+E39-G8C moves it from `0x01FFE000` to `0x03FFE000` — moves the flag with its DTS. The
+source did. **The committed binary never got rebuilt**: its last commit is the May IP-handoff
+change, two months and one feature earlier. Disassembling what shipped leaves no doubt —
+`lui a3,0x1ff` / `ori a3,a3,0xeffc` for the HOLD word and the same pair for the two IP words,
+no `/sys/firmware` string anywhere, no directory walk. The address was still compiled in.
+
+On the Lidl board the hardcoded value, the device tree and the bootloader's own constant all
+say `0x01FFEFFC`, so nothing showed. On a 64 MiB board the write lands 32 MiB below the page
+the bootloader reads: it goes into ordinary kernel RAM, the read-back verification passes,
+`boothold` exits 0, the gateway reboots — and the bootloader, finding nothing at
+`0x03FFEFFC`, boots Linux again. That is the whole of issue #155, and it made every
+`flash_install_rtl8196e.sh` / `flash_remote.sh` upgrade impossible on that board while
+looking, from the outside, like a bootloader that ignored the flag.
+
+The binary is rebuilt from the current source with the toolchain that produced it
+(crosstool-NG 1.28.0, gcc 15.2.0) and validated on the bench: it now prints the address it
+resolved, `Boot hold set at 0x01FFEFFC.`, and the three words verify through `/dev/mem` —
+HOLD `0x484F4C44`, marker `0x49505634`, and the packed server IP. No hardcoded page address
+remains in it. The Sengled path follows from the same code reading that board's DTS, and is
+for its owner to confirm.
+
+The other prebuilt tools were screened for the same drift and are in sync: `linkwatch`,
+`otbr-monitor`, `netwatch`, `keepalive` and `s40button` have no non-comment source change
+since their binaries were committed, the four kernel images have no non-documentation commit
+on their source trees since they were built, and the only bootloader-source commit after
+`boot.bin` rewrites two host-tool paths in a Makefile.
+
+### `flash_install_rtl8196e.sh` / `flash_remote.sh` — the boot-hold arming says what it did (issue #155, @hlyi)
+
+Both scripts entered the bootloader with a single remote command,
+`boothold "$BOOT_IP" && reboot`, run with its standard error sent to `/dev/null` and its
+exit status discarded. That hid the one report that matters. `boothold` refuses to write
+when the running kernel declares no `boothold` reserved-memory page, and it verifies its
+own write by reading it back — both failures print a reason, and both were swallowed.
+Worse, a refusal is not a reboot: the gateway stayed up on its current firmware while the
+script went on to wait a minute for a bootloader that was never coming, and then blamed
+the bootloader.
+
+The arming and the reboot are now two commands. `boothold` runs on its own, its output —
+including the address it wrote, which is per board — is echoed, and its exit status is
+read: zero sends the `reboot`, a refusal stops the run there with nothing written and the
+gateway untouched. A dropped connection is treated as before, since that is also what a
+successful arm looks like on firmware older than v3.2.0, where `boothold` was a shell
+script that rebooted the gateway itself.
+
+The failure message at the end of the wait now separates the two ways this fails. If SSH
+answers again, the gateway rebooted straight back into Linux: the flag *was* written and
+verified, so the bootloader on the flash did not look where the running kernel wrote. That
+page is a per-board contract — the kernel DTS reserves it, the bootloader reads a constant
+compiled from `BOARD_DRAM_TOP_KSEG1 - 0x2000`, and the two must name the same address
+(`0x01FFEFFC` on the 32 MiB Lidl board, `0x03FFEFFC` on the 64 MiB Sengled E39-G8C). A
+mismatched pair — a bootloader built for another board — fails exactly this way, silently
+on both sides. The script now says so, and points at the bootloader banner, whose `RAM:`
+figure identifies the board the installed bootloader was built for.
+
+### Board guard — gateways older than per-board model strings can be upgraded again
+
+The guard that keeps a Lidl image off a Sengled board, and the reverse, matched a substring
+of `/proc/device-tree/model`: "Lidl", or "Sengled". The model only became board-specific when
+the device tree started describing board wiring — v3.8.0, v3.8.3 and v3.9.0 all report the
+generic `Realtek RTL8196E SoC`, and only v3.10.0 onwards names the board. So every gateway
+that had not been updated since was refused by the documented upgrade command, and told to
+"re-run with the matching `BOARD=`" — which is what it had just done. Only `--force` got
+through, under a name that reads like disabling a brick check.
+
+Widening the string was the wrong repair: the one string to add would be the generic SoC one,
+and a Sengled G4 running a build from before its own device tree reports exactly that. It
+would have reopened the mis-flash it exists to prevent.
+
+The DDR controller answers where the string cannot. `btcode/start.S` writes `0x18001004` and
+`0x18001008` at bring-up from `boards/<board>/board.h`, nothing rewrites them afterwards, and
+they are readable from Linux with `devmem` on every firmware generation. The guard now falls
+back to them whenever the model names no board it knows: matching the selected board's pair
+confirms and proceeds, matching another board's pair refuses and names that board, and only
+a gateway that answers neither is turned away — with a message that says so instead of
+blaming the `BOARD=` the user got right. The pairs are read out of `board.h` at call time,
+never copied into the library: adding a board means adding its `board.h`.
+
+The two copies of the check, one per entry point, are now a single `board_guard_check` in
+`lib/kernel_image.sh`, which already owned the board list. It returns three states — confirmed,
+positive mismatch, inconclusive — so each caller keeps its own policy on the last one.
+`flash_remote.sh` changes behaviour in one narrow way: it used to skip the check when the model
+could not be read at all, and now asks the registers first, so such a gateway is confirmed
+rather than waved through, and refused if they identify nothing either.
+
+Verified on the bench across a real downgrade and upgrade: on v3.5.1 (`Realtek RTL8196E SoC`,
+bootloader V2.6) `BOARD=lidl` is confirmed by `0x54480000` / `0x90E36920` and the upgrade to
+v4.0.0 runs through with no `--force`, while `BOARD=sengled-e39-g8c` is refused on the same
+evidence. The registers read identically under V2.6 and V2.9, so the discriminator does not
+depend on the bootloader version.
+
+---
+
 ## [4.0.0] - 2026-08-10
 
 _The release the whole 4.0.0-rc series was working towards, and it turned into

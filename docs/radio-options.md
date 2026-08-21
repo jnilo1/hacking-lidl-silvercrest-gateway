@@ -7,6 +7,11 @@ radio does not reinstall Linux.
 Choose the radio mode from the service you want to run, not from the firmware
 name that sounds newest.
 
+On a Sengled G4 whose radio has never been flashed by this project, none of the
+commands below work until the radio's own Gecko bootloader is replaced once —
+the factory one has no menu for the flasher to drive. That one-time step is in
+the [first installation guide](./getting-started.md#sengled-g4-only-install-the-radios-gecko-bootloader-first).
+
 ## Short answer
 
 - Want a reliable Zigbee coordinator for **Zigbee2MQTT or ZHA**? Choose **NCP**.

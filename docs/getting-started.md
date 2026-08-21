@@ -41,6 +41,8 @@ Use this only if 3.3 V UART and bootloader TFTP workflows are already familiar:
 8. After Linux boots, change the root password, install the prepared SSH key and
    settings, then run
    `./flash_efr32.sh -y -g <gateway-ip> ncp` for the recommended Zigbee setup.
+   On a stock Sengled G4, install the radio's Gecko bootloader first — its
+   factory one has no menu and cannot be driven by the flasher (step 12).
 
 The rest of this page explains every step and the reason behind it.
 
@@ -376,8 +378,69 @@ sudo ip addr del 192.168.1.10/24 dev <interface>
 ## 12. Choose and flash the EFR32 radio
 
 The Linux flash does not replace the firmware on the separate EFR32 radio. This
-is where the radio mode is selected. For the recommended Zigbee2MQTT/ZHA setup,
-install the NCP firmware:
+is where the radio mode is selected.
+
+### Sengled G4 only: install the radio's Gecko bootloader first
+
+Lidl units skip this subsection and go straight to the application flash below.
+
+On a stock Sengled G4 the radio still runs Sengled's own Gecko bootloader, which
+has no menu: once entered, it starts an XMODEM receive immediately and emits `C`
+once a second. `flash_efr32.sh` drives `universal-silabs-flasher`, which speaks
+that menu (`1` = upload, `2` = run), so on a factory G4 it has nothing to talk to
+and cannot perform the **first** application flash. Install this project's
+bootloader once with a plain XMODEM client; from then on `flash_efr32.sh` handles
+applications and any later bootloader update by itself.
+
+The transfer travels over the gateway's UART bridge, so the RTL8196E side has to
+be running — at this point in the guide it is. On the administration computer,
+add the XMODEM client:
+
+```bash
+sudo apt install lrzsz
+```
+
+On the gateway, park the bridge where the bootloader lives, then pulse the
+hardware entry pin. Nothing else may hold TCP port 8888 during the transfer:
+
+```bash
+SYSFS=/sys/module/rtl8196e_uart_bridge/parameters
+echo 115200 > $SYSFS/baud
+echo 0 > $SYSFS/flow_control
+echo 1 > $SYSFS/blmode_pulse
+```
+
+Both settings are load-bearing: the bootloader's XMODEM path runs at 115200 with
+no flow control, and the G4 wires no RTS/CTS, so the bridge defaults to software
+flow control on that board — where it strips bare `0x11`/`0x13` bytes out of the
+radio's byte stream, which a raw XMODEM transfer cannot survive. The two writes
+are runtime-only; a reboot restores the normal settings.
+
+Send the image from the repository root:
+
+```bash
+sz -X -o --tcp-client <gateway-ip>:8888 \
+  2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-2.4.3-sengled-e39-g8c.gbl
+```
+
+Installing a bootloader erases the application, because the incoming image is
+staged inside application space. The radio has no firmware until the next step
+gives it one, so continue straight to the application flash. That flash reports
+the bootloader version it finds — 2.4.3 once this step has taken — which is the
+confirmation that the transfer worked.
+
+Do this once. Repeating it on a radio that already runs this project's
+bootloader erases the application without installing anything: the Gecko
+bootloader silently declines an image whose version is not strictly newer than
+the one running. `flash_efr32.sh` refuses that case before anything is sent; a
+raw XMODEM transfer has no such guard.
+
+The reasoning, including the memory map behind it, is in
+[Gecko bootloader — first install over a factory bootloader](../2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/README.md#option-3-first-install-over-a-factory-bootloader-that-has-no-menu-sengled-g4).
+
+### Flash the radio application
+
+For the recommended Zigbee2MQTT/ZHA setup, install the NCP firmware:
 
 ```bash
 # Lidl

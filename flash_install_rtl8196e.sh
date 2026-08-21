@@ -341,34 +341,25 @@ build_image_and_confirm() {
     IMAGE_READY=1
 }
 
-# Board-mismatch guard for the upgrade path: the running gateway's
-# /proc/device-tree/model identifies the board. A full flash bundles a
-# board-specific kernel AND bootloader, so flashing a mismatched BOARD can brick
-# the gateway (the bootloader's DRAM config is per-board). Refuse on a clear
-# mismatch unless --force. An unreadable/unrecognised model is non-fatal (warn
-# and proceed). cat runs on the gateway (BusyBox has no tr); the trailing NUL is
-# stripped host-side. Expects FI_SSH_OPTS / FI_SSH_TARGET in scope (port-22 path).
+# Board-mismatch guard for the upgrade path. What identifies a board — the
+# device-tree model first, the DRAM bring-up the bootloader performed when the
+# model is too old to name one — lives in board_guard_check (lib/kernel_image.sh);
+# read the comment there before changing what counts as proof. A full flash
+# bundles a board-specific kernel AND bootloader, and a mismatched bootloader
+# bricks the gateway, so a board that cannot be confirmed at all is refused
+# here rather than flashed hopefully. --force is the way past it.
+# Expects FI_SSH_OPTS / FI_SSH_TARGET in scope (port-22 path).
 fi_check_board_match() {
-    local model sig
-    model="$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "cat /proc/device-tree/model" 2>/dev/null | tr -d '\0' || true)"
-    if [ -z "$model" ]; then
-        echo "Note: could not read the gateway's board model — skipping board check." >&2
-        return 0
-    fi
-    case "$BOARD" in
-        lidl)            sig="Lidl" ;;
-        sengled-e39-g8c) sig="Sengled" ;;
-        *)               return 0 ;;
+    board_guard_check "$BOARD" "$FI_SSH_TARGET" "${FI_SSH_OPTS[@]}"
+    case $? in
+        0) return 0 ;;
+        1) return 1 ;;
+        *)
+            echo "  Nothing was touched. If you know which board this is, re-run with" >&2
+            echo "  the matching BOARD= and --force." >&2
+            return 1
+            ;;
     esac
-    if printf '%s' "$model" | grep -q "$sig"; then
-        return 0
-    fi
-    echo "Error: board mismatch — selected BOARD='$BOARD', but the gateway reports:" >&2
-    echo "         model = \"$model\"" >&2
-    echo "  A full flash bundles a board-specific kernel and bootloader; flashing the" >&2
-    echo "  wrong board can brick the gateway (DRAM config). Re-run with the matching" >&2
-    echo "  BOARD=, or pass --force to override." >&2
-    return 1
 }
 
 
@@ -564,8 +555,49 @@ EOF
         # Pass BOOT_IP to boothold (V2.7+): the bootloader comes up on that
         # address in download mode, so a non-default BOOT_IP needs no serial
         # IPCONFIG. Older boothold ignores the argument (stays at 192.168.1.6).
-        echo "Sending boothold + reboot..."
-        ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "boothold \"$BOOT_IP\" && reboot" 2>/dev/null || true
+        #
+        # Arm first, reboot second — two commands, so the arming has an exit
+        # status of its own and its output reaches the operator. boothold
+        # refuses to write when the running kernel declares no boothold page,
+        # and it verifies its own write by reading it back; a refusal means the
+        # gateway is still up on its current firmware and the run must stop
+        # here, instead of rebooting anyway and blaming the bootloader a minute
+        # later. The address boothold prints is the one the bootloader has to
+        # be built to read (it is per board) — worth seeing when a warm reboot
+        # comes back into Linux.
+        echo "Arming boot hold..."
+        BOOTHOLD_RC=0
+        BOOTHOLD_OUT="$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" \
+                        "boothold \"$BOOT_IP\"" 2>&1)" || BOOTHOLD_RC=$?
+        [ -n "$BOOTHOLD_OUT" ] && printf '%s\n' "$BOOTHOLD_OUT" | sed 's/^/  /'
+        case "$BOOTHOLD_RC" in
+            0)
+                echo "Rebooting into the bootloader..."
+                # Plain ssh, not ssh_retry: the connection dropping is
+                # the expected outcome here, and a retry would only run
+                # reboot again on a gateway already going down.
+                ssh "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "reboot" >/dev/null 2>&1 || true
+                ;;
+            255|43)
+                # The connection died instead of returning a status. That is
+                # also what a successful arm looks like on firmware older than
+                # v3.2.0, where boothold was a shell script that rebooted the
+                # gateway itself — indistinguishable from a dropped link from
+                # here. Say so and let the wait phases below decide: they probe
+                # what the flash actually needs, a TFTP server that answers.
+                echo "SSH dropped while arming — pre-v3.2.0 boothold reboots on its own."
+                ;;
+            *)
+                echo "" >&2
+                echo "Error: boothold refused to arm the bootloader (exit ${BOOTHOLD_RC})." >&2
+                echo "The gateway is still running its current firmware and nothing was" >&2
+                echo "written — no reboot was sent." >&2
+                echo "" >&2
+                echo "Enter the bootloader over the serial console instead (ESC at power-on)," >&2
+                echo "then re-run without an IP:  $0" >&2
+                exit 1
+                ;;
+        esac
         # Close ControlMaster socket — gateway is rebooting, no point waiting
         # for ControlPersist to expire on a connection that's already dead.
         ssh_cleanup_multiplex
@@ -623,9 +655,29 @@ EOF
     if [ -z "$BOOTLOADER_UP" ]; then
         echo "Error: bootloader not detected after boothold (no TFTP server at ${BOOT_IP})." >&2
         echo "" >&2
-        echo "Note: pre-V2.7 bootloaders ignore the boothold IP handoff and come up at" >&2
-        echo "the default 192.168.1.6 — if you used --boot-ip, retry from a host on" >&2
-        echo "that subnet without it." >&2
+        # Distinguish the two ways this fails. If SSH answers again, the gateway
+        # rebooted straight back into Linux: the flag was written and verified
+        # (boothold read it back), so the bootloader on the flash simply did not
+        # look where the running kernel wrote. That page is a per-board contract
+        # between the kernel DTS and the bootloader's board.h, and a mismatched
+        # pair — a bootloader built for another board — fails exactly this way,
+        # with nothing printed on either side.
+        if timeout 2 bash -c "echo >/dev/tcp/$fw_host/$fw_port" 2>/dev/null; then
+            echo "The gateway is answering at ${fw_host}:${fw_port} again — it rebooted" >&2
+            echo "straight back into Linux, so the bootloader never saw the flag that" >&2
+            echo "boothold wrote and verified at the address printed above." >&2
+            echo "" >&2
+            echo "That address comes from the running kernel's device tree; the bootloader" >&2
+            echo "reads a constant compiled into it, one per board (DRAM top - 0x2000)." >&2
+            echo "They must match. Check the bootloader banner on the serial console: its" >&2
+            echo "RAM size must be the one your board really has, and BOARD= here must be" >&2
+            echo "the board it was built for." >&2
+        else
+            echo "Note: pre-V2.7 bootloaders ignore the boothold IP handoff and come up at" >&2
+            echo "the default 192.168.1.6 — if you used --boot-ip, retry from a host on" >&2
+            echo "that subnet without it." >&2
+        fi
+        echo "" >&2
         echo "Nothing was written: a power cycle returns the gateway to its current" >&2
         echo "firmware." >&2
         exit 1

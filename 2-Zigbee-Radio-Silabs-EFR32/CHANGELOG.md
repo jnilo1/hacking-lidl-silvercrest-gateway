@@ -4,6 +4,32 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [4.1.0] - 2026-08-21
+
+_Documentation only on the radio side: the one-time Sengled G4 bootloader step moves from the
+component README into the installation guide, where a first-time G4 owner actually passes._
+
+### Documentation — the Sengled G4 bootloader step reaches the installation guide (discussion #148, @hlyi)
+
+v4.0.0 documented the one-time procedure that installs this project's Gecko bootloader over
+Sengled's factory one, which has no menu for `universal-silabs-flasher` to drive. It was
+documented in `23-Bootloader-UART-Xmodem/README.md`, where someone already looking for the
+Gecko bootloader finds it — and a first-time G4 owner following the installation guide never
+opens that door. @hlyi asked for it where it belongs, as a prerequisite in the guide's radio
+step, and that is where it now is.
+
+`docs/getting-started.md` step 12 opens with a Sengled-only subsection: why the factory
+bootloader cannot be driven, the two bridge settings and why both are load-bearing, the `sz`
+transfer, the fact that installing a bootloader erases the application so the two flashes are
+one sequence, and the warning against repeating the step — a same-version image is declined in
+silence, after the erase, and a raw XMODEM transfer has none of the guards `flash_efr32.sh`
+grew for exactly that. The component README keeps the reasoning and the memory map behind it,
+and is linked rather than duplicated. `docs/radio-options.md` states the prerequisite before
+its flash commands, since a reader can arrive there first, and `docs/troubleshooting.md` names
+the case under "EFR32 flash fails" for whoever meets it before reading anything.
+
+---
+
 ## [4.0.0] - 2026-08-10
 
 _The cycle that made the EFR32 side genuinely multi-board: every firmware now

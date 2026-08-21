@@ -12,9 +12,12 @@
 	reserved-memory {
 		/delete-node/ boothold@1ffe000;
 
-		/* The boothold: label must be declared on the relocated node:
-		 * the /delete-node/ above drops the base one, and consumers
-		 * reference this page by phandle (memory-region). */
+		/* Re-declare the boothold: label on the relocated node — the
+		 * base rtl8196e.dts carries it on the node deleted just above,
+		 * so a phandle to &boothold would otherwise name a page this
+		 * board does not reserve. Nothing takes it that way today: the
+		 * userspace tool looks the node up by name at runtime, and the
+		 * bootloader has the address compiled in. */
 		boothold: boothold@3ffe000 {
 			reg = <0x03FFE000 0x1000>;  /* 4KB reserved for boothold flag (high DRAM, just below btcode stack) */
 			no-map;

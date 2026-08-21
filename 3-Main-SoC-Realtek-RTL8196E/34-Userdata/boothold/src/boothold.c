@@ -25,11 +25,11 @@
  *     page_top -  8 : IP   magic 0x49505634 ("IPV4")
  *     page_top - 12 : IPv4 packed as (a<<24)|(b<<16)|(c<<8)|d
  *
- *   The BASE of the same page is used by the kernel watchdog driver for
- *   its panic post-mortem record (see rtl819x_wdt.c, WDT_REC_*, bound to
- *   the same node via the memory-region phandle).  Any new boothold field
- *   must stay near the top — do not grow below page_top - 0x100, to
- *   preserve the gap.
+ *   The page belongs to this hand-off alone.  The watchdog's panic
+ *   post-mortem record shared it once and now has a reservation of its
+ *   own (`watchdog-crash`, the node its driver takes by memory-region),
+ *   so the only party to agree with about offsets is the bootloader,
+ *   which reads fixed ones down from the page top.
  *
  * Optional argument — boothold <A.B.C.D>:
  *   If a valid dotted IPv4 is given, boothold also writes the IP record.
