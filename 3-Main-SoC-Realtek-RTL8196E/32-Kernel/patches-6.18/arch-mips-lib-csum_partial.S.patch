@@ -1,32 +1,57 @@
 --- a/arch/mips/lib/csum_partial.S
 +++ b/arch/mips/lib/csum_partial.S
-@@ -100,7 +100,11 @@
+@@ -100,7 +100,22 @@
  #define src a0
  #define sum v0
  
-+#if defined(CONFIG_RTL8196E_IMEM) && defined(CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT)
+-	.text
++	/*
++	 * One section per routine, so the linker script can place these the
++	 * same way it places any -ffunction-sections C function.  See the
++	 * comment in memcpy.S.
++	 */
++#ifdef CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT
++	/*
++	 * the historical policy places this core in I-MEM directly, the way
++	 * the sources did before the campaign named the section; under the
++	 * other policies it stays an ordinary named section that the linker
++	 * script -- or a selection -- is free to place
++	 */
 +	.section .iram, "ax"
 +#else
- 	.text
++	.section .text.csum_partial, "ax"
 +#endif
  	.set	noreorder
  	.align	5
  LEAF(csum_partial)
-@@ -303,6 +307,9 @@
+@@ -303,6 +318,7 @@
  	jr	ra
  	.set	noreorder
  	END(csum_partial)
-+#if defined(CONFIG_RTL8196E_IMEM) && defined(CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT)
 +	.text
-+#endif
  
  
  /*
-@@ -728,6 +735,7 @@
+@@ -728,6 +744,22 @@
  	.set noreorder
  	.endm
  
++	/*
++	 * The checksum-and-copy core, with its own fixup label: .L_exc is the
++	 * __ex_table target for every access below, so the two stay in one
++	 * section and travel together whatever the placement.
++	 */
++#ifdef CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT
++	/*
++	 * the historical policy places this core in I-MEM directly, the way
++	 * the sources did before the campaign named the section; under the
++	 * other policies it stays an ordinary named section that the linker
++	 * script -- or a selection -- is free to place
++	 */
 +	.section .iram, "ax"
++#else
++	.section .text.csum_partial_copy, "ax"
++#endif
  	.set noreorder
  .L_exc:
  	jr	ra

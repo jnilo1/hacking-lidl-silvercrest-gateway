@@ -9,6 +9,7 @@ choice
 
 	config SOC_RTL8196E
 		bool "RTL8196E"
+		select ARCH_NO_PREEMPT
 		select USE_GENERIC_EARLY_PRINTK_8250
 		select SYS_SUPPORTS_BIG_ENDIAN
 		select SYS_HAS_CPU_RLX4181

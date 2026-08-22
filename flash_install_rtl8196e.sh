@@ -97,8 +97,12 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Host-side gateway config — see lib/gwconf.sh.
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/gwconf.sh"
+# Firmware-version parser — preserves prerelease/build suffixes (#156).
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/firmware_version.sh"
 LINUX_IP=""
 FW_VERSION=""
+FW_VERSION_MAJOR=""
 # Default entry mode. Overridden to "auto" only when a running Linux exposes
 # boothold over SSH; stays "manual" for the already-at-bootloader-prompt path
 # (no LINUX_IP), where LINUX_RUNNING is empty and the block below is skipped.
@@ -451,8 +455,9 @@ if [ -n "$LINUX_RUNNING" ]; then
     # only meaningful on the automated (boothold) path.
     if [ "$ENTRY" = "auto" ]; then
         fw_ver_line=$(ssh_retry "${FI_SSH_OPTS[@]}" "$FI_SSH_TARGET" "head -1 /userdata/etc/version" 2>/dev/null || true)
-        if [[ "$fw_ver_line" =~ v([0-9]+\.[0-9]+\.[0-9]+) ]]; then
-            FW_VERSION="${BASH_REMATCH[1]}"
+        if firmware_version_parse "$fw_ver_line"; then
+            FW_VERSION="$FWPARSE_VERSION"
+            FW_VERSION_MAJOR="$FWPARSE_MAJOR"
             echo "Firmware version: v${FW_VERSION}"
         fi
     fi
@@ -513,7 +518,7 @@ if [ -n "$LINUX_RUNNING" ]; then
         # describing the known v2.x state (NCP @ 115200) so the new
         # userdata boots into a working state AND a future reader can
         # tell what's on the chip without probing.
-        if [ -n "${FW_VERSION:-}" ] && [ "${FW_VERSION%%.*}" -lt 3 ] \
+        if [ -n "${FW_VERSION_MAJOR:-}" ] && [ "$FW_VERSION_MAJOR" -lt 3 ] \
            && [ ! -f "${SKEL_WORK}/etc/radio.conf" ]; then
             echo "Pre-seeding radio.conf for v${FW_VERSION} → v3.x migration (FIRMWARE=ncp @ 115200)."
             echo "  ↑ Default v2.x assumption. Cancel now (Ctrl-C) and run on the gateway:"
@@ -858,8 +863,8 @@ confirm_autoflash() {
 # (return 1). Window ~15s — long enough to clear any brief post-upload checksum
 # pause before the write, short enough to not be a "dead wait".
 autoflash_in_progress() {
-    local fails=0 i
-    for i in $(seq 1 15); do
+    local fails=0
+    for _ in $(seq 1 15); do
         if ping -c 1 -W 1 "$BOOT_IP" >/dev/null 2>&1; then
             fails=0
             sleep 1

@@ -1,6 +1,6 @@
 --- a/arch/mips/kernel/vmlinux.lds.S
 +++ b/arch/mips/kernel/vmlinux.lds.S
-@@ -84,6 +84,34 @@
+@@ -84,6 +84,36 @@
  		__stop___dbe_table = .;
  	}
  
@@ -14,13 +14,15 @@
 +	. = ALIGN(16384);
 +	__iram = .;
 +	.iram : {
++		*(SORT_BY_NAME(.iram.sel.*))
 +		*(.iram-gen)
 +		*(.iram-fwd)
 +		*(.iram)
 +	}
 +	__iram_tail = .;
 +	ASSERT(__iram_tail - __iram <= 0x4000, "I-MEM section exceeds 16 KB")
-+	. = ALIGN(16384);
++	. = __iram + 0x4000;
++	__iram_window_end = .;
 +
 +	. = ALIGN(8192);
 +	__dram_start = .;

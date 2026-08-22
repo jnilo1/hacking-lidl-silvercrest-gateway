@@ -12,16 +12,15 @@
 #     (so it can point at /tmp/iperf3 on a stock firmware, etc.).
 #   * Multi-rep with MEDIAN reporting and a strict inter-session protocol:
 #     each rep restarts a FRESH gateway iperf3 server + fresh client, >=30 s
-#     for TCP, spaced by GAP — so the 10 TX reps surface the real run-to-run
+#     for TCP, spaced by GAP — so the 11 TX reps surface the real run-to-run
 #     spread (reusing one warm server back-to-back understates it).
-#   * Radio-path quiesce, best-effort, via /userdata/etc/init.d (restarted
-#     after): OTBR (S70otbr), in-kernel uart-bridge (S50uart_bridge), and the
-#     legacy serialgateway (S50/S60serialgateway) — whichever is active. All
-#     contend on eth0. SSH calls time-bounded; no killall (keepalive respawns).
+#   * Radio/userland quiesce via /userdata/etc/init.d (restarted after): OTBR,
+#     UART bridges, netwatch and the button poller. A surviving workload is a
+#     hard failure, not a warning. SSH calls are time-bounded.
 #
-# Core suite (5 measurements, ~17 min): see the table in the plan / README.
-#   1. TCP RX  host->gw   3 reps   (median Mbit/s)
-#   2. TCP TX  gw->host  10 reps   (median + spread/sd)   <- the variable one
+# Core suite (5 measurements, ~23 min): see the table in the plan / README.
+#   1. TCP RX  host->gw  11 reps   (median Mbit/s)
+#   2. TCP TX  gw->host  11 reps   (median + spread/sd)
 #   3. TCP stress RX     1x 300 s  (sustained + retrans + err/drop)
 #   4. UDP TX  gw->host   3 reps   (-b 0,    median delivered + loss%)
 #   5. UDP RX  host->gw   3 reps   (-b 100M, median delivered ceiling + loss%)
@@ -51,13 +50,14 @@ RTL8196E_USER="${RTL8196E_USER:-root}"
 IPERF_PORT="${IPERF_PORT:-5201}"
 IPERF3_BIN="${IPERF3_BIN:-iperf3}"        # path to iperf3 ON THE GATEWAY
 IFACE="${IFACE:-eth0}"
-REPS_RX="${REPS_RX:-3}"
-REPS_TX="${REPS_TX:-10}"
+REPS_RX="${REPS_RX:-11}"
+REPS_TX="${REPS_TX:-11}"
 REPS_UDP="${REPS_UDP:-3}"
 DUR_TCP="${DUR_TCP:-30}"
 DUR_STRESS="${DUR_STRESS:-300}"
 DUR_UDP="${DUR_UDP:-20}"
 GAP="${GAP:-10}"          # inter-session gap: each rep is an independent session
+QUIESCE_SETTLE="${QUIESCE_SETTLE:-15}" # quiet time after stopping radio/userland
 UDP_TX_RATE="${UDP_TX_RATE:-0}"           # 0 = unlimited -> gw send ceiling
 UDP_RX_RATE="${UDP_RX_RATE:-100M}"        # above the rcvbuf ceiling
 QUIESCE_RADIO="${QUIESCE_RADIO:-auto}"    # stop OTBR / uart-bridge / serialgateway during the run
@@ -209,6 +209,14 @@ esac
 
 mkdir -p "$LOG_DIR"
 GW_UNAME=$(gw "uname -a" 2>/dev/null || echo "uname: n/a"); echo "$GW_UNAME" > "$LOG_DIR/uname.txt"
+dmesg_before="$LOG_DIR/dmesg_before.txt"
+gw "dmesg" > "$dmesg_before" 2>&1 \
+  || { log_err "cannot read the kernel log before measurement"; exit 1; }
+if grep -Eiq 'WARNING:|BUG:|Oops:|Kernel panic|can.t patch jump_label|section mismatch' "$dmesg_before"; then
+  log_err "kernel log contains a warning/oops relevant to release qualification"
+  grep -Ein 'WARNING:|BUG:|Oops:|Kernel panic|can.t patch jump_label|section mismatch' "$dmesg_before" >&2
+  exit 1
+fi
 log "Release label : $RELEASE"
 log "Gateway       : ${RTL8196E_USER}@${RTL8196E_IP}  ($GW_UNAME)"
 log "Host rig      : $(hostname) via ${route_dev:-?}"
@@ -228,15 +236,28 @@ if [ "$QUIESCE_RADIO" = "auto" ]; then
         log_info "stopped $svc for the run (will restart after)"
       fi
     done
+    for svc in S80netwatch S40button; do
+      gw "[ -x $INITD/$svc ]" 2>/dev/null || continue
+      gw "$INITD/$svc stop" >/dev/null 2>&1 || true
+      QUIESCED="$QUIESCED $svc"
+      log_info "stopped $svc for the run (will restart after)"
+    done
     sleep 2
-    if radio_any_active; then RADIO_WARN=1; log_warn "a radio service is still active after quiesce — results may be perturbed"; fi
+    if radio_any_active || gw "ps w | grep -E '[o]tbr-agent|[o]tbr-monitor|[s]40button|[s]erialgateway'" >/dev/null 2>&1; then
+      log_err "a benchmark-disturbing userland process survived quiesce"
+      QUIESCED="${QUIESCED# }"
+      radio_restore
+      exit 1
+    fi
     [ -z "$QUIESCED" ] && [ "$RADIO_WARN" = 0 ] && log_info "no radio service active (nothing to stop)"
   else
     log_info "no init.d found (stock firmware?) — radio quiesce skipped"
   fi
 fi
 QUIESCED="${QUIESCED# }"   # trim leading space
-cleanup; sleep 1
+cleanup
+log_info "settling ${QUIESCE_SETTLE}s after radio/userland quiesce"
+sleep "$QUIESCE_SETTLE"
 
 # ══ Pre-suite counters (no ethtool) ═══════════════════════════════════
 gw "cat /proc/net/dev"  > "$LOG_DIR/proc_dev_before.txt"  2>&1 || true
@@ -338,7 +359,7 @@ awk -v v="$rx_med" -v t="$THR_RX_FLOOR" 'BEGIN{exit !(v<t)}' && flags="${flags}R
 
 # ══ Markdown report block (stdout + RESULTS.md) ═══════════════════════
 read -r RXM _ RXmn RXmx _ _ <<<"$RX_STATS"
-read -r TXM TXmean TXmn TXmx TXspr TXsd <<<"$TX_STATS"
+read -r TXM _ TXmn TXmx TXspr TXsd <<<"$TX_STATS"
 read -r UTXM _ _ _ _ _ <<<"$UTX_STATS"
 read -r URXM _ _ _ _ _ <<<"$URX_STATS"
 

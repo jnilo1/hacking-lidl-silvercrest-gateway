@@ -37,12 +37,12 @@ PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 KERNEL="${KERNEL:-6.18}"
 case "$KERNEL" in
     6.18)
-        KERNEL_VERSION="6.18.41"        # exact tarball version
+        KERNEL_VERSION="6.18.45"        # exact tarball version
         KERNEL_MAJOR_MINOR="6.18"       # stable family (paths, image name)
         KERNEL_MAJOR="6.x"              # kernel.org /pub/linux/kernel/v${MAJOR}/
         ;;
     7.1)
-        KERNEL_VERSION="7.1.7"          # exact tarball version (linux-7.1.7.tar.xz)
+        KERNEL_VERSION="7.1.9"          # exact tarball version (linux-7.1.9.tar.xz)
         KERNEL_MAJOR_MINOR="7.1"
         KERNEL_MAJOR="7.x"
         ;;
@@ -57,7 +57,14 @@ VANILLA_DIR="linux-${KERNEL_VERSION}"
 
 PATCHES_DIR="${SCRIPT_DIR}/patches-${KERNEL_MAJOR_MINOR}"
 FILES_DIR="${SCRIPT_DIR}/files-${KERNEL_MAJOR_MINOR}"
-CONFIG_FILE="${SCRIPT_DIR}/config-${KERNEL_MAJOR_MINOR}-realtek.txt"
+CONFIG_FILE="${KCONFIG_FILE:-${SCRIPT_DIR}/config-${KERNEL_MAJOR_MINOR}-realtek.txt}"
+DEFAULT_IMEM_POLICY="${SCRIPT_DIR}/scripts/imem/policies/${KERNEL_VERSION}.tsv"
+IMEM_POLICY="${IMEM_POLICY:-$DEFAULT_IMEM_POLICY}"
+USE_IMEM_POLICY=false
+if [ "${IMEM_POLICY_DISABLE:-0}" != "1" ] && [ -f "$IMEM_POLICY" ] && \
+        [ "${IMEM_PROFILE:-0}" != "1" ] && [ "${IMEM_EMPTY:-0}" != "1" ]; then
+    USE_IMEM_POLICY=true
+fi
 # IMAGE depends on BOARD too; defined after the board selection below.
 
 TOOLCHAIN_DIR="${PROJECT_ROOT}/x-tools/mips-lexra-linux-musl"
@@ -118,7 +125,11 @@ esac
 # Pre-built image slot for this (board, kernel) pair. build_kernel.sh writes
 # straight into the shippable kernel-img/<board>/kernel-<line>.img layout that
 # the flash scripts resolve from BOARD/KERNEL (see lib/kernel_image.sh).
-IMAGE="${SCRIPT_DIR}/kernel-img/${BOARD}/kernel-${KERNEL_MAJOR_MINOR}.img"
+IMAGE="${IMAGE_OUT:-${SCRIPT_DIR}/kernel-img/${BOARD}/kernel-${KERNEL_MAJOR_MINOR}.img}"
+case "$IMAGE" in
+	/*) ;;
+	*) IMAGE="${SCRIPT_DIR}/${IMAGE}" ;;
+esac
 
 # ── Option parsing ────────────────────────────────────────────────────────
 
@@ -147,8 +158,17 @@ done
 # /userdata/etc/version describes the userdata partition and legitimately
 # goes stale on partial flashes (issue #120 feedback).
 FW_VERSION="$(head -n1 "${SCRIPT_DIR}/../VERSION" 2>/dev/null)"
-export LOCALVERSION="-rtl8196e${FW_VERSION:+-v${FW_VERSION}}"
-BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_MAJOR_MINOR}-rtl8196e"
+BUILD_TAG="${BUILD_TAG:-}"
+case "$BUILD_TAG" in
+    ""|*[!A-Za-z0-9._-]*)
+        [ -z "$BUILD_TAG" ] || {
+            echo "ERROR: BUILD_TAG may contain only letters, digits, '.', '_' and '-'" >&2
+            exit 1
+        }
+        ;;
+esac
+export LOCALVERSION="-rtl8196e${FW_VERSION:+-v${FW_VERSION}}${BUILD_TAG:+-${BUILD_TAG}}"
+BUILD_DIR="${SCRIPT_DIR}/linux-${KERNEL_MAJOR_MINOR}${BUILD_TAG:+-${BUILD_TAG}}-rtl8196e"
 
 echo "==================================================================="
 echo "  Linux ${KERNEL_VERSION} — RTL8196E — driver: rtl8196e"
@@ -218,9 +238,17 @@ if [ ! -f "$BUILD_DIR/Makefile" ]; then
     for patch in "$PATCHES_DIR"/*.patch; do
         [ -f "$patch" ] || continue
         echo "  $(basename "$patch")"
-        if ! patch -p1 -f --no-backup-if-mismatch < "$patch"; then
+        patch_out="$(patch -p1 -f --no-backup-if-mismatch < "$patch" 2>&1)" || {
+            printf '%s\n' "$patch_out" >&2
             echo "ERROR: patch failed to apply cleanly: $(basename "$patch")" >&2
             echo "  Refresh it against Linux ${KERNEL_VERSION} (see *.rej files)." >&2
+            exit 1
+        }
+        printf '%s\n' "$patch_out"
+        if printf '%s\n' "$patch_out" | \
+                grep -Eiq 'fuzz|offset|warning|malformed|misordered|reversed|previously applied|FAILED|reject'; then
+            echo "ERROR: patch applied with a warning, fuzz, or offset: $(basename "$patch")" >&2
+            echo "  Refresh it against Linux ${KERNEL_VERSION}; only exact, warning-free hunks are accepted." >&2
             exit 1
         fi
     done
@@ -293,6 +321,70 @@ if ! grep -q "^${BOARD_DTB_SYM}=y" .config; then
     echo ""
 fi
 
+# Profiling reference for the I-MEM optimizer.  Keep it in an isolated build
+# tree (BUILD_TAG=imem-profile) and make the window genuinely empty: the PC
+# sampler only covers [_stext, _etext], so leaving historical residents in the
+# window would assign them a false weight of zero.  The command line is extended
+# rather than replaced so the board DT keeps its normal console/root settings.
+if [ "${IMEM_PROFILE:-0}" = "1" ]; then
+    echo "Fixing .config: I-MEM profiling reference (empty window, profile=4)..."
+    scripts/config --enable RTL8196E_IMEM
+    scripts/config --disable RTL8196E_IMEM_DEFAULT_PLACEMENT
+    scripts/config --disable RTL8196E_IMEM_POC_IRAM
+    scripts/config --enable PROFILING
+    scripts/config --enable CMDLINE_BOOL
+    scripts/config --disable CMDLINE_OVERRIDE
+    scripts/config --disable MIPS_CMDLINE_FROM_DTB
+    scripts/config --enable MIPS_CMDLINE_DTB_EXTEND
+    scripts/config --set-str CMDLINE "profile=4"
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+    grep -q '^CONFIG_PROFILING=y' .config || {
+        echo "ERROR: CONFIG_PROFILING did not survive olddefconfig" >&2
+        exit 1
+    }
+    grep -q '^# CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT is not set' .config || {
+        echo "ERROR: the profiling reference would retain historical I-MEM residents" >&2
+        exit 1
+    }
+    grep -q '^CONFIG_CMDLINE="profile=4"' .config || {
+        echo "ERROR: profile=4 is absent from the profiling reference command line" >&2
+        exit 1
+    }
+    echo ""
+fi
+
+# Production-layout reference for a reopened I-MEM campaign.  Unlike the
+# profiling image this changes no generic profiling option and adds no boot
+# argument; it only keeps the hardware window enabled while making it empty.
+if [ "${IMEM_EMPTY:-0}" = "1" ]; then
+    echo "Fixing .config: empty production I-MEM window..."
+    scripts/config --enable RTL8196E_IMEM
+    scripts/config --disable RTL8196E_IMEM_DEFAULT_PLACEMENT
+    scripts/config --disable RTL8196E_IMEM_POC_IRAM
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+    grep -q '^# CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT is not set' .config || {
+        echo "ERROR: the production reference would retain historical I-MEM residents" >&2
+        exit 1
+    }
+    echo ""
+fi
+
+# A qualified release policy uses the same empty production layout as the
+# measured candidate. The selected input sections are moved only after the
+# first complete link, below, so their original local slots can be retained.
+if [ "$USE_IMEM_POLICY" = true ]; then
+    echo "Fixing .config: release I-MEM policy $(basename "$IMEM_POLICY")..."
+    scripts/config --enable RTL8196E_IMEM
+    scripts/config --disable RTL8196E_IMEM_DEFAULT_PLACEMENT
+    scripts/config --disable RTL8196E_IMEM_POC_IRAM
+    make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+    grep -q '^# CONFIG_RTL8196E_IMEM_DEFAULT_PLACEMENT is not set' .config || {
+        echo "ERROR: release policy would retain historical I-MEM residents" >&2
+        exit 1
+    }
+    echo ""
+fi
+
 # ── Special modes ──────────────────────────────────────────────────────────
 
 if [ "$DO_OLDDEFCONFIG" = true ]; then
@@ -306,6 +398,24 @@ if [ "$DO_MENUCONFIG" = true ]; then
 fi
 
 # ── Build ──────────────────────────────────────────────────────────────────
+
+POLICY_STAMP="$BUILD_DIR/.imem-policy.sha256"
+POLICY_HASH=""
+if [ "$USE_IMEM_POLICY" = true ]; then
+    POLICY_HASH="$(sha256sum "$IMEM_POLICY" | awk '{print $1}')"
+    if [ -f "$POLICY_STAMP" ] && [ "$(cat "$POLICY_STAMP")" != "$POLICY_HASH" ]; then
+        echo "ERROR: I-MEM policy changed in an existing build tree; rebuild with clean" >&2
+        exit 1
+    fi
+    # A previous incremental build leaves the transformed objects in place.
+    # Restore their pristine forms before make so changed sources can rebuild;
+    # apply_local_holes refreshes those backups after make, before relinking.
+    python3 "${SCRIPT_DIR}/scripts/imem/apply_local_holes.py" \
+        --policy "$IMEM_POLICY" --build-dir "$BUILD_DIR" --reset
+elif [ -f "$POLICY_STAMP" ]; then
+    echo "ERROR: this build tree contains a release I-MEM policy; rebuild with clean" >&2
+    exit 1
+fi
 
 JOBS=$(nproc)
 echo "Building with $JOBS parallel jobs..."
@@ -325,15 +435,66 @@ if [ -z "$SYS_LZMA" ]; then
     exit 1
 fi
 
-if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LZMA="$SYS_LZMA" -j$JOBS; then
+IMEM_KBUILD_LDFLAGS=""
+for root in ${IMEM_HOLE_ROOTS:-}; do
+    case "$root" in
+        __imem_hole_[0-9][0-9][0-9][0-9]) ;;
+        *) echo "ERROR: invalid I-MEM hole root: $root" >&2; exit 1 ;;
+    esac
+    IMEM_KBUILD_LDFLAGS="${IMEM_KBUILD_LDFLAGS} -u ${root}"
+done
+if [ "${VMLINUX_LINK_MAP:-0}" = "1" ]; then
+    # One map per linker output: make expands the preserved automatic $@ in
+    # each final-link recipe, so the zboot link cannot overwrite the vmlinux
+    # map as a plain fixed -Map path would.
+    IMEM_KBUILD_LDFLAGS="${IMEM_KBUILD_LDFLAGS} -Map=\$@.map"
+fi
+
+if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LZMA="$SYS_LZMA" \
+        KBUILD_LDFLAGS="$IMEM_KBUILD_LDFLAGS" -j"$JOBS"; then
     echo ""
     echo "=== BUILD FAILED ==="
     exit 1
 fi
 
+if [ "$USE_IMEM_POLICY" = true ]; then
+    python3 "${SCRIPT_DIR}/scripts/imem/apply_local_holes.py" \
+        --policy "$IMEM_POLICY" --build-dir "$BUILD_DIR" \
+        --report "$BUILD_DIR/.imem-policy-report.json"
+    policy_count="$(awk -F '\t' '!/^#/ && NF == 2 {n++} END {print n+0}' "$IMEM_POLICY")"
+    policy_roots=""
+    index=0
+    while [ "$index" -lt "$policy_count" ]; do
+        policy_roots="$policy_roots -u $(printf '__imem_hole_%04d' "$index")"
+        index=$((index + 1))
+    done
+    echo "Relinking with release I-MEM policy ($policy_count sections)..."
+    if ! make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE LZMA="$SYS_LZMA" \
+            KBUILD_LDFLAGS="$IMEM_KBUILD_LDFLAGS $policy_roots" -j"$JOBS"; then
+        echo "ERROR: I-MEM policy relink failed" >&2
+        exit 1
+    fi
+    python3 "${SCRIPT_DIR}/scripts/imem/verify_policy.py" \
+        --build-dir "$BUILD_DIR" --policy "$IMEM_POLICY" \
+        --report "$BUILD_DIR/.imem-policy-report.json" --cross "$CROSS_COMPILE"
+    printf '%s\n' "$POLICY_HASH" >"$POLICY_STAMP"
+fi
+
 echo ""
 echo "=== COMPILATION OK ==="
 echo ""
+
+# I-MEM is filled once from its SDRAM shadow at boot and is not coherent with
+# later text writes.  A runtime patch site in the window would therefore be
+# changed in SDRAM while the CPU kept executing the stale SRAM instruction.
+# This is a hardware invariant, so gate every I-MEM build, independently of
+# whether it uses the historical placement or an optimized manifest.
+if grep -q '^CONFIG_RTL8196E_IMEM=y' .config; then
+    python3 "${SCRIPT_DIR}/scripts/imem/scan_dynamic_code.py" \
+        --reference "$BUILD_DIR" --config "$BUILD_DIR/.config" \
+        --cross "$CROSS_COMPILE" --gate-window
+    echo ""
+fi
 
 # ── Staleness guard ────────────────────────────────────────────────────────
 # "COMPILATION OK" only means make had nothing left to do — NOT that the
@@ -385,7 +546,7 @@ fi
 # Extract entry point; normalize to 32 bits (readelf may sign-extend on x86-64)
 VMLINUZ_ENTRY_RAW=$(${CROSS_COMPILE}readelf -h "$VMLINUZ_ELF" \
     | awk '/Entry point address/ {print $NF}')
-VMLINUZ_ENTRY=$(printf "0x%08x" $(( ${VMLINUZ_ENTRY_RAW} & 0xffffffff )) 2>/dev/null \
+VMLINUZ_ENTRY=$(printf "0x%08x" $(( VMLINUZ_ENTRY_RAW & 0xffffffff )) 2>/dev/null \
     || python3 -c "print(hex(int('${VMLINUZ_ENTRY_RAW}',16)&0xffffffff))")
 
 echo "  vmlinuz ELF  : $VMLINUZ_ELF"
@@ -409,9 +570,9 @@ $CVIMG \
 img_size=$(stat -c%s "$IMAGE")
 
 echo ""
-echo "  vmlinux      : $(numfmt --to=iec-i --suffix=B $vmlinux_size)"
-echo "  vmlinuz.bin  : $(numfmt --to=iec-i --suffix=B $vmlinuz_size)  (decompressor + LZMA kernel)"
-echo "  Final image  : $(numfmt --to=iec-i --suffix=B $img_size)"
+echo "  vmlinux      : $(numfmt --to=iec-i --suffix=B "$vmlinux_size")"
+echo "  vmlinuz.bin  : $(numfmt --to=iec-i --suffix=B "$vmlinuz_size")  (decompressor + LZMA kernel)"
+echo "  Final image  : $(numfmt --to=iec-i --suffix=B "$img_size")"
 echo ""
 echo "Image ready: $IMAGE"
 if [ "$BOARD" = "lidl" ] && [ "$KERNEL_MAJOR_MINOR" = "6.18" ]; then

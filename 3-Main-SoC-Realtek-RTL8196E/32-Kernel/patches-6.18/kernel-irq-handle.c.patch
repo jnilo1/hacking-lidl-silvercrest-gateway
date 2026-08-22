@@ -13,16 +13,25 @@
  #ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
  void (*handle_arch_irq)(struct pt_regs *) __ro_after_init;
  #endif
-@@ -174,7 +180,7 @@
+@@ -174,7 +180,16 @@
  	}
  }
  
 -irqreturn_t __handle_irq_event_percpu(struct irq_desc *desc)
-+irqreturn_t __iram_hotpath __handle_irq_event_percpu(struct irq_desc *desc)
++/*
++ * Deliberately not __iram_hotpath, unlike the two callers below.  This
++ * function carries a static-branch site, and the on-chip window is a
++ * non-coherent copy taken once at boot: a key toggled later would be
++ * patched in the SDRAM shadow the CPU no longer reads.  The kernel
++ * refuses the patch and warns, or -- if nothing ever toggles that key --
++ * says nothing at all and leaves the branch wrong forever.  Neither is
++ * acceptable, so the function stays in ordinary text.
++ */
++irqreturn_t __handle_irq_event_percpu(struct irq_desc *desc)
  {
  	irqreturn_t retval = IRQ_NONE;
  	unsigned int irq = desc->irq_data.irq;
-@@ -233,7 +239,7 @@
+@@ -233,7 +248,7 @@
  	return retval;
  }
  
@@ -31,7 +40,7 @@
  {
  	irqreturn_t retval;
  
-@@ -246,7 +252,7 @@
+@@ -246,7 +261,7 @@
  	return retval;
  }
  

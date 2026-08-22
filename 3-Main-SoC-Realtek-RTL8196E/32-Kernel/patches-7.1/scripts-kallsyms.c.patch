@@ -1,0 +1,20 @@
+--- a/scripts/kallsyms.c
++++ b/scripts/kallsyms.c
+@@ -49,6 +49,7 @@ static unsigned long long _text;
+ static struct addr_range text_ranges[] = {
+ 	{ "_stext",     "_etext"     },
+ 	{ "_sinittext", "_einittext" },
++	{ "__iram",     "__iram_tail" },
+ };
+ #define text_range_text     (&text_ranges[0])
+ #define text_range_inittext (&text_ranges[1])
+@@ -78,6 +79,9 @@ static void usage(void)
+ 
+ static bool is_ignored_symbol(const char *name, char type)
+ {
++	if (!strncmp(name, "__imem_hole_", 12))
++		return true;
++
+ 	if (type == 'u' || type == 'n')
+ 		return true;
+ 

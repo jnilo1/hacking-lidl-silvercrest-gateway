@@ -7,8 +7,8 @@ This directory contains everything needed to build a modern Linux kernel for the
 
 | `KERNEL` | Version | Sources |
 |----------|---------|---------|
-| `6.18` *(default)* | [Linux 6.18.41](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — stable 6.18.x LTS family | `patches-6.18/`, `files-6.18/`, `config-6.18-realtek.txt` |
-| `7.1` | [Linux 7.1.7](https://cdn.kernel.org/pub/linux/kernel/v7.x/) | `patches-7.1/`, `files-7.1/`, `config-7.1-realtek.txt` |
+| `6.18` *(default)* | [Linux 6.18.45](https://cdn.kernel.org/pub/linux/kernel/v6.x/) — stable 6.18.x LTS family | `patches-6.18/`, `files-6.18/`, `config-6.18-realtek.txt` |
+| `7.1` | [Linux 7.1.9](https://cdn.kernel.org/pub/linux/kernel/v7.x/) | `patches-7.1/`, `files-7.1/`, `config-7.1-realtek.txt` |
 
 The two lines coexist — each has its own patch/overlay/config triplet and its own pre-built
 images. A Lidl user who sets nothing builds and flashes the `6.18` line exactly as before.
@@ -90,7 +90,13 @@ The script will:
 2. Apply all patches from `patches-6.18/`
 3. Overlay Realtek platform files from `files-<line>/`
 4. Compile the kernel
-5. Package the compressed kernel image (zboot) into `kernel-img/<board>/kernel-<line>.img`, ready to flash
+5. Apply the exact point release's versioned I-MEM policy, when present
+6. Verify its local holes, SRAM budget and runtime-patching safety
+7. Package the compressed kernel image (zboot) into `kernel-img/<board>/kernel-<line>.img`, ready to flash
+
+The shipped 6.18.45 and 7.1.9 policies live under `scripts/imem/policies/`.
+`IMEM_POLICY_DISABLE=1` is an experimental escape hatch and requires a clean build tree;
+normal production builds always apply and verify the matching policy.
 
 **Requirements**: [Toolchain](../../1-Build-Environment/README.md) must be built first.
 

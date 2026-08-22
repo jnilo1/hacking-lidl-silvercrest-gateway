@@ -4,6 +4,13 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [4.2.0] - 2026-08-22
+
+_No radio firmware or tooling change. This release updates the RTL8196E kernel and retains
+the v4.1.0 EFR32 artifacts unchanged._
+
+---
+
 ## [4.1.0] - 2026-08-21
 
 _Documentation only on the radio side: the one-time Sengled G4 bootloader step moves from the

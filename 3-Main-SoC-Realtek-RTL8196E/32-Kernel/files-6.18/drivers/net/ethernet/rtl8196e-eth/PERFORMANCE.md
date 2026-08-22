@@ -1517,3 +1517,29 @@ hit). Two new ethtool counters (`tx_defer_queued`/`tx_defer_direct`,
 protocol), modest measured payoff, zero measured risk, and it shortens
 the latency-sensitive `start_xmit` path. Revisit at merge review if
 the branch is squashed for release.
+
+## v4.2.0 versioned I-MEM policies (2026-08-22)
+
+Linux 6.18.45 and 7.1.9 were each profiled from an empty I-MEM window,
+solved independently with the TX activity model, and rebuilt with local
+text holes. Runtime-patch hosts are excluded rather than allowlisted. The
+normal build reproduces and structurally verifies the exact point-release
+policy before packaging.
+
+The standard release bench used 11 runs per direction, with a fresh boot,
+the radio and userland quiesced, no gateway access during a measurement,
+and kernel/counter gates around the run:
+
+| Kernel | TCP TX median | TCP RX median | Safety result |
+|---|---:|---:|---|
+| 6.18.45 | **82.8 Mbit/s** | **91.7 Mbit/s** | 0 retransmissions, 0 hard-counter failures, 0 relevant warnings |
+| 7.1.9 | **82.8 Mbit/s** | **92.8 Mbit/s** | 0 retransmissions, 0 hard-counter failures, 0 relevant warnings |
+
+Both clear the v4.2.0 operational fast-path thresholds (TX >= 80,
+RX >= 90). The initial 6.18.45 qualification and the 7.1.9 run preceded
+those absolute thresholds, so 7.1.9 remains an explicitly retrospective
+qualification. The exact 6.18.45 image was rerun with the final harness on
+2026-08-22, and the table reports that repeat. The measurements establish
+that the shippable images meet the release objective with a large margin;
+they do not estimate the exact I-MEM contribution or prove that one kernel
+line outperforms the other.

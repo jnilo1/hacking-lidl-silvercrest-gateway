@@ -2,3 +2,10 @@
 # These accumulate quickly in the working tree and aren't meant to be
 # shared in-tree; keep reports in a separate archive if you want history.
 test_results_*/
+
+# Generated references, profiles and candidate images for the I-MEM optimizer.
+# The scripts and manifests belong in git; kernel binaries and raw captures do not.
+imem-work/
+
+# Python validation bytecode.
+__pycache__/

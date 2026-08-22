@@ -4,7 +4,7 @@
 |---|---|
 | **Last updated** | 2026-07-18 |
 | **Driver version** | 1.7 |
-| **Active release** | v4.1.0 (kernels `6.18.41` and `7.1.7`, `-rtl8196e-v4.1.0`) |
+| **Active release** | v4.2.0 (kernels `6.18.45` and `7.1.9`, `-rtl8196e-v4.2.0`) |
 
 Architecture companion to [`AUDIT.md`](AUDIT.md). This is the glue
 driver for **UART1 = ttyS1 = the EFR32 radio link** — the wire under

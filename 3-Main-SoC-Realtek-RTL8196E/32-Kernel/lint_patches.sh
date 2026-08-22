@@ -26,6 +26,12 @@
 
 set -euo pipefail
 
+indent_output() {
+    while IFS= read -r line; do
+        printf '          %s\n' "$line"
+    done
+}
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 BUILD="${SCRIPT_DIR}/build_kernel.sh"
 
@@ -95,14 +101,30 @@ for patch in "$PATCHES_DIR"/*.patch; do
     count=$((count + 1))
     name="$(basename "$patch")"
     if out="$(patch -p1 -f --dry-run < "$patch" 2>&1)"; then
+        if printf '%s\n' "$out" | \
+                grep -Eiq 'fuzz|offset|warning|malformed|misordered|reversed|previously applied|FAILED|reject'; then
+            printf '  WARN  %s\n' "$name"
+            printf '%s\n' "$out" | sed 's/^/          /'
+            fail=1
+            continue
+        fi
         printf '  ok    %s\n' "$name"
         # Apply for real (still in the throwaway tree) so later patches that
         # depend on an earlier one's result see it — mirrors the build, which
         # applies sequentially into one tree.
-        patch -p1 -f --no-backup-if-mismatch < "$patch" >/dev/null 2>&1
+        if ! apply_out="$(patch -p1 -f --no-backup-if-mismatch < "$patch" 2>&1)"; then
+            printf '  FAIL  %s (real apply after successful dry-run)\n' "$name"
+            printf '%s\n' "$apply_out" | indent_output
+            fail=1
+        elif printf '%s\n' "$apply_out" | \
+                grep -Eiq 'fuzz|offset|warning|malformed|misordered|reversed|previously applied|FAILED|reject'; then
+            printf '  WARN  %s (real apply)\n' "$name"
+            printf '%s\n' "$apply_out" | indent_output
+            fail=1
+        fi
     else
         printf '  FAIL  %s\n' "$name"
-        echo "$out" | sed 's/^/          /'
+        printf '%s\n' "$out" | indent_output
         fail=1
     fi
 done
@@ -110,7 +132,7 @@ shopt -u nullglob
 
 echo ""
 if [ "$fail" -ne 0 ]; then
-    echo "RESULT: at least one patch would FAIL a from-clean build — refresh it" >&2
+    echo "RESULT: at least one patch would fail or apply with a warning, fuzz, or offset" >&2
     echo "        against Linux ${KERNEL_VERSION} (check the hunk headers / context)." >&2
     exit 1
 fi

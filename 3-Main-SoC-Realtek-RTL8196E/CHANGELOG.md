@@ -6,6 +6,96 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.2.0] - 2026-08-22
+
+_A kernel performance release: both supported lines move forward, and each now ships a
+versioned I-MEM policy selected from an empty-window profile instead of the historical
+hand-picked placement. Local holes preserve the surrounding text layout, production builds
+verify the exact policy and reject runtime-patch sites in the boot-time SRAM copy, and the
+standard release bench clears 82 Mbit/s TX on both kernels without sacrificing RX._
+
+### Kernel — Linux 6.18.45 and 7.1.9
+
+The production line moves from Linux 6.18.41 to 6.18.45, and the secondary line from 7.1.7
+to 7.1.9. All 58 RTL8196E patches apply at zero offset, without fuzz or warnings; the patch
+lint now treats any of those conditions as a build failure rather than accepting a plausible
+but shifted port.
+
+### I-MEM — measured, versioned policies in the normal build
+
+The optimizer profiles a kernel with an empty 16 KiB I-MEM window, enumerates the complete
+safe text-section universe, excludes every runtime-patch site, and solves one exact TX
+knapsack. Selected functions move into SRAM while equal-size, equal-alignment local holes
+retain their original text slots. This replaces both the old annotation list and the global
+layout arena, whose measured TX cost was 3.85 Mbit/s.
+
+Normal builds now detect the policy for the exact point release, restore pristine objects
+before an incremental compile, apply the local holes after that compile, relink, and verify
+the linked policy. The gate checks the exact entry order, 15,872-byte budget, hole roots and
+I-MEM boundaries; a separate scanner rejects jump labels and every other enabled dynamic
+text-patching mechanism in the SRAM window.
+
+The qualified policies occupy 15,868 bytes: 93 sections on 6.18.45 and 87 on 7.1.9. The
+final standard 11-run-per-direction release bench measured 82.8/91.7 Mbit/s TX/RX on
+6.18.45; the 7.1.9 qualification measured 82.8/92.8 Mbit/s. Both had zero TCP
+retransmissions, zero hard-counter failures and clean kernel logs. The 7.1.9 run predates
+the now-versioned 80/90 fast-path rule and is therefore a retrospective operational
+qualification, not a prospective causal estimate.
+
+### Bench — bounded release qualification
+
+The release suite uses eleven TX and eleven RX repetitions, so its medians are observed
+runs. The harness now also enforces the documented 15-second quiet period after stopping
+radio and userland services instead of waiting only one second. For future campaigns, a
+structurally clean candidate reaching at least 80 Mbit/s TX
+and 90 Mbit/s RX with all safety gates green completes the bounded fast path. The long
+12-pair comparison remains available for marginal results, close policy comparisons or a
+precise causal estimate; it is no longer a mandatory four-hour tax on a large-margin release
+decision.
+
+### Installer — preserve release-candidate versions (#156)
+
+`flash_install_rtl8196e.sh` no longer truncates the running firmware version at the third
+numeric component: a gateway reporting `v4.0.0-rc5` is now displayed as `v4.0.0-rc5`, not
+`v4.0.0`. The parser preserves SemVer prerelease and build suffixes and exposes the major
+component separately, so the only behavioural consumer — the v2-to-v3 `radio.conf`
+migration — remains independent from the display form. Firmware version detection still
+does not select or gate the flash path.
+
+### Ethernet performance across releases
+
+The Linux 6.18 production images for v3.10.0, v4.0.0 and v4.2.0 were remeasured on the
+same Lidl gateway and host rig with the current standard release bench. Each image was
+flashed afresh, followed by 45 seconds of boot settling; `S70otbr`, `S80netwatch` and
+`S40button` were then stopped and checked absent, followed by another 15 seconds of quiet
+time. No command was run on the gateway during a measurement. TCP figures are medians of
+eleven independent 30-second sessions with a fresh client and server and a 10-second gap;
+UDP figures are medians of three 20-second sessions.
+
+| Release | Kernel | TCP RX host to gateway | TCP TX gateway to host | UDP RX at 100 Mbit/s offered | UDP TX unconstrained |
+|---|---|---:|---:|---:|---:|
+| v3.10.0 | 6.18.35 | 93.8 Mbit/s (93.2–94.0) | 68.7 Mbit/s (68.3–72.1) | 30.5 Mbit/s, 68% loss | 32.6 Mbit/s, 0% loss |
+| v4.0.0 | 6.18.41 | 92.4 Mbit/s (91.8–92.6) | 71.4 Mbit/s (70.3–72.7) | 33.3 Mbit/s, 65% loss | 33.6 Mbit/s, 0% loss |
+| v4.2.0 | 6.18.45 | 91.7 Mbit/s (91.1–92.5) | **82.8 Mbit/s** (81.2–83.6) | **40.7 Mbit/s**, 57% loss | **36.7 Mbit/s**, 0% loss |
+
+From v3.10.0 to v4.2.0, median TCP TX rises by 14.1 Mbit/s (20.5%), UDP TX by
+4.1 Mbit/s (12.6%), and delivered UDP RX by 10.2 Mbit/s (33.4%). TCP RX falls by
+2.1 Mbit/s (2.2%); this progression includes the deliberate v2.23 checksum-integrity
+policy cost documented in the Ethernet performance notes. All three runs recorded zero
+TCP retransmissions and zero RX/TX errors. The 629-632 TCP-phase `rx_drop` increments were
+effectively identical on all three images and correspond to ambient broadcast traffic,
+not a release-dependent regression.
+
+Only the kernel image changed between runs: the installed rootfs and userdata were held
+constant, and every boot received the same repository-built static iperf 3.18 binary
+(`9001f02e4245e316d08f830424c7e0168efb9b1f3f4b46a047f2217339ec85df`). The kernel-image
+SHA-256 prefixes were `2488a974c7512ad6` (v3.10.0), `eda60783c8491256` (v4.0.0), and
+`0cb480ec488e81d7` (v4.2.0). The progression is therefore a release-level observation of
+the aggregate kernel, driver, layout and I-MEM changes; it is not a causal decomposition of
+any single change.
+
+---
+
 ## [4.1.0] - 2026-08-21
 
 _A repair release, and its subject is the distance between what a source says and what a
