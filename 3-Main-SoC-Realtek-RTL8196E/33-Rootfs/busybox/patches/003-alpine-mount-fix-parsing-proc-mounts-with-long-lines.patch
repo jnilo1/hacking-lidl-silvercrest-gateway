@@ -1,4 +1,4 @@
-From eb145b4de0444022a00b964d4b548a8c719f99ac Mon Sep 17 00:00:00 2001
+From c5c91a18661d325c9dd2fa9fddaacde9c74ae6b7 Mon Sep 17 00:00:00 2001
 From: Natanael Copa <ncopa@alpinelinux.org>
 Date: Tue, 16 Dec 2025 08:24:02 +0100
 Subject: [PATCH] mount: fix parsing /proc/mounts with long lines
@@ -26,10 +26,10 @@ Signed-off-by: Natanael Copa <ncopa@alpinelinux.org>
  1 file changed, 4 insertions(+), 3 deletions(-)
 
 diff --git a/util-linux/mount.c b/util-linux/mount.c
-index d0f0ae1ad..c0db67ce4 100644
+index d0d109c09..4c7f20882 100644
 --- a/util-linux/mount.c
 +++ b/util-linux/mount.c
-@@ -2283,6 +2283,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
+@@ -2288,6 +2288,7 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
  	unsigned long cmdopt_flags;
  	unsigned opt;
  	struct mntent mtpair[2], *mtcur = mtpair;
@@ -37,7 +37,7 @@ index d0f0ae1ad..c0db67ce4 100644
  	IF_NOT_DESKTOP(const int nonroot = 0;)
  
  	IF_DESKTOP(int nonroot = ) sanitize_env_if_suid();
-@@ -2395,9 +2396,9 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
+@@ -2400,9 +2401,9 @@ int mount_main(int argc UNUSED_PARAM, char **argv)
  		struct mntent *mtother = (mtcur==mtpair ? mtpair+1 : mtpair);
  
  		// Get next fstab entry
@@ -50,6 +50,3 @@ index d0f0ae1ad..c0db67ce4 100644
  		) { // End of fstab/mtab is reached
  			mtcur = mtother; // the thing we found last time
  			break;
--- 
-2.52.0
-

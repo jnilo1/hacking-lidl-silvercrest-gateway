@@ -48,6 +48,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="${SCRIPT_DIR}/.."
 INSTALL_DIR="${SCRIPT_DIR}/skeleton/usr/bin"
 
+# Host requirements, then PATH normalisation. Sourced here rather than left to
+# the callers because this script is also run directly. See lib/hostcheck.sh
+# (mkfs.jffs2 is Linux-only) and lib/hostpath.sh (it lives in /usr/sbin, which
+# some distributions keep out of a non-root PATH).
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../../lib/hostcheck.sh"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/../../lib/hostpath.sh"
+
 # Default: package the JFFS2 image from the binaries committed in skeleton/
 # (boothold, nano, otbr-agent, ot-ctl, vi → nano). Rebuilding those binaries
 # is opt-in via --rebuild-components (full flow) or --components-only (no image).

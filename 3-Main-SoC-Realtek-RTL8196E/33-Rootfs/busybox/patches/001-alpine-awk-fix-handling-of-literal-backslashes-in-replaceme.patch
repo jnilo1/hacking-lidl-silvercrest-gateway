@@ -1,4 +1,4 @@
-From c281b87c89918c05eddbb1101fb87999437a2505 Mon Sep 17 00:00:00 2001
+From 4b445e4b083814b0c643e26c2d2995218cff2271 Mon Sep 17 00:00:00 2001
 From: Yao Zi <ziyao@disroot.org>
 Date: Thu, 14 Nov 2024 11:11:50 +0000
 Subject: [PATCH] awk: fix handling of literal backslashes in replacement
@@ -27,10 +27,10 @@ Signed-off-by: Yao Zi <ziyao@disroot.org>
  2 files changed, 11 insertions(+), 1 deletion(-)
 
 diff --git a/editors/awk.c b/editors/awk.c
-index 64e752f4b..40f5ba7f7 100644
+index dd8f4ac42..3c7db7293 100644
 --- a/editors/awk.c
 +++ b/editors/awk.c
-@@ -2636,8 +2636,13 @@ static int awk_sub(node *rn, const char *repl, int nm, var *src, var *dest /*,in
+@@ -2630,8 +2630,13 @@ static int awk_sub(node *rn, const char *repl, int nm, var *src, var *dest /*,in
  					resbuf = qrealloc(resbuf, residx + replen + n, &resbufsize);
  					memcpy(resbuf + residx, sp + pmatch[j].rm_so - start_ofs, n);
  					residx += n;
@@ -59,6 +59,3 @@ index be25f6696..61b3bc7d6 100755
 +	'' 'abc\n'
 +
  exit $FAILCOUNT
--- 
-2.47.1
-

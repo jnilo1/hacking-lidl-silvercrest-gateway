@@ -1,10 +1,7 @@
-From c682e9410adfdfeb33d507fe0daeda581a07becf Mon Sep 17 00:00:00 2001
+From ddb8d9a9d050e892a58259c821daf536f9e1ee57 Mon Sep 17 00:00:00 2001
 From: Natanael Copa <ncopa@alpinelinux.org>
 Date: Tue, 29 Mar 2016 09:23:08 +0200
 Subject: [PATCH] ping: make ping work without root privileges
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
 
 ---
  networking/ping.c | 115 +++++++++++++++++++++++++++++++++++++---------

@@ -6,6 +6,101 @@ rootfs (33-), and userdata (34-).
 
 ---
 
+## [4.3.0] - 2026-09-03
+
+_A rootfs and installer release. BusyBox moves to 1.38.0 on a patch stack that upstream has
+shrunk from 24 patches to 19, and the host-side scripts stop half-finishing on machines
+that cannot complete the job — both reported from the field within a day of each other. No
+kernel, bootloader or radio code changed; the four kernel images are rebuilt only to carry
+the new localversion._
+
+### Rootfs — BusyBox 1.38.0
+
+The BusyBox patch set tracks Alpine edge, so staleness is measured against aports rather
+than against upstream announcements. A review on 2026-09-03 found real drift for the first
+time: BusyBox 1.38.0 was released on 2026-05-13 and Alpine moved to it on 2026-05-19, four
+weeks after this tree pinned 1.37.0 — which was what Alpine shipped at the time.
+
+The patch stack drops from 24 to 19. Upstream 1.38.0 absorbed all three path-traversal CVE
+backports carried with an `800-` prefix (CVE-2023-39810, CVE-2026-26157, CVE-2026-26158):
+the `FEATURE_PATH_TRAVERSAL_PROTECTION` framework, `unsafe_prefix.c`, and the
+`!S_ISLNK(...)` guard that keeps the strip on hard links only. It also absorbed four of the
+seventeen Alpine patches. Alpine contributed two `ash` fixes that exist in no 1.37.0 tree:
+a `bb_got_signal` clear for non-interactive shells, and a fix for an out-of-bounds read in
+`ifsbreakup()` where `ifsfree()` is skipped because `argstr()` longjmps out of
+`expandarg()`, leaving stale IFS split offsets that a later, shorter expansion trusts. The
+four Lexra platform patches applied to 1.38.0 unchanged.
+
+The applet set is identical to the 1.37.0 build — 103 applets, none lost, none gained —
+and that took a decision rather than luck. `build_busybox.sh` resolves a new Kconfig with
+`yes "" | make oldconfig`, which accepts every new symbol at its upstream default and only
+writes the result back to `busybox.config` when the word "not set" appears in its output.
+Here it did not write back, so the first 1.38.0 build silently gained five applets the
+tracked configuration never mentioned: `ssl_server`, `lsblk`, `vmstat`, `uuidgen` and
+`sha384sum`. All five are now explicitly off — `ssl_server` most of all, being
+network-facing while its `ssl_client` counterpart is deliberately not shipped. Four other
+symbols were resolved and recorded rather than inherited: `FEATURE_IP_ROUTE` and
+`FEATURE_IP_NEIGH`, which 1.38.0 has the already-enabled `iproute` and `ipneigh` applets
+`select`; `FEATURE_VERSION`, a new knob over the previously unconditional
+`busybox --version`; and `USE_BB_CRYPT_YES`, which only adds verification of yescrypt
+hashes and generates none, the default algorithm here being DES. `busybox.config` now
+determines the build on its own: a second `oldconfig` pass changes nothing but a timestamp.
+
+Binary text grows 758,297 to 770,516 bytes (+1.6 %). All 19 patches apply with zero fuzz.
+Bench-validated on a Lidl gateway upgraded from v4.0.0: two clean boots, twelve supervised
+services, no panic or oops in the kernel log and no error in syslog, the device applet set
+matching the flashed skeleton, and the `/userdata` user additions preserved. Field
+confirmation still pending; the `ash` over-read fix in particular is exercised but not
+proven by a smoke test.
+
+### Installer — refuse an unsupported host instead of failing half-way (#157)
+
+The host-side scripts now check the operating system and the shell before doing anything,
+and stop with a single actionable message when the host cannot complete the job. The
+requirement is real rather than conservative: the userdata image is built with
+`mkfs.jffs2`, from mtd-utils, which exists on Linux only, so a port would end at that wall
+whatever else were made portable.
+
+The failure this replaces was not a clean one. On macOS the scripts ran on bash 3.2 until
+the first associative array — `lib/gwconf.sh`, in the state-file writer — and died there,
+which on the flash path is after the gateway has been sent to its bootloader. Before that,
+size checks written as `stat -c%s ... || echo 0` returned 0 for every partition, because
+BSD `stat` rejects `-c` and the fallback swallows it: `backup_gateway.sh` reported four
+empty partitions, then padded the concatenation with a full 16 MiB, so an unusable backup
+looked like a completed one.
+
+The guard lives in `lib/hostcheck.sh`, sourced by `lib/gwconf.sh` and by
+`34-Userdata/build_userdata.sh`, which together cover every documented entry point. It is
+written in bash 3 syntax on purpose — it has to run on the shell it rejects in order to
+report anything — and its message names the reason and the ways out: another Linux machine
+on the same network, a virtual machine bridged rather than NATed, or WSL2.
+`scripts/test_hostcheck.sh` fakes the operating system through a `uname` stub, so it takes
+the same branch a Mac would. The documented requirement is now stated in
+`docs/getting-started.md`.
+
+### Installer — find mkfs.jffs2 where the distribution puts it (#158)
+
+`flash_install_rtl8196e.sh` reported `missing build/flash prerequisites: mtd-utils` on a
+Debian host where `mtd-utils` was correctly installed. The package puts `mkfs.jffs2` in
+`/usr/sbin`, and whether that directory is on a non-root user's PATH is distribution
+policy: Ubuntu, the documented and tested build host, ships an `/etc/environment` whose
+PATH carries the sbin directories for every user, while Debian leaves that file empty and
+grants them to uid 0 only. The same gap opens on any distribution outside a login shell —
+cron, systemd units, minimal containers.
+
+The scripts now append `/usr/local/sbin`, `/usr/sbin` and `/sbin` to their own PATH when
+those directories exist and are not already listed, rather than assuming the distribution
+provided them. Appended and not prepended, so a tool placed earlier on PATH on purpose
+keeps its precedence. The helper lives in `lib/hostpath.sh` and is sourced by the two
+scripts that need it: `flash_install_rtl8196e.sh`, whose prerequisite check probes
+`mkfs.jffs2`, and `34-Userdata/build_userdata.sh`, which runs it. `scripts/test_hostpath.sh`
+covers appending, precedence, idempotence and the resolution of `mkfs.jffs2` from a
+Debian-style non-root PATH. `mkfs.jffs2` is the only host tool in the flash path that lives
+solely in an sbin directory; `ip` is not affected, iproute2 installing the real binary as
+`/bin/ip`.
+
+---
+
 ## [4.2.0] - 2026-08-22
 
 _A kernel performance release: both supported lines move forward, and each now ships a

@@ -1,10 +1,7 @@
-From 277ee1dcd0955ce10b8aad8b699659e622c22986 Mon Sep 17 00:00:00 2001
+From f56b44dc58df473f97c0e1665a7be2f91d034310 Mon Sep 17 00:00:00 2001
 From: Ariadne Conill <ariadne@dereferenced.org>
 Date: Sun, 3 Apr 2022 20:44:51 +0000
 Subject: [PATCH] nslookup: sanitize all printed strings with printable_string
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
 
 Otherwise, terminal sequences can be injected, which enables various terminal injection
 attacks from DNS results.

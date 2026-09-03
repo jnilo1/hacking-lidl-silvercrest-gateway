@@ -85,6 +85,20 @@ The documented native environment is Ubuntu 22.04, including Ubuntu under
 WSL2. USB serial access under WSL2 may require USB passthrough. A normal Linux
 machine is the simplest option for a first flash.
 
+**Linux is a requirement, not a preference.** The gateway's userdata image is
+built with `mkfs.jffs2` from mtd-utils, which exists on Linux only, and the
+scripts assume GNU tool behaviour and bash 4. They refuse to start on anything
+else rather than fail half-way. macOS is the case worth naming: it ships bash
+3.2, and a run there stops mid-flow after reporting sizes that are not real.
+
+If your computer runs macOS, or Windows without WSL2, run the scripts from a
+Linux machine on the same network. Any Linux box will do, including a Raspberry
+Pi, or a virtual machine whose network adapter is set to **bridged** mode.
+Bridged matters: the bootloader is reached by ARP and TFTP on the same network
+segment, so a VM behind NAT cannot see it, and neither can a container under
+Docker Desktop. The serial console can stay on your own computer — it does not
+have to be the machine that runs the flash.
+
 Install the host tools, then clone the repository:
 
 ```bash
@@ -423,11 +437,17 @@ sz -X -o --tcp-client <gateway-ip>:8888 \
   2-Zigbee-Radio-Silabs-EFR32/23-Bootloader-UART-Xmodem/firmware/bootloader-uart-xmodem-2.4.3-sengled-e39-g8c.gbl
 ```
 
+`sz` says very little. It prints the connection line and `Give your local XMODEM
+receive command now.`, then goes quiet for the length of the transfer and ends
+without announcing anything — the factory bootloader is already receiving, so
+there is nothing to answer that prompt. Silence here is the normal course.
+
 Installing a bootloader erases the application, because the incoming image is
 staged inside application space. The radio has no firmware until the next step
-gives it one, so continue straight to the application flash. That flash reports
-the bootloader version it finds — 2.4.3 once this step has taken — which is the
-confirmation that the transfer worked.
+gives it one, so continue straight to the application flash. That flash is also
+where the transfer is confirmed: it reports the bootloader version it finds, and
+`version 2.4.3` means the new one is in place. Nothing before that point tells
+you — the factory bootloader announces no version of its own.
 
 Do this once. Repeating it on a radio that already runs this project's
 bootloader erases the application without installing anything: the Gecko

@@ -1,4 +1,4 @@
-From 3db0791a409be9b4c2f08cf3081d2d5141c3314c Mon Sep 17 00:00:00 2001
+From ef16855a5cdb788e67a6860cbfd7ff9e51909509 Mon Sep 17 00:00:00 2001
 From: Andrej Valek <andrej.v@skyrain.eu>
 Date: Wed, 16 Oct 2024 10:15:08 +0200
 Subject: [PATCH] syslogd: fix wrong OPT_locallog flag detection
@@ -19,7 +19,7 @@ Signed-off-by: Andrej Valek <andrej.v@skyrain.eu>
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/sysklogd/syslogd.c b/sysklogd/syslogd.c
-index 7558051f0..fa03aa280 100644
+index 2cbb22b6d..8c4e6df88 100644
 --- a/sysklogd/syslogd.c
 +++ b/sysklogd/syslogd.c
 @@ -1179,7 +1179,7 @@ int syslogd_main(int argc UNUSED_PARAM, char **argv)

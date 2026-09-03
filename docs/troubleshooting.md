@@ -313,6 +313,19 @@ with a plain XMODEM client, as described in
 [step 12 of the first installation guide](./getting-started.md#sengled-g4-only-install-the-radios-gecko-bootloader-first),
 then flash the application normally.
 
+One line in a *successful* flash reads like a failure and is not one:
+
+```text
+INFO Failed to read firmware metadata: KeyError('No tag with id <GBLTagId.METADATA: ...> exists')
+```
+
+The flasher looks for an optional metadata tag that this project's application
+images do not carry, says so at INFO level, and flashes them anyway. It is left
+in place deliberately: filtering it means routing application flashes through a
+line-buffered filter, and that is what once swallowed the upload progress bar —
+a live bar is worth more than one silenced INFO line. Judge an application flash
+by `Flash complete.` and by the version read back afterwards.
+
 ## Whole-gateway and network problems
 
 ### The gateway disappears from the network

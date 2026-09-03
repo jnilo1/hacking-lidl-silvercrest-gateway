@@ -100,6 +100,10 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 # Firmware-version parser — preserves prerelease/build suffixes (#156).
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib/firmware_version.sh"
+# PATH normalisation — the prerequisite check below probes mkfs.jffs2, which
+# some distributions keep out of a non-root PATH. See lib/hostpath.sh.
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/lib/hostpath.sh"
 LINUX_IP=""
 FW_VERSION=""
 FW_VERSION_MAJOR=""

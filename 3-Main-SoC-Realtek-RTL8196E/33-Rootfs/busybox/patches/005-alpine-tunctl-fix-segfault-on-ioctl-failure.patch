@@ -1,4 +1,4 @@
-From bbef1106a9d8ce9c01240e3609c348084aae70ee Mon Sep 17 00:00:00 2001
+From 89c58a5dc227775146873c026e320483353bf8fc Mon Sep 17 00:00:00 2001
 From: Dominique Martinet <dominique.martinet@atmark-techno.com>
 Date: Thu, 16 Jan 2025 21:53:08 +0900
 Subject: [PATCH] tunctl: fix segfault on ioctl failure
@@ -33,6 +33,3 @@ index c17302eac..cdb7eb659 100644
  
  #if 1
  
--- 
-2.48.1
-

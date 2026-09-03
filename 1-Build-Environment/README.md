@@ -13,7 +13,7 @@ system or EFR32 radio firmware from source.
 | | Native Ubuntu / WSL2 | Docker |
 | --- | --- | --- |
 | Best for | Regular development, fastest I/O | Reproducible isolated setup |
-| Host | Ubuntu 22.04 or Ubuntu 22.04 under WSL2 | Any Docker host |
+| Host | Ubuntu 22.04 or Ubuntu 22.04 under WSL2 | Any **x86_64** Docker host (see below) |
 | Setup time | About 45 minutes | About 45 minutes |
 | Disk use | About 4 GB in the project | About 8 GB Docker image |
 | Output ownership | Normal project user | Bind-mounted project files |
@@ -21,6 +21,50 @@ system or EFR32 radio firmware from source.
 For Windows development, native Ubuntu 22.04 under WSL2 is normally faster and
 simpler than Docker Desktop. For occasional or CI builds, Docker provides the
 more reproducible boundary.
+
+### Architecture: what actually pins the EFR32 half to x86_64
+
+Silicon Labs publishes its tools for several platforms — Commander and `slc-cli`
+both have macOS archives, and the Linux Commander download contains `aarch64`
+and `aarch32` builds beside the x86_64 one. The constraint here is narrower than
+"Silabs is x86-only", and worth stating precisely.
+
+| Component | Linux x86_64 | Linux aarch64 | Note |
+|---|---|---|---|
+| ARM GCC 12.2 | yes | yes | `install_silabs.sh` already interpolates `uname -m` into the download URL |
+| Simplicity Commander | yes | yes | `Commander_linux_aarch64_*.tar.bz` ships inside the same `SimplicityCommander-Linux.zip` we download |
+| `slc-cli` | yes | **no** | it bundles its own CPython 3.10, built for x86_64 |
+| Gecko SDK | — | — | source, architecture-neutral |
+
+So on an arm64 Linux host `slc-cli` is the one real blocker for *building* EFR32
+firmware. Two caveats sit next to it. `install_silabs.sh` extracts
+`Commander_linux_x86_64_*` by name, so it would take the wrong build on arm64
+even though the right one is in the archive it just downloaded. And its
+architecture guard accepts `aarch64`, which lets that host start an install it
+cannot finish.
+
+Note also that Commander carries a **32-bit** x86 helper,
+`commander/resources/cct_linux` — that is why `install_deps.sh` and the
+`Dockerfile` enable the `i386` architecture, and why running the x86_64 build
+under emulation on Apple Silicon does not help: Docker Desktop's x86 translation
+does not cover 32-bit binaries.
+
+The RTL8196E half carries no architecture constraint at all, because nothing
+prebuilt for the host is shipped: the Lexra toolchain is built from source by
+crosstool-NG and the Realtek image tools are compiled by the build scripts. An
+arm64 Linux host therefore builds the complete gateway system — bootloader,
+kernel, rootfs, userdata — and can flash the radio too, since `flash_efr32.sh`
+drives a Python virtualenv (`universal-silabs-flasher`) rather than Commander,
+and the EFR32 firmware images are committed pre-built under
+`2-Zigbee-Radio-Silabs-EFR32/*/firmware/`.
+
+For a macOS host, all of this runs in a Linux virtual machine, natively on an
+Intel Mac. Silicon Labs' own macOS tools exist and can be used directly for
+EFR32 work, but they are outside these build scripts, and they do not help with
+the RTL8196E half: that one requires Linux whatever the architecture, because
+the userdata image is built with `mkfs.jffs2`. Flashing a gateway from a VM
+needs its network adapter in **bridged** mode; see the
+[upgrade guide](../docs/upgrading.md#host-prerequisites).
 
 ## Native setup
 

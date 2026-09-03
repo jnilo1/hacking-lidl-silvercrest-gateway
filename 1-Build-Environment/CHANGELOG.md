@@ -20,6 +20,56 @@ v0 was a teardown-and-docs-only snapshot — no toolchain in the tree yet. The
 toolchain entered the repository at v1.0.0 and was frozen on the GCC 8 /
 binutils 2.34 / musl 1.2.5 line through the entire v1.x and v2.x series.
 
+### Upstream review log
+
+Since v3.0.0 the three generic components track Alpine Linux edge, so "is the
+toolchain stale" is answered by comparing versions and patch sets against
+aports rather than against upstream release announcements. Reviews are recorded
+here so the next one starts from a date instead of from scratch.
+
+| Reviewed | Alpine edge then | Verdict |
+|---|---|---|
+| 2026-09-03 | binutils 2.45.1-r1, GCC 15.2.0-r9, musl 1.2.6-r3 | No rebase. No upstream version moved since the v3.0.0 rebase. |
+
+Detail for 2026-09-03: binutils had no aports commit since 2025-11-22; the
+eight GCC commits were all Alpine packaging (the `libgcc` / `libgcc-static`
+split, a `libgcc_s.so` symlink added then reverted, a sanitizer header), which
+a crosstool-NG build never sees — the `-r9` is package churn, not compiler
+change. The single substantive item in the whole delta is musl's backport of
+the upstream fix for a TOCTOU race in `popen`, and no shipped binary calls
+`popen`. Nothing we carry has been dropped by Alpine, and the patches we do not
+carry remain what the v3.0.0 filter excludes: other architectures and the Ada,
+D, Go, sanitizer and locale runtimes.
+
+Take the `popen` patch at the next toolchain rebuild rather than on its own: a
+rebuild re-lays the kernel text, and placement alone has been measured on this
+platform to move Ethernet throughput by several Mbit/s, so it costs a release
+bench. Watch for an upstream **version** bump in edge — GCC 16, musl 1.2.7 —
+not for `pkgrel` movement.
+
+---
+
+## [4.3.0] - 2026-09-03
+
+_Toolchain unchanged (crosstool-NG 1.28.0, binutils 2.45.1, GCC 15.2.0, musl 1.2.6, Linux
+headers 6.16). Documentation only._
+
+### Upstream review recorded, and the architecture constraint corrected
+
+The 2026-09-03 Alpine review is logged in the table at the top of this file: no upstream
+version moved in the four and a half months since the v3.0.0 rebase, and the only
+substantive item in the whole delta is a musl backport for a TOCTOU race in `popen`, on a
+code path no shipped binary uses.
+
+`README.md` now says what actually pins the EFR32 half to x86_64, which is narrower than
+the previous wording implied. Silicon Labs publishes macOS archives for both Commander and
+`slc-cli`, and `SimplicityCommander-Linux.zip` — the archive `install_silabs.sh` already
+downloads — carries `aarch64` and `aarch32` builds beside the x86_64 one. The single real
+blocker on an arm64 host is `slc-cli`, which bundles its own x86_64 CPython. Two local
+consequences are documented rather than fixed, for want of an arm64 machine to test on:
+`install_silabs.sh` extracts Commander by a name hardcoded to `x86_64`, and its
+architecture guard accepts `aarch64` for an install that cannot finish.
+
 ---
 
 ## [4.0.0] - 2026-08-10

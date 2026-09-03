@@ -1,10 +1,7 @@
-From fdfcf5d1e3dd171f3175804dfae4247e995a0fd8 Mon Sep 17 00:00:00 2001
+From 1aeb8287856fbfe5ec6a87721557dd96f8f3f25d Mon Sep 17 00:00:00 2001
 From: Dominique Martinet <dominique.martinet@atmark-techno.com>
 Date: Fri, 27 Oct 2023 06:42:35 +0900
 Subject: [PATCH] find: fix -xdev -depth (and -delete)
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
 
 find -xdev with -depth would check for same_fs after the subdirectory
 has been processed (because the check is done in the file/dir action,
@@ -142,10 +139,10 @@ index 31c996988..a4a6bbc2d 100644
  		if (!recursive_action(argv[i],
  				G.recurse_flags,/* flags */
 diff --git a/include/libbb.h b/include/libbb.h
-index 0dddc8b8a..66fe9ecf7 100644
+index 34cb9f4e0..4d29bca61 100644
 --- a/include/libbb.h
 +++ b/include/libbb.h
-@@ -519,6 +519,7 @@ enum {
+@@ -533,6 +533,7 @@ enum {
  	ACTION_DEPTHFIRST     = (1 << 3),
  	ACTION_QUIET          = (1 << 4),
  	ACTION_DANGLING_OK    = (1 << 5),

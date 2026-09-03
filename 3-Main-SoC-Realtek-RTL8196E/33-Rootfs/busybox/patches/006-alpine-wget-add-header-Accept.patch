@@ -1,10 +1,7 @@
-From dc39a6edc4a04ff40667fb366766710078f9f9d7 Mon Sep 17 00:00:00 2001
+From c8b30452eae22a68efc4ef6f3b9fef695480b3ed Mon Sep 17 00:00:00 2001
 From: Natanael Copa <ncopa@alpinelinux.org>
 Date: Mon, 11 Mar 2024 12:47:15 +0100
 Subject: [PATCH] wget: add header Accept: */*
-MIME-Version: 1.0
-Content-Type: text/plain; charset=UTF-8
-Content-Transfer-Encoding: 8bit
 
 Some servers (like https://netfilter.org) returns failure if the Accept
 header is missing. Both GNU wget and curl adds this header, so make

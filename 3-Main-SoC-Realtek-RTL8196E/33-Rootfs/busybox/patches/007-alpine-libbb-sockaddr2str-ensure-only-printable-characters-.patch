@@ -1,4 +1,4 @@
-From a8a43d8092563a62349e0c9b5db3926bb3e02f94 Mon Sep 17 00:00:00 2001
+From a5ccb41a1cd11b99b67f626bd99c5e418b4cfa1b Mon Sep 17 00:00:00 2001
 From: Ariadne Conill <ariadne@dereferenced.org>
 Date: Sun, 3 Apr 2022 18:13:37 +0000
 Subject: [PATCH] libbb: sockaddr2str: ensure only printable characters are
@@ -12,10 +12,10 @@ Signed-off-by: Ariadne Conill <ariadne@dereferenced.org>
  1 file changed, 3 insertions(+), 2 deletions(-)
 
 diff --git a/libbb/xconnect.c b/libbb/xconnect.c
-index 0e0b247b8..02c061e67 100644
+index 095f7ff47..530883a7a 100644
 --- a/libbb/xconnect.c
 +++ b/libbb/xconnect.c
-@@ -497,8 +497,9 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
+@@ -476,8 +476,9 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
  	);
  	if (rc)
  		return NULL;
@@ -26,7 +26,7 @@ index 0e0b247b8..02c061e67 100644
  #if ENABLE_FEATURE_IPV6
  	if (sa->sa_family == AF_INET6) {
  		if (strchr(host, ':')) /* heh, it's not a resolved hostname */
-@@ -509,7 +510,7 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
+@@ -488,7 +489,7 @@ static char* FAST_FUNC sockaddr2str(const struct sockaddr *sa, int flags)
  #endif
  	/* For now we don't support anything else, so it has to be INET */
  	/*if (sa->sa_family == AF_INET)*/

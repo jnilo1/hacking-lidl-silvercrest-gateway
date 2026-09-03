@@ -4,6 +4,38 @@ All notable changes to the EFR32 firmware and tooling are documented here.
 
 ---
 
+## [4.3.0] - 2026-09-03
+
+### Documentation — what the first G4 bootloader install actually looks like, and what its version is not (discussion #148, @hlyi)
+
+@hlyi ran the published instructions end to end on a G4 he had first restored to its
+original radio firmware, so the procedure is now field-validated over a **factory**
+bootloader, with the commands exactly as written, rather than reconstructed from the run
+that produced it. Two things came out of his transcript.
+
+`sz` says almost nothing: a connection line, `Give your local XMODEM receive command now.`,
+then silence for the whole transfer and no completion message. The prompt is addressed to a
+human driving a terminal, while the bootloader on the other end is already receiving — so
+the quiet is the normal course, and the installation guide and the component README now say
+so instead of leaving the reader to guess whether it hung. The confirmation arrives one step
+later, from the application flash reporting the bootloader version it finds.
+
+And a correction of ours: **the factory bootloader's version is unknown, not 2.4.2.** It
+drops straight into XMODEM without announcing one. The 2.4.2 seen in the July logs was our
+own earlier build, which @hlyi had installed by hand — the two are easy to conflate, and the
+version table's "already in the field" invited exactly that. The only defensible statement
+about the factory version is negative and inferred: it compares lower than whatever
+installed over it, because the upgrade gate let that image through. The README says that now,
+and says not to write a number for it.
+
+`docs/troubleshooting.md` also names the one line of a *successful* application flash that
+reads like a failure — `Failed to read firmware metadata: KeyError(... GBLTagId.METADATA ...)`,
+an optional tag our images do not carry — and records why it is not filtered out: doing so
+means routing application flashes through a line-buffered filter, which is what once
+swallowed the upload progress bar.
+
+---
+
 ## [4.2.0] - 2026-08-22
 
 _No radio firmware or tooling change. This release updates the RTL8196E kernel and retains

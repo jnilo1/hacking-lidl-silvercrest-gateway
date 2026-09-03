@@ -43,6 +43,13 @@
 GWCONF_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 GWCONF_REPO_ROOT="$(cd "${GWCONF_LIB_DIR}/.." && pwd)"
 
+# Host requirements, checked before anything else runs. Sourced here because
+# every host-side script sources this file, and because gwconf_state_set below
+# is where an unsupported shell would otherwise fail — deep inside a flash,
+# after the gateway has already been sent to its bootloader.
+# shellcheck disable=SC1091
+. "${GWCONF_LIB_DIR}/hostcheck.sh"
+
 GWCONF_FILE="${GWCONF_FILE:-${GWCONF_REPO_ROOT}/gateway.env}"
 GWCONF_USER_FILE="${GWCONF_USER_FILE:-${XDG_CONFIG_HOME:-${HOME:-/nonexistent}/.config}/rtl8196e-gateway/gateway.env}"
 GWCONF_STATE_FILE="${GWCONF_STATE_FILE:-${GWCONF_REPO_ROOT}/.gateway-state}"

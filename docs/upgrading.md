@@ -39,6 +39,22 @@ from interrupted power, a wrong image, or an unexpected flash failure.
 
 ## Host prerequisites
 
+**The machine running these scripts must be Linux.** The gateway's userdata image
+is built with `mkfs.jffs2` from mtd-utils, which exists on Linux only, and the
+scripts assume GNU tool behaviour and bash 4; they refuse to start anywhere else
+rather than fail half-way through an upgrade. On macOS in particular an older
+release would run for a while on bash 3.2 and stop mid-flow, after reporting
+backup sizes that were not real.
+
+If your computer runs macOS, or Windows without WSL2, run the scripts from a
+Linux machine on the same network as the gateway — any Linux box will do,
+including a Raspberry Pi, or a virtual machine whose network adapter is set to
+**bridged** rather than NAT. The reason is that the bootloader is reached by ARP
+and TFTP on the same network segment, which a NATed VM and a Docker Desktop
+container cannot do. See the
+[first-install guide](getting-started.md#3-prepare-the-computer) for the same
+requirement stated in full.
+
 From the repository root, install the small image-build and flash tool set:
 
 ```bash

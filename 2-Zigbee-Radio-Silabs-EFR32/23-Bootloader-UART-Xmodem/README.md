@@ -118,7 +118,13 @@ left to the integrator. It is set per board:
 | Board | Version | Why |
 |---|---|---|
 | `lidl` | **2.4.2** | Unchanged binary — bumping it would break byte-for-byte reproducibility for nothing |
-| `sengled-e39-g8c` | **2.4.3** | Its binary changed (GPIO activation), and it must be able to supersede the 2.4.2 already in the field |
+| `sengled-e39-g8c` | **2.4.3** | Its binary changed (GPIO activation), and it has to supersede the **2.4.2 of ours** already installed on G4 units that were given the earlier build by hand |
+
+Nothing here is a statement about what a *factory* G4 runs. Sengled's own
+bootloader announces no version at all — it drops straight into XMODEM — so the
+only thing anyone can say about it is negative and inferred: it must compare
+lower than the image that installed over it, because the gate above let that
+install through. Do not write a number for it.
 
 **So: bump `BOARD_BTL_CUSTOMER` in that board's `board.env` whenever you change
 that board's bootloader binary.** Otherwise the new image can never reach a unit
@@ -284,6 +290,12 @@ echo 1 > $SYSFS/blmode_pulse    # hardware entry — the stock bootloader sample
 # On the host, from this directory's firmware/
 sz -X -o --tcp-client 192.168.1.88:8888 bootloader-uart-xmodem-2.4.3-sengled-e39-g8c.gbl
 ```
+
+Expect almost no output: `sz` prints its connection line and `Give your local
+XMODEM receive command now.`, then nothing until it exits. The bootloader on the
+other end is already receiving — that prompt is for a human driving a terminal,
+and there is no completion message either way. The transfer is confirmed one
+step later, by the application flash reporting the bootloader version it finds.
 
 Both bridge settings are load-bearing, and `flash_efr32.sh` sets exactly the
 same pair before every Xmodem transfer. The bootloader's Xmodem path runs at

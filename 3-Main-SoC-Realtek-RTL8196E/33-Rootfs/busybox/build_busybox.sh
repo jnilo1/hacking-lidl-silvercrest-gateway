@@ -5,7 +5,7 @@
 #   ./build_busybox.sh [version] [menuconfig] [clean]
 #
 # Examples:
-#   ./build_busybox.sh                    # Build with default version (1.37.0)
+#   ./build_busybox.sh                    # Build with default version (1.38.0)
 #   ./build_busybox.sh menuconfig         # Default version + interactive config
 #   ./build_busybox.sh 1.36.1             # Build specific version
 #   ./build_busybox.sh 1.36.1 menuconfig  # Specific version + interactive config
@@ -21,11 +21,12 @@
 #   a common base configuration.
 #
 # Patches (applied in alphabetical order from patches/):
-#   001-017 alpine-*       - Alpine edge patch set (CVE backports, bugfixes, hardening)
-#   800-802 CVE-*          - CVEs not covered by Alpine (path traversal framework +
-#                            hardlink/symlink tar traversal fixes)
+#   001-015 alpine-*       - Alpine edge patch set (CVE backports, bugfixes, hardening)
 #   900-903 Lexra-*        - Platform adaptations: musl off_t size check, cross-compile
 #                            PAGE_SIZE, JFFS2 fcntl lock, FORTIFY_SOURCE write() check
+#
+# The 800-series path-traversal CVE backports are gone: BusyBox 1.38.0 carries
+# them upstream, framework and both tar fixes.
 
 set -e
 
@@ -45,7 +46,7 @@ for arg in "$@"; do
     -h|--help)
       echo "Usage: $0 [version] [menuconfig] [clean]"
       echo ""
-      echo "  (none)      Build with default version (1.37.0)"
+      echo "  (none)      Build with default version (1.38.0)"
       echo "  VERSION     Build specific version (e.g. 1.36.1)"
       echo "  menuconfig  Open interactive configuration"
       echo "  clean       Remove build tree and rebuild from scratch"
@@ -65,7 +66,7 @@ for arg in "$@"; do
   esac
 done
 
-BB_VER="${BB_VER:-1.37.0}"
+BB_VER="${BB_VER:-1.38.0}"
 
 ARCHIVE="busybox-${BB_VER}.tar.bz2"
 SRC_DIR="busybox-${BB_VER}"
