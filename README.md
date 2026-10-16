@@ -97,7 +97,7 @@ PCB photo, the J1 pinout, safe UART wiring, and the complete command sequence.
 
 | Board | `BOARD` value | Default kernel | Notes |
 | --- | --- | --- | --- |
-| Lidl Silvercrest / Tuya reference board | `lidl` | Linux 6.18 | Default; do not set `BOARD` |
+| Lidl Silvercrest / Tuya reference board | `lidl` | Linux 6.18 | Default; do not set `BOARD`. Also covers the USB-C SGWZ 1 B2 / HG09101 ([known revisions](./0-Hardware/README.md#known-board-revisions)) |
 | Sengled Smart Hub G4 (E39-G8C) | `sengled-e39-g8c` | Linux 6.18 | Board-specific bootloader, kernel, and radio images |
 
 Linux 7.2 is also available as an alternate kernel line. New users should keep

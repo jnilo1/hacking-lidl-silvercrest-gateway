@@ -92,6 +92,20 @@ The other highlighted components are:
 - **purple** — 32 MiB SDRAM;
 - **yellow** — TYZS4 module containing the EFR32 radio.
 
+### Known board revisions
+
+The same `BOARD=lidl` images apply to every revision listed here.
+
+| Retail model | PCB | Case connector | Status |
+| --- | --- | --- | --- |
+| Silvercrest SmartHome Gateway (original) | Tuya reference board shown above | micro-USB | Reference board for this project |
+| Silvercrest SGWZ 1 B2 / HG09101 | TYGWZ1 V2.0.1 | USB-C | Community-tested with v4.7.0 ([discussion #166](https://github.com/jnilo1/rtl8196e-gateway/discussions/166)) |
+
+On TYGWZ1 V2.0.1 the report confirms the same J1 serial pinout, a GD25Q128
+16 MiB flash (JEDEC `c84018`, as on the reference board), 32 MiB RAM and a
+TYZS4 radio module. The stock bootloader is Realtek `v3.4T-pre2`, reachable at
+38400 baud.
+
 ## J1 pinout
 
 Pin 1 is the bottom pin in the documented board orientation shown above.
