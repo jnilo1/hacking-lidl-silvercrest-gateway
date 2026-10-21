@@ -92,19 +92,39 @@ The other highlighted components are:
 - **purple** — 32 MiB SDRAM;
 - **yellow** — TYZS4 module containing the EFR32 radio.
 
-### Known board revisions
+### Compatible boards
 
-The same `BOARD=lidl` images apply to every revision listed here.
+Every board listed here runs the standard `BOARD=lidl` images unmodified.
 
 | Retail model | PCB | Case connector | Status |
 | --- | --- | --- | --- |
 | Silvercrest SmartHome Gateway (original) | Tuya reference board shown above | micro-USB | Reference board for this project |
 | Silvercrest SGWZ 1 B2 / HG09101 | TYGWZ1 V2.0.1 | USB-C | Community-tested with v4.7.0 ([discussion #166](https://github.com/jnilo1/rtl8196e-gateway/discussions/166)) |
+| NEO NAS-ZW05B0 (packaging: GW01B / NAS-GW01B), Shenzhen NEO Electronics | not recorded | USB-C | Community-tested with v4.7.0 ([discussion #169](https://github.com/jnilo1/rtl8196e-gateway/discussions/169)) |
 
 On TYGWZ1 V2.0.1 the report confirms the same J1 serial pinout, a GD25Q128
 16 MiB flash (JEDEC `c84018`, as on the reference board), 32 MiB RAM and a
 TYZS4 radio module. The stock bootloader is Realtek `v3.4T-pre2`, reachable at
 38400 baud.
+
+The NEO hub comes from another maker, but uses the same components and serial
+header. Its six-pin J1 header has the J1 pinout below, counted from the square
+pin 1 (3.3 V); the
+[kaspars.net write-up](https://kaspars.net/blog/neo-nas-zw05b0-tuya-zigbee-homekit-hub)
+has a photo of the board with the pins marked. The report confirms a
+GigaDevice GD25Q127CSIG 16 MiB flash, 32 MiB RAM, a TYZS4-IPEX radio module
+(the variant with an external antenna connector) and the same stock partition
+layout as the Lidl gateway. A micro-USB version of the hub also exists; it has
+not been tested. Two practical notes:
+
+- the stock bootloader (Realtek `v3.4T-pre2`) ignored `Esc` on both units
+  reported so far, including with the key held from power-on; the reporter
+  reached `<RealTek>` with the
+  [last-resort method](../docs/troubleshooting.md#cannot-enter-the-bootloader)
+  of the troubleshooting guide;
+- once installed, the gateway reports itself as `Lidl Silvercrest Gateway` in
+  `/proc/device-tree/model` and `/proc/cpuinfo`. This is expected: it runs the
+  Lidl image.
 
 ## J1 pinout
 

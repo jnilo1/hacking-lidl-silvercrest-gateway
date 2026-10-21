@@ -97,6 +97,25 @@ Make the J1 pin 2 contact tight, or bond it to the Ethernet shield, before
 suspecting anything else. Only then look at the pin 4 contact, which carries
 only what you transmit and so can be bad while the banner still reads perfectly.
 
+As a last resort, when the wiring is proven good and the stock bootloader still
+ignores `Esc` (reported on some `v3.4T-pre2` units), you can make it stop at
+the prompt by disturbing its read of the kernel image. The method comes from
+[parasite85](https://github.com/parasite85/tuya_dmd2cc_gateway_hack#esc-key-is-not-giving-you-realtek-prompt):
+
+1. connect one end of a thin wire to ground, for example the metal shield of
+   the Ethernet port, and leave the other end free;
+2. power the gateway with the serial console open;
+3. as soon as bootloader text appears, touch the SCLK pin of the SPI flash chip
+   with the free end. Find SCLK in the pin diagram of the flash datasheet (for
+   the GD25Q127C, page 5 of the
+   [GigaDevice datasheet](https://www.mouser.com/datasheet/2/870/gd25q127c_v2.3_20200220-1634067.pdf));
+4. remove the wire once the console shows `no sys signature at …` followed by
+   `<RealTek>`.
+
+The bootloader then finds no valid kernel and opens its prompt instead of
+booting. Timing matters, so expect several attempts. Only do this while the
+bootloader is starting, never while it is writing flash.
+
 On a gateway already running this project's firmware, serial entry is usually
 unnecessary: use the [upgrade guide](./upgrading.md), which invokes `boothold`
 over SSH.
