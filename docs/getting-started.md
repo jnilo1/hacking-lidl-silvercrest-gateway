@@ -51,12 +51,12 @@ The rest of this page explains every step and the reason behind it.
 
 | Board | Installation command | Hardware notes |
 | --- | --- | --- |
-| Lidl Silvercrest / Tuya | `./flash_install_rtl8196e.sh` | This page's default |
+| Lidl Silvercrest / Tuya and [compatible boards](../0-Hardware/README.md#compatible-boards) | `./flash_install_rtl8196e.sh` | This page's default |
 | Sengled Smart Hub G4 | `BOARD=sengled-e39-g8c ./flash_install_rtl8196e.sh` | [Different PCB and debug header](../0-Hardware/sengled-e39-g8c/README.md) |
 
 Do not flash one board's full image onto the other. The bootloader contains
 board-specific DRAM settings, so a mismatch can prevent the gateway from
-starting. Lidl users should not set `BOARD`.
+starting. Lidl users, and owners of a compatible board, should not set `BOARD`.
 
 The board choice affects the RTL8196E image and the later EFR32 flash. The radio
 mode is not selected while flashing the RTL8196E. After Linux is running,
@@ -246,6 +246,11 @@ documented board orientation.
 TX and RX are crossed because each device's transmitter connects to the other
 device's receiver. Power the gateway only with its normal supply. More board
 details are available in the [Lidl hardware reference](../0-Hardware/README.md).
+
+Compatible boards such as the NEO NAS-ZW05B0 come in a different case, but
+their J1 header has the same pinout, counted from the square pin 1. See
+[compatible boards](../0-Hardware/README.md#compatible-boards) for the board
+notes and photo links.
 
 The animation below shows the whole sequence: fitting and soldering the male
 header, then wiring the adapter with Dupont cables. It is also available
