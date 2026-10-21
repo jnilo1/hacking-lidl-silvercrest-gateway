@@ -16,9 +16,10 @@ Replace the cloud firmware on a supported smart-home gateway with a small,
 fully local Linux system. The gateway can then serve as a Zigbee coordinator,
 a Thread Border Router, or a standalone Zigbee router.
 
-Supported boards include the **Lidl Silvercrest / Tuya gateway** and the
-**Sengled Smart Hub G4 (E39-G8C)**. Pre-built images are included; rebuilding
-from source is optional.
+Supported boards include the **Lidl Silvercrest / Tuya gateway** and its
+[compatible boards](./0-Hardware/README.md#compatible-boards), such as the NEO
+NAS-ZW05B0, plus the **Sengled Smart Hub G4 (E39-G8C)**. Pre-built images are
+included; rebuilding from source is optional.
 
 > **First installation requires hardware access.** A stock Lidl/Tuya gateway
 > must be opened and connected to a **3.3 V USB-to-UART adapter**. The serial
