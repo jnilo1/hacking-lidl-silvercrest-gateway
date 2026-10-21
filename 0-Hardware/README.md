@@ -98,7 +98,8 @@ Every board listed here runs the standard `BOARD=lidl` images unmodified.
 
 | Retail model | PCB | Case connector | Status |
 | --- | --- | --- | --- |
-| Silvercrest SmartHome Gateway (original) | Tuya reference board shown above | micro-USB | Reference board for this project |
+| Silvercrest SmartHome Gateway SGWZ 1 A2 / HG07132 (original) | TYGWZ1 REV1.0.2.7, shown above | micro-USB | Reference board for this project |
+| LIVARNOLUX HG06322 | not recorded | micro-USB | Tested by the maintainer |
 | Silvercrest SGWZ 1 B2 / HG09101 | TYGWZ1 V2.0.1 | USB-C | Community-tested with v4.7.0 ([discussion #166](https://github.com/jnilo1/rtl8196e-gateway/discussions/166)) |
 | NEO NAS-ZW05B0 (packaging: GW01B / NAS-GW01B), Shenzhen NEO Electronics | not recorded | USB-C | Community-tested with v4.7.0 ([discussion #169](https://github.com/jnilo1/rtl8196e-gateway/discussions/169)) |
 

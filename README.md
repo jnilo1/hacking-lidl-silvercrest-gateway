@@ -98,7 +98,7 @@ PCB photo, the J1 pinout, safe UART wiring, and the complete command sequence.
 
 | Board | `BOARD` value | Default kernel | Notes |
 | --- | --- | --- | --- |
-| Lidl Silvercrest / Tuya reference board | `lidl` | Linux 6.18 | Default; do not set `BOARD`. Also covers the USB-C SGWZ 1 B2 / HG09101 and the NEO NAS-ZW05B0 ([compatible boards](./0-Hardware/README.md#compatible-boards)) |
+| Lidl Silvercrest / Tuya reference board | `lidl` | Linux 6.18 | Default; do not set `BOARD`. Also covers the [compatible boards](./0-Hardware/README.md#compatible-boards) (other Lidl revisions, LIVARNOLUX HG06322, NEO NAS-ZW05B0) |
 | Sengled Smart Hub G4 (E39-G8C) | `sengled-e39-g8c` | Linux 6.18 | Board-specific bootloader, kernel, and radio images |
 
 Linux 7.2 is also available as an alternate kernel line. New users should keep
